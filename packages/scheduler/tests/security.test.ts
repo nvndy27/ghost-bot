@@ -75,6 +75,8 @@ test('security: rejects control chars, oversized payloads, full-access hints, an
       description: '',
       ownerId: 'u1',
       botId: 'chief',
+      ownership: 'ghost-bot',
+      revision: 1,
       trigger: { kind: 'interval', intervalMs: 60_000, anchorAt: '2025-01-01T00:00:00.000Z' },
       timezone: 'UTC',
       task: { prompt: 'tick', idempotent: true },

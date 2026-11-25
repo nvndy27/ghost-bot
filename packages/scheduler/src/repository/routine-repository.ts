@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type {
   CreateRoutineInput,
+  RoutineOwnership,
   RoutineRecord,
   RoutineScope,
   ScheduledTaskRecord,
   TaskStatus,
+  TaskTriggerSource,
   UpdateRoutinePatch,
 } from '../contracts/types.ts'
 import { computeNextRunMs } from '../schedules/calculator.ts'
@@ -27,6 +29,8 @@ interface RawRoutineRow {
   description: string
   owner_id: string
   bot_id: string
+  ownership: string
+  revision: number
   trigger_json: string
   timezone: string
   task_json: string
@@ -49,6 +53,8 @@ interface RawRoutineRow {
 export interface RawTaskRow {
   id: string
   routine_id: string
+  routine_revision: number
+  trigger_source: string
   owner_id: string
   bot_id: string
   occurrence_key: string
@@ -79,6 +85,8 @@ export function rowToTask(row: RawTaskRow): ScheduledTaskRecord {
   return {
     id: row.id,
     routineId: row.routine_id,
+    routineRevision: Number(row.routine_revision ?? 1),
+    triggerSource: (row.trigger_source ?? 'schedule') as TaskTriggerSource,
     ownerId: row.owner_id,
     botId: row.bot_id,
     occurrenceKey: row.occurrence_key,
@@ -107,6 +115,10 @@ export class RoutineRepository {
     this.db = db
   }
 
+  getDatabase(): SchedulerDatabaseHandle {
+    return this.db
+  }
+
   private rowToRoutine(row: RawRoutineRow): RoutineRecord {
     let triggerRaw: unknown
     let taskRaw: unknown
@@ -129,12 +141,15 @@ export class RoutineRepository {
     ) {
       throw new SchedulerError('CORRUPT_RECORD', `Corrupt retryPolicy in routine "${row.id}"`)
     }
+    const ownership = (row.ownership ?? 'ghost-bot') as RoutineOwnership
     return {
       id: row.id,
       name: row.name,
       description: row.description,
       ownerId: row.owner_id,
       botId: row.bot_id,
+      ownership,
+      revision: Number(row.revision ?? 1),
       trigger,
       timezone,
       task,
@@ -163,7 +178,10 @@ export class RoutineRepository {
     const clean = validateCreateRoutineInput(input)
     const id = input.id ?? `rtn_${randomUUID()}`
     const nowIso = new Date(nowMs).toISOString()
-    const nextMs = clean.enabled ? computeNextRunMs(clean.trigger, clean.timezone, nowMs - 1) : null
+    const nextMs =
+      clean.enabled && clean.ownership === 'ghost-bot'
+        ? computeNextRunMs(clean.trigger, clean.timezone, nowMs - 1)
+        : null
     const nextRunAt =
       nextMs !== null && (clean.expiresAt === null || nextMs < Date.parse(clean.expiresAt))
         ? new Date(nextMs).toISOString()
@@ -173,12 +191,12 @@ export class RoutineRepository {
       this.db.sqlite
         .prepare(
           `INSERT INTO scheduler_routines (
-            id, name, description, owner_id, bot_id, trigger_json, timezone, task_json,
+            id, name, description, owner_id, bot_id, ownership, revision, trigger_json, timezone, task_json,
             enabled, archived_at, missed_run_policy, max_catch_up_runs,
             concurrency_policy, max_concurrent_runs, retry_policy_json,
             expires_at, next_run_at, last_run_at, last_evaluated_at, last_task_status,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
           id,
@@ -186,6 +204,7 @@ export class RoutineRepository {
           clean.description,
           clean.ownerId,
           clean.botId,
+          clean.ownership,
           JSON.stringify(clean.trigger),
           clean.timezone,
           JSON.stringify(clean.task),
@@ -248,11 +267,24 @@ export class RoutineRepository {
     const rows = this.db.sqlite
       .prepare(
         `SELECT * FROM scheduler_routines
-         WHERE enabled = 1 AND archived_at IS NULL
+         WHERE enabled = 1 AND archived_at IS NULL AND ownership = 'ghost-bot'
          ORDER BY next_run_at ASC`,
       )
       .all() as unknown as RawRoutineRow[]
     return rows.map((r) => this.rowToRoutine(r))
+  }
+
+  listEnabledEventRoutines(scope: RoutineScope): RoutineRecord[] {
+    const rows = this.db.sqlite
+      .prepare(
+        `SELECT * FROM scheduler_routines
+         WHERE owner_id = ? AND bot_id = ?
+           AND enabled = 1 AND archived_at IS NULL AND ownership = 'ghost-bot'`,
+      )
+      .all(scope.ownerId, scope.botId) as unknown as RawRoutineRow[]
+    return rows
+      .map((r) => this.rowToRoutine(r))
+      .filter((r) => r.trigger.kind === 'event')
   }
 
   update(
@@ -268,6 +300,7 @@ export class RoutineRepository {
         description: patch.description ?? existing.description,
         ownerId: existing.ownerId,
         botId: existing.botId,
+        ownership: existing.ownership,
         trigger: patch.trigger ?? existing.trigger,
         timezone: patch.timezone ?? existing.timezone,
         task: patch.task ?? existing.task,
@@ -286,9 +319,10 @@ export class RoutineRepository {
         expiresAt: patch.expiresAt !== undefined ? patch.expiresAt : existing.expiresAt,
       })
 
-      const nextMs = existing.enabled
-        ? computeNextRunMs(merged.trigger, merged.timezone, nowMs - 1)
-        : null
+      const nextMs =
+        existing.enabled && existing.ownership === 'ghost-bot'
+          ? computeNextRunMs(merged.trigger, merged.timezone, nowMs - 1)
+          : null
       const nextRunAt =
         nextMs !== null && (merged.expiresAt === null || nextMs < Date.parse(merged.expiresAt))
           ? new Date(nextMs).toISOString()
@@ -297,7 +331,8 @@ export class RoutineRepository {
       this.db.sqlite
         .prepare(
           `UPDATE scheduler_routines
-           SET name = ?, description = ?, trigger_json = ?, timezone = ?, task_json = ?,
+           SET name = ?, description = ?, revision = revision + 1,
+               trigger_json = ?, timezone = ?, task_json = ?,
                missed_run_policy = ?, max_catch_up_runs = ?, concurrency_policy = ?,
                max_concurrent_runs = ?, retry_policy_json = ?, expires_at = ?,
                next_run_at = ?, updated_at = ?
@@ -329,7 +364,10 @@ export class RoutineRepository {
       if (existing.archivedAt !== null) {
         throw new SchedulerError('ROUTINE_ARCHIVED', 'Cannot enable an archived routine')
       }
-      const nextMs = computeNextRunMs(existing.trigger, existing.timezone, nowMs - 1)
+      const nextMs =
+        existing.ownership === 'ghost-bot'
+          ? computeNextRunMs(existing.trigger, existing.timezone, nowMs - 1)
+          : null
       const nextRunAt =
         nextMs !== null &&
         (existing.expiresAt === null || nextMs < Date.parse(existing.expiresAt))
@@ -345,24 +383,41 @@ export class RoutineRepository {
   }
 
   disable(id: string, scope: RoutineScope, nowMs = Date.now()): RoutineRecord {
+    const nowIso = new Date(nowMs).toISOString()
     return this.db.transaction(() => {
       this.getById(id, scope)
       this.db.sqlite
         .prepare(`UPDATE scheduler_routines SET enabled = 0, updated_at = ? WHERE id = ?`)
-        .run(new Date(nowMs).toISOString(), id)
+        .run(nowIso, id)
+      this.db.sqlite
+        .prepare(
+          `UPDATE scheduler_tasks
+           SET status = 'cancelled', error_code = 'ROUTINE_DISABLED',
+               error_message = 'Routine disabled before dispatch.', ended_at = ?, updated_at = ?
+           WHERE routine_id = ? AND status = 'queued'`,
+        )
+        .run(nowIso, nowIso, id)
       return this.getById(id, scope)
     })
   }
 
   archive(id: string, scope: RoutineScope, nowMs = Date.now()): RoutineRecord {
+    const nowIso = new Date(nowMs).toISOString()
     return this.db.transaction(() => {
       this.getById(id, scope)
-      const nowIso = new Date(nowMs).toISOString()
       this.db.sqlite
         .prepare(
           `UPDATE scheduler_routines
            SET enabled = 0, archived_at = ?, next_run_at = NULL, updated_at = ?
            WHERE id = ?`,
+        )
+        .run(nowIso, nowIso, id)
+      this.db.sqlite
+        .prepare(
+          `UPDATE scheduler_tasks
+           SET status = 'cancelled', error_code = 'ROUTINE_ARCHIVED',
+               error_message = 'Routine archived before dispatch.', ended_at = ?, updated_at = ?
+           WHERE routine_id = ? AND status = 'queued'`,
         )
         .run(nowIso, nowIso, id)
       return this.getById(id, scope)

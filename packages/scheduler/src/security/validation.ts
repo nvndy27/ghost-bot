@@ -3,10 +3,13 @@ import type {
   CreateRoutineInput,
   MissedRunPolicy,
   RetryPolicy,
+  RoutineOwnership,
   RoutineScope,
   RoutineTaskDefinition,
   TriggerConfig,
 } from '../contracts/types.ts'
+import { parseCronExpression } from '../schedules/cron.ts'
+import { validateEventConditions } from '../schedules/event-matcher.ts'
 
 export const MAX_NAME_LENGTH = 120
 export const MAX_DESCRIPTION_LENGTH = 1000
@@ -154,6 +157,16 @@ export function validateTriggerConfig(trigger: unknown): TriggerConfig {
       second,
     }
   }
+  if (t.kind === 'cron') {
+    const parsed = parseCronExpression(t.expression as string)
+    return { kind: 'cron', expression: parsed.expression }
+  }
+  if (t.kind === 'event') {
+    const eventType = assertNonEmptyBounded(t.eventType, 'trigger.eventType', 128)
+    const conditions =
+      t.conditions !== undefined ? validateEventConditions(t.conditions) : undefined
+    return { kind: 'event', eventType, ...(conditions ? { conditions } : {}) }
+  }
   throw new SchedulerError('INVALID_SCHEDULE', 'Unsupported trigger kind')
 }
 
@@ -235,6 +248,14 @@ export function validateCreateRoutineInput(input: CreateRoutineInput) {
   }
   const ownerId = assertNonEmptyBounded(input.ownerId, 'ownerId', 128)
   const botId = assertNonEmptyBounded(input.botId, 'botId', 128)
+  const ownership: RoutineOwnership = input.ownership ?? 'ghost-bot'
+  if (
+    ownership !== 'ghost-bot' &&
+    ownership !== 'openclaw' &&
+    ownership !== 'external-unknown'
+  ) {
+    throw new SchedulerError('INVALID_INPUT', 'Invalid routine ownership')
+  }
   const timezone = assertValidTimezone(input.timezone)
   const trigger = validateTriggerConfig(input.trigger)
   const task = validateUntrustedTask(input.task)
@@ -301,6 +322,7 @@ export function validateCreateRoutineInput(input: CreateRoutineInput) {
     description: descriptionRaw.trim(),
     ownerId,
     botId,
+    ownership,
     timezone,
     trigger,
     task,

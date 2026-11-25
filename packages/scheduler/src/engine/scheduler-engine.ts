@@ -2,12 +2,14 @@ import type {
   Clock,
   FutureExecutionAuthorizationContext,
   FutureRoutineDispatcher,
+  RoutineScope,
   ScheduledTaskRecord,
 } from '../contracts/types.ts'
 import type { ExecutionQueue } from '../queue/execution-queue.ts'
 import type { RoutineRepository } from '../repository/routine-repository.ts'
 import { evaluateDueOccurrences } from '../schedules/calculator.ts'
-import { redactSchedulerSecrets } from '../security/validation.ts'
+import { matchesEventTrigger, validateEventEnvelope } from '../schedules/event-matcher.ts'
+import { assertNonEmptyBounded, redactSchedulerSecrets, SchedulerError } from '../security/validation.ts'
 
 export interface TickSummary {
   evaluatedAt: string
@@ -38,43 +40,51 @@ export class SchedulerEngine {
   }
 
   /**
-   * Evaluates due routine occurrences and enqueues unique occurrence tasks.
-   * Separated from task dispatch so schedule evaluation never triggers direct execution.
+   * Atomically evaluates due Ghost Bot-owned routines and advances schedule cursors.
+   * Never dispatches inside an open SQLite transaction.
    */
   tick(): TickSummary {
     const nowMs = this.clock.nowMs()
     const nowIso = new Date(nowMs).toISOString()
     const routines = this.repository.listAllEnabledForEngine()
+    const db = this.repository.getDatabase()
 
     let enqueuedTasks = 0
     let duplicatesSuppressed = 0
     let missedTotal = 0
 
     for (const routine of routines) {
+      if (routine.ownership !== 'ghost-bot') continue
+      if (routine.trigger.kind === 'event') continue
+
       const evalRes = evaluateDueOccurrences(routine, nowMs, this.graceWindowMs)
       missedTotal += evalRes.missedCount
 
-      for (const scheduledFor of evalRes.dueOccurrences) {
-        const res = this.queue.enqueueOccurrence(routine, scheduledFor, nowMs)
-        if (res.created) {
-          enqueuedTasks += 1
-        } else {
-          duplicatesSuppressed += 1
+      db.transaction(() => {
+        for (const scheduledFor of evalRes.dueOccurrences) {
+          const res = this.queue.enqueueOccurrence(routine, scheduledFor, nowMs, {
+            triggerSource: 'schedule',
+          })
+          if (res.created) {
+            enqueuedTasks += 1
+          } else {
+            duplicatesSuppressed += 1
+          }
         }
-      }
 
-      const lastScheduled =
-        evalRes.dueOccurrences.length > 0
-          ? evalRes.dueOccurrences[evalRes.dueOccurrences.length - 1]!
-          : null
+        const lastScheduled =
+          evalRes.dueOccurrences.length > 0
+            ? evalRes.dueOccurrences[evalRes.dueOccurrences.length - 1]!
+            : null
 
-      this.repository.updateScheduleCursor(
-        routine.id,
-        evalRes.nextRunAt,
-        lastScheduled,
-        nowIso,
-        nowMs,
-      )
+        this.repository.updateScheduleCursor(
+          routine.id,
+          evalRes.nextRunAt,
+          lastScheduled,
+          nowIso,
+          nowMs,
+        )
+      })
     }
 
     return {
@@ -87,8 +97,80 @@ export class SchedulerEngine {
   }
 
   /**
+   * Deterministic manual trigger with explicit scope, idempotency, capacity, and revision preservation.
+   */
+  triggerManual(input: {
+    routineId: string
+    scope: RoutineScope
+    idempotencyKey: string
+  }): { task: ScheduledTaskRecord; created: boolean } {
+    const nowMs = this.clock.nowMs()
+    const nowIso = new Date(nowMs).toISOString()
+    const idempotencyKey = assertNonEmptyBounded(input.idempotencyKey, 'idempotencyKey', 128)
+    const routine = this.repository.getById(input.routineId, input.scope)
+
+    if (routine.ownership !== 'ghost-bot') {
+      throw new SchedulerError(
+        'EXTERNAL_ROUTINE_OWNERSHIP',
+        `Cannot manually trigger externally owned routine (${routine.ownership})`,
+      )
+    }
+    if (routine.archivedAt !== null) {
+      throw new SchedulerError('ROUTINE_ARCHIVED', 'Cannot trigger an archived routine')
+    }
+    if (!routine.enabled) {
+      throw new SchedulerError('ROUTINE_DISABLED', 'Cannot trigger a disabled routine')
+    }
+    if (routine.expiresAt !== null && nowMs >= Date.parse(routine.expiresAt)) {
+      throw new SchedulerError('ROUTINE_EXPIRED', 'Cannot trigger an expired routine')
+    }
+
+    return this.queue.enqueueOccurrence(routine, nowIso, nowMs, {
+      triggerSource: 'manual',
+      occurrenceKeyOverride: `manual:${routine.id}:${idempotencyKey}`,
+    })
+  }
+
+  /**
+   * Evaluates a synthetic untrusted event envelope against Ghost Bot-owned event routines
+   * in the matching scope, deduplicating by (routineId, trustedSource, eventId).
+   */
+  ingestSyntheticEvent(rawEnvelope: unknown): {
+    matchedRoutines: number
+    enqueuedTasks: number
+    duplicatesSuppressed: number
+    tasks: ScheduledTaskRecord[]
+  } {
+    const envelope = validateEventEnvelope(rawEnvelope)
+    const nowMs = this.clock.nowMs()
+    const routines = this.repository.listEnabledEventRoutines(envelope.scope)
+
+    let matchedRoutines = 0
+    let enqueuedTasks = 0
+    let duplicatesSuppressed = 0
+    const tasks: ScheduledTaskRecord[] = []
+
+    for (const routine of routines) {
+      if (routine.ownership !== 'ghost-bot') continue
+      if (routine.expiresAt !== null && nowMs >= Date.parse(routine.expiresAt)) continue
+      if (!matchesEventTrigger(routine.trigger, envelope)) continue
+
+      matchedRoutines += 1
+      const res = this.queue.enqueueOccurrence(routine, envelope.timestamp, nowMs, {
+        triggerSource: 'event',
+        occurrenceKeyOverride: `event:${routine.id}:${envelope.trustedSource}:${envelope.eventId}`,
+      })
+      tasks.push(res.task)
+      if (res.created) enqueuedTasks += 1
+      else duplicatesSuppressed += 1
+    }
+
+    return { matchedRoutines, enqueuedTasks, duplicatesSuppressed, tasks }
+  }
+
+  /**
    * Claims and dispatches at most one queued task through the injected FutureRoutineDispatcher.
-   * Never directly launches Codex, OpenClaw, MCP, shell, or network tools.
+   * Never holds an open SQLite transaction while awaiting asynchronous dispatch.
    */
   async dispatchNext(
     dispatcher: FutureRoutineDispatcher,
@@ -101,6 +183,8 @@ export class SchedulerEngine {
     const running = this.queue.markRunning(claimed.id, workerId, this.clock.nowMs())
     const ctx: FutureExecutionAuthorizationContext = {
       routineId: running.routineId,
+      routineRevision: running.routineRevision,
+      triggerSource: running.triggerSource,
       taskId: running.id,
       occurrenceKey: running.occurrenceKey,
       ownerId: running.ownerId,

@@ -1,5 +1,6 @@
 import type { RoutineRecord, TriggerConfig } from '../contracts/types.ts'
 import { MAX_CATCHUP_RUNS, SchedulerError } from '../security/validation.ts'
+import { computeNextCronRunMs, parseCronExpression } from './cron.ts'
 
 const WEEKDAY_MAP: Record<string, number> = {
   Sun: 0,
@@ -149,6 +150,15 @@ export function computeNextRunMs(
   timeZone: string,
   afterMs: number,
 ): number | null {
+  if (trigger.kind === 'event') {
+    return null
+  }
+
+  if (trigger.kind === 'cron') {
+    const parsed = parseCronExpression(trigger.expression)
+    return computeNextCronRunMs(parsed, timeZone, afterMs)
+  }
+
   if (trigger.kind === 'one-time') {
     const runAtMs = Date.parse(trigger.runAt)
     return runAtMs > afterMs ? runAtMs : null

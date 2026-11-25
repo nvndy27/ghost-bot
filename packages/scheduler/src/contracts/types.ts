@@ -1,8 +1,21 @@
+export type EventMatchOperator = 'eq' | 'neq' | 'prefix' | 'contains' | 'in'
+
+export interface EventMatchCondition {
+  field: string
+  op: EventMatchOperator
+  value: string | string[]
+}
+
 export type TriggerConfig =
   | { kind: 'one-time'; runAt: string }
   | { kind: 'interval'; intervalMs: number; anchorAt: string }
   | { kind: 'daily'; hour: number; minute: number; second?: number }
   | { kind: 'weekly'; daysOfWeek: number[]; hour: number; minute: number; second?: number }
+  | { kind: 'cron'; expression: string }
+  | { kind: 'event'; eventType: string; conditions?: EventMatchCondition[] }
+
+export type RoutineOwnership = 'ghost-bot' | 'openclaw' | 'external-unknown'
+export type TaskTriggerSource = 'schedule' | 'manual' | 'event'
 
 export type MissedRunPolicy = 'skip' | 'run-once' | 'bounded-catch-up'
 export type ConcurrencyPolicy = 'forbid' | 'allow-bounded'
@@ -48,6 +61,8 @@ export interface RoutineRecord {
   description: string
   ownerId: string
   botId: string
+  ownership: RoutineOwnership
+  revision: number
   trigger: TriggerConfig
   timezone: string
   task: RoutineTaskDefinition
@@ -73,6 +88,7 @@ export interface CreateRoutineInput {
   description?: string
   ownerId: string
   botId: string
+  ownership?: RoutineOwnership
   trigger: TriggerConfig
   timezone: string
   task: RoutineTaskDefinition
@@ -102,6 +118,8 @@ export interface UpdateRoutinePatch {
 export interface ScheduledTaskRecord {
   id: string
   routineId: string
+  routineRevision: number
+  triggerSource: TaskTriggerSource
   ownerId: string
   botId: string
   occurrenceKey: string
@@ -122,6 +140,15 @@ export interface ScheduledTaskRecord {
   updatedAt: string
 }
 
+export interface SyntheticEventEnvelope {
+  eventId: string
+  trustedSource: string
+  eventType: string
+  timestamp: string
+  scope: RoutineScope
+  payload: Record<string, string | number | boolean>
+}
+
 export interface Clock {
   nowMs(): number
 }
@@ -133,6 +160,8 @@ export interface Clock {
  */
 export interface FutureExecutionAuthorizationContext {
   routineId: string
+  routineRevision: number
+  triggerSource: TaskTriggerSource
   taskId: string
   occurrenceKey: string
   ownerId: string

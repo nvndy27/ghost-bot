@@ -12,6 +12,8 @@ function makeRoutine(overrides: Partial<RoutineRecord> = {}): RoutineRecord {
     description: 'desc',
     ownerId: 'owner-1',
     botId: 'chief',
+    ownership: 'ghost-bot',
+    revision: 1,
     trigger: { kind: 'daily', hour: 9, minute: 0, second: 0 },
     timezone: 'UTC',
     task: { prompt: 'Summarize', idempotent: true },

@@ -4,6 +4,7 @@ import type {
   RoutineScope,
   ScheduledTaskRecord,
   TaskStatus,
+  TaskTriggerSource,
 } from '../contracts/types.ts'
 import { rowToTask, type RawTaskRow } from '../repository/routine-repository.ts'
 import type { SchedulerDatabaseHandle } from '../repository/sqlite-store.ts'
@@ -23,6 +24,11 @@ export interface ExecutionQueueOptions {
   maxQueueCapacity?: number
 }
 
+export interface EnqueueOptions {
+  triggerSource?: TaskTriggerSource
+  occurrenceKeyOverride?: string
+}
+
 export class ExecutionQueue {
   private readonly db: SchedulerDatabaseHandle
   private readonly maxQueueCapacity: number
@@ -36,8 +42,16 @@ export class ExecutionQueue {
     routine: RoutineRecord,
     scheduledFor: string,
     nowMs = Date.now(),
+    options: EnqueueOptions = {},
   ): { task: ScheduledTaskRecord; created: boolean } {
-    const occurrenceKey = `${routine.id}:${scheduledFor}`
+    if (routine.ownership !== 'ghost-bot') {
+      throw new SchedulerError(
+        'EXTERNAL_ROUTINE_OWNERSHIP',
+        `Cannot enqueue externally owned routine (${routine.ownership})`,
+      )
+    }
+    const triggerSource: TaskTriggerSource = options.triggerSource ?? 'schedule'
+    const occurrenceKey = options.occurrenceKeyOverride ?? `${routine.id}:${scheduledFor}`
     const nowIso = new Date(nowMs).toISOString()
 
     return this.db.transaction(() => {
@@ -65,15 +79,17 @@ export class ExecutionQueue {
       this.db.sqlite
         .prepare(
           `INSERT INTO scheduler_tasks (
-            id, routine_id, owner_id, bot_id, occurrence_key, scheduled_for,
+            id, routine_id, routine_revision, trigger_source, owner_id, bot_id, occurrence_key, scheduled_for,
             status, attempt, max_attempts, claim_owner, claim_lease_expires_at,
             uncertain_execution, approval_required, task_snapshot_json,
             error_code, error_message, started_at, ended_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
           id,
           routine.id,
+          routine.revision,
+          triggerSource,
           routine.ownerId,
           routine.botId,
           occurrenceKey,
@@ -118,18 +134,56 @@ export class ExecutionQueue {
     return this.db.transaction(() => {
       const candidates = this.db.sqlite
         .prepare(
-          `SELECT t.*, r.concurrency_policy, r.max_concurrent_runs
+          `SELECT t.*, r.concurrency_policy, r.max_concurrent_runs,
+                  r.revision AS current_revision, r.enabled AS routine_enabled,
+                  r.archived_at AS routine_archived_at, r.ownership AS routine_ownership
            FROM scheduler_tasks t
            JOIN scheduler_routines r ON r.id = t.routine_id
-           WHERE t.status = 'queued' AND r.enabled = 1 AND r.archived_at IS NULL
+           WHERE t.status = 'queued'
            ORDER BY t.scheduled_for ASC, t.created_at ASC
-           LIMIT 25`,
+           LIMIT 50`,
         )
         .all() as unknown as Array<
-        RawTaskRow & { concurrency_policy: string; max_concurrent_runs: number }
+        RawTaskRow & {
+          concurrency_policy: string
+          max_concurrent_runs: number
+          current_revision: number
+          routine_enabled: number
+          routine_archived_at: string | null
+          routine_ownership: string
+        }
       >
 
       for (const cand of candidates) {
+        // Cancel obsolete/disabled/archived/external queued tasks instead of executing them
+        if (
+          cand.routine_ownership !== 'ghost-bot' ||
+          cand.routine_enabled !== 1 ||
+          cand.routine_archived_at !== null ||
+          Number(cand.routine_revision) !== Number(cand.current_revision)
+        ) {
+          this.db.sqlite
+            .prepare(
+              `UPDATE scheduler_tasks
+               SET status = 'cancelled',
+                   error_code = ?,
+                   error_message = ?,
+                   ended_at = ?,
+                   updated_at = ?
+               WHERE id = ? AND status = 'queued'`,
+            )
+            .run(
+              Number(cand.routine_revision) !== Number(cand.current_revision)
+                ? 'STALE_ROUTINE_REVISION'
+                : 'ROUTINE_UNAVAILABLE',
+              'Task cancelled before execution because routine state or revision changed.',
+              nowIso,
+              nowIso,
+              cand.id,
+            )
+          continue
+        }
+
         const activeRow = this.db.sqlite
           .prepare(
             `SELECT COUNT(*) AS cnt FROM scheduler_tasks
@@ -267,7 +321,12 @@ export class ExecutionQueue {
       if (isTerminalTaskStatus(task.status)) {
         throw new SchedulerError('TERMINAL_STATE_IMMUTABLE', `Task "${taskId}" is already ${task.status}`)
       }
-      const uncertain = task.status === 'running' || task.status === 'claimed' ? 1 : task.uncertainExecution ? 1 : 0
+      const uncertain =
+        task.status === 'running' || task.status === 'claimed'
+          ? 1
+          : task.uncertainExecution
+            ? 1
+            : 0
       this.db.sqlite
         .prepare(
           `UPDATE scheduler_tasks
@@ -283,10 +342,6 @@ export class ExecutionQueue {
     })
   }
 
-  /**
-   * Lease expiration does NOT prove external execution stopped; marks task interrupted
-   * with uncertainExecution = true so it is never auto-re-dispatched.
-   */
   expireStaleClaims(nowMs = Date.now()): number {
     const nowIso = new Date(nowMs).toISOString()
     return this.db.transaction(() => {
@@ -310,10 +365,6 @@ export class ExecutionQueue {
     })
   }
 
-  /**
-   * Restart reconciliation marks any in-flight tasks interrupted with uncertainExecution = true.
-   * Never automatically replays interrupted tasks.
-   */
   reconcileOnRestart(nowMs = Date.now()): number {
     const nowIso = new Date(nowMs).toISOString()
     return this.db.transaction(() => {
@@ -380,6 +431,24 @@ export class ExecutionQueue {
         )
         .run(nowIso, taskId)
       return this.getTask(taskId, scope)
+    })
+  }
+
+  /**
+   * Prunes old terminal history while NEVER deleting active, quarantined, or uncertain tasks.
+   */
+  pruneCompletedHistory(options: { olderThanIso: string }): number {
+    return this.db.transaction(() => {
+      const res = this.db.sqlite
+        .prepare(
+          `DELETE FROM scheduler_tasks
+           WHERE status IN ('completed', 'failed', 'cancelled', 'expired')
+             AND uncertain_execution = 0
+             AND ended_at IS NOT NULL
+             AND ended_at <= ?`,
+        )
+        .run(options.olderThanIso)
+      return Number(res.changes)
     })
   }
 }
