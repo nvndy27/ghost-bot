@@ -24,7 +24,7 @@ Gate: restart persistence, UI matches references, offline integration tests pass
 - [x] Phase 2A — Daemon-owned session, run, event, and message persistence foundation (**Verified**; merged to `main` at `2ffc521`).
 - [x] Phase 2B — Live read-only Codex execution, thread continuity, streaming, and cancellation (**Verified**; 3-turn live Electron+Codex E2E and offline suites passed).
 - [x] Phase 2C — Live tools, durable interactive approvals, and workspace-write permissions (**Verified**; live Deny + Approve once + canary containment + 53/53 tests passed).
-- [ ] Phase 2D — Runtime recovery, reconnect, thread inspection, manual retry, and Fedora packaging (**Implemented & Offline-Tested** on `feat/phase-2d-recovery-resume`; AppImage/RPM artifact build & opt-in live recovery pending).
+- [ ] Phase 2D — Runtime recovery, reconnect, thread inspection, manual retry, and Fedora packaging (**Tested** on `feat/phase-2d-recovery-resume`; AppImage and RPM smoke verified, full live recovery evidence pending).
 - [ ] Real verified Codex integration; connect/disconnect/stream/cancel/resume.
 - [ ] OpenClaw adapter if verified; optional local Ollama.
 - [ ] Dynamic model/effort, actual permission enforcement, approval/diff display.

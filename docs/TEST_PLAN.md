@@ -28,3 +28,10 @@ Opt-in integration: Codex dedicated ChatGPT profile (`node scripts/verify-codex-
 - `pnpm build` — **pass** (Vite renderer bundle + Electron main/preload compilation + daemon typecheck).
 - `GHOST_BOT_SMOKE_EXIT=1 GHOST_BOT_RUNTIME_MODE=mock pnpm --filter @ghost-bot/desktop exec electron dist-electron/main.js` — **pass** (verifies React render, `sandbox: true`, preload IPC `getAppInfo`/`getDaemonHealth`/`listProviders`, and 0 console errors).
 - `node scripts/verify-phase-1b-ui.mjs` — **pass** (Playwright UI tests across `1920x1080`, `1440x900`, `1366x768`, `960x640` + IME guard + modal focus trap/Escape + reload persistence + 6 screenshots in `design/reviews/phase-1b/`, 0 console errors).
+
+## Phase 2D recovery and Fedora packaging
+
+- Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build`. Run the Phase 1B, 1C, 1D, 2A and 2C UI scripts and the persistence, 1D, 2A and 2D Electron scripts from `scripts/`.
+- Build with `pnpm package:appimage`. Smoke-test the result with a fresh private `GHOST_BOT_DATA_DIR`, `GHOST_BOT_RUNTIME_MODE=mock`, `GHOST_BOT_SMOKE_EXIT=1`, and `APPIMAGE_EXTRACT_AND_RUN=1`.
+- On Fedora with RPM 6, use `USE_SYSTEM_FPM=true pnpm package:rpm` with FPM 1.18.0 on PATH. The electron-builder bundled FPM 1.9.3 requires `libcrypt.so.1` and its buildroot layout is incompatible with the host RPM 6.1.0. Query the resulting package and smoke-test its extracted application without installing it.
+- The live Codex probe consumes subscription quota. Confirm a fresh run budget and distinguish reconnect/inspection from proof of provider-side continuation.

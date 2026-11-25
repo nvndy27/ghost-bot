@@ -12,6 +12,18 @@
 | Implemented | Added Fedora/Linux packaging configuration (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`); `rpmbuild` is present on host, `electron-builder` is absent (no AppImage/RPM artifact built yet). |
 | Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**55/55** including `tests/phase-2d-recovery.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs` through `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` (2 screenshots in `design/reviews/phase-2d/`) all passed. |
 
+### Phase 2D continuation — 2026-11-26
+
+Phase 2D remains **Tested** with a **CONDITIONAL PASS**. Antigravity stopped at its quota limit. The continuation is recorded in `ea35db1` on the same feature branch.
+
+| State | Evidence |
+|---|---|
+| Implemented | Persisted unconfirmed-stop quarantine and extended session inspection. An external thread ID plus a connected runtime still yields `providerThreadStatus: unknown` until provider-side thread access is checked. |
+| Tested | Lint, typecheck, build, 55 unit tests, five Playwright UI suites (1B, 1C, 1D, 2A, 2C), and four Electron suites (persistence, 1D metadata, 2A execution, 2D recovery) passed. |
+| Verified | Fedora x86_64 AppImage built and passed an isolated mock-mode smoke launch in extract-and-run mode. The packaged renderer, sandbox, preload IPC and daemon health responded. Local artifact `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` is 121049800 bytes, SHA-256 `1796cb113c080c463e8982cd134a99b2d827a51564ef5a249cf30ad53935038f`. |
+| Verified | Fedora RPM built with FPM 1.18.0 on PATH and `USE_SYSTEM_FPM=true`. Metadata query and the extracted package smoke launch passed without installation. Local artifact `apps/desktop/release/ghost-bot-0.1.0.x86_64.rpm` is 81472041 bytes, SHA-256 `08d4918a6b68408e39cff5de3e341f0b8fde1ccb68384ea41de40bab64a1be76`. |
+| Blocked | Live Phase 2D recovery lacks a complete result. The prior terminal recorded failed probe runs and a reduced turn budget. No new inference turn was submitted during this continuation. |
+
 ## Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
 
 2026-11-25. Phase 2B merged to `main` (`a144aaf`); Phase 2C **Verified** (`PASS` — all offline security/approval tests and authorized 3-turn live Codex approval/workspace verification passed).

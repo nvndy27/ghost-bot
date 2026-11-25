@@ -1,6 +1,6 @@
 # Known issues
 
-- Phase 1C implements SQLite Bot CRUD and the full Ghost Avatar System editor; full 13-section Settings and live Codex/usage wiring (Phase 1D) and live chat execution (Phase 2) remain gated.
+- Phase 2D still needs end-to-end live recovery evidence. Session inspection reports provider thread access as unknown when only the persisted ID and runtime connection state are known.
 - Ollama discovery requires an Ollama service at `127.0.0.1:11434` (currently not installed locally).
 - Kimi Code CLI (`kimi`) is not installed locally; live `kimi acp` negotiation is unverified.
 - OpenClaw Gateway probe verified `ws://127.0.0.1:18789` reachability with `operator.read` (`read_only`); a native WebSocket adapter with scoped device pairing and execution controls is not yet implemented.
