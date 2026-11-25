@@ -82,7 +82,14 @@ function decodeServerRow(row: Record<string, unknown>): McpServerConfig {
   if (!parsed.success) {
     throw new McpStorageCorruptionError('Stored MCP server row failed contract validation')
   }
-  return parsed.data
+  const server = parsed.data
+  const fingerprint = computeServerConfigFingerprint(server.scope, server.transport)
+  if (row.scope_key !== getScopeKey(server.scope) || server.configFingerprint !== fingerprint ||
+      (server.trustState === 'trusted' ? server.trustedFingerprint !== fingerprint : server.trustedFingerprint !== null) ||
+      (server.enabled && server.trustState !== 'trusted')) {
+    throw new McpStorageCorruptionError('Stored MCP server row has inconsistent scope or trust')
+  }
+  return server
 }
 
 function isUniqueConstraintError(err: unknown): boolean {

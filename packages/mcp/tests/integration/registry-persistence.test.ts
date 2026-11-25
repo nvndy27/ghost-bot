@@ -101,6 +101,10 @@ test('SQLite registry persistence: permissions, CRUD, reopen, pagination, duplic
     assert.equal(reg2.delete(AUTH, s2.id), true)
     assert.equal(reg2.getById(AUTH, s2.id), null)
 
+    h2.sqlite.prepare('UPDATE mcp_servers SET config_fingerprint = ? WHERE id = ?').run('0'.repeat(64), s1.id)
+    assert.throws(() => reg2.getById(AUTH, s1.id), McpStorageCorruptionError)
+    h2.sqlite.prepare('UPDATE mcp_servers SET config_fingerprint = ? WHERE id = ?').run(revoked.configFingerprint, s1.id)
+
     // Corrupt row fails closed
     h2.sqlite.prepare("UPDATE mcp_servers SET transport_json = '{bad' WHERE id = ?").run(s1.id)
     assert.throws(() => reg2.getById(AUTH, s1.id), McpStorageCorruptionError)

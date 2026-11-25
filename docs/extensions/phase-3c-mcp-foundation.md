@@ -1,6 +1,6 @@
 # Phase 3C — Independent MCP Client Foundation (`@ghost-bot/mcp`)
 
-Status: **Implemented & Tested** (Track B — Independent Extensions, branched from `feat/phase-3b-knowledge-retrieval @ 4d3f5c3`).
+Status: **In Progress** (acceptance review) (Track B — Independent Extensions, branched from `feat/phase-3b-knowledge-retrieval @ 4d3f5c3`).
 
 ## 1. Architecture & SDK Selection Rationale
 
@@ -83,3 +83,18 @@ packages/mcp/
 - `corepack pnpm --filter @ghost-bot/knowledge test` — **exit 0**
 - `corepack pnpm --filter @ghost-bot/mcp test` — **exit 0**
 - `corepack pnpm test` — **exit 0**
+
+## 11. Acceptance review handoff, 2026-11-26
+
+Reviewed baseline `4553e0e` on `feat/phase-3c-mcp-foundation`, descended from Phase 3B `4d3f5c3`. Antigravity stopped at its quota limit during this review.
+
+- The connection manager rechecks launch permission, current configuration fingerprint, enabled/trusted state, and host policy after asynchronous path validation and before reporting ready. Concurrent launches recheck the connection slot and global limit before starting a subprocess.
+- Discovery rejects duplicate or oversized identities and applies a cumulative byte budget to listing responses. Local snapshots are protected from caller mutation, and list changes or competing discovery invalidate pending discovery results.
+- Tool grants can additionally bind to the SHA-256 hash of the discovered definition. A mismatched hash is rejected. The integration test exercises both a valid hash and a mismatched hash after caller-side mutation of the returned snapshot.
+- Persisted configurations are checked against their scope key and recomputed fingerprint. SQLite records with inconsistent trust or enablement fail closed. The persistence test checks a syntactically valid but incorrect fingerprint.
+- Child environments protect the fixed PATH, provider credentials, and common loader/interpreter overrides. The manager forwards resolved secrets only for explicitly declared names.
+- The `@ghost-bot/mcp/registry` subpath now points to the actual implementation. All four package entry points were imported successfully.
+
+The Phase 3C acceptance gate remains open. Existing name-based tool grants still work and definition-hash grants are optional. Executable contents and interpreter entrypoints are still outside trust identity. Further review is required for trust revocation and reapproval during a live connection, schema validation cost, protocol-wide bounds, and process descendants. Production dependency audit exited 1 with [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) for Zod 3.25.76 on the reported daemon path. Applicability to extension boundaries and a compatible patched dependency path remain to be checked before final acceptance.
+
+Verification for this checkpoint: workspace lint, recursive typecheck and recursive build exited 0. Memory passed 14/14, Knowledge 12/12, MCP 8/8, and root tests 48/48. All four module imports and `git diff --check` passed. Track A and accepted Phase 3A/3B sources were outside the change set.

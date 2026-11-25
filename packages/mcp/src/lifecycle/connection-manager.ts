@@ -67,6 +67,7 @@ interface ManagedConnection {
   state: McpConnectionState
   client: Client | null
   transport: BoundedStdioClientTransport | null
+  capabilityRevision: number
   capabilities: McpCapabilitySnapshot | null
   lastError: string | null
 }
@@ -150,20 +151,42 @@ export class McpConnectionManager {
       await this.disconnect(serverId)
     }
 
+    const { executablePath, cwd } = await validateStdioLaunchPaths(
+      server.transport.executablePath,
+      server.transport.cwd,
+    )
+    const assertCurrentLaunch = () => {
+      this.assertOpen()
+      if (signal?.aborted) throw new McpTransportError('MCP connection was cancelled')
+      const current = this.registry.getById(auth, serverId, { includeUserWide: true })
+      if (!current) throw new McpNotFoundError()
+      authorizeMcpLaunch(auth, current.scope)
+      assertServerTrustedForLaunch(current)
+      if (current.configFingerprint !== server.configFingerprint) {
+        throw new McpTrustError('MCP configuration changed during connection')
+      }
+      const decision = this.hostPolicy.evaluateLaunch(auth, current)
+      if (!decision.allowed) {
+        throw new McpAuthorizationError(decision.reason ?? 'Host policy denied MCP server launch')
+      }
+    }
+    assertCurrentLaunch()
+    if (this.connections.has(serverId)) {
+      throw new McpTransportError('MCP server connection was started concurrently')
+    }
     const activeCount = [...this.connections.values()].filter(
-      (c) => c.state === 'ready' || c.state === 'connecting',
+      (c) => c.state === 'ready' || c.state === 'connecting' || c.state === 'disconnecting',
     ).length
     if (activeCount >= MCP_LIMITS.maxConcurrentConnections) {
       throw new McpTransportError(
         `Maximum concurrent MCP connections reached (${MCP_LIMITS.maxConcurrentConnections})`,
       )
     }
-
-    const { executablePath, cwd } = await validateStdioLaunchPaths(
-      server.transport.executablePath,
-      server.transport.cwd,
+    const candidateSecrets = this.resolveSecrets?.(server) ?? {}
+    const declaredKeys = new Set(server.transport.secretRefs.map((ref) => ref.envVar))
+    const resolvedSecrets = Object.fromEntries(
+      Object.entries(candidateSecrets).filter(([key]) => declaredKeys.has(key)),
     )
-    const resolvedSecrets = this.resolveSecrets ? this.resolveSecrets(server) : {}
     const env = buildMinimalChildEnv(server.transport.envAllowlist, this.hostEnv, resolvedSecrets)
 
     const generation = ++this.generationCounter
@@ -184,6 +207,7 @@ export class McpConnectionManager {
       state: 'connecting',
       client: null,
       transport,
+      capabilityRevision: 0,
       capabilities: null,
       lastError: null,
     }
@@ -198,6 +222,7 @@ export class McpConnectionManager {
           tools: {
             onChanged: () => {
               if (this.connections.get(serverId)?.generation === generation) {
+                entry.capabilityRevision++
                 entry.capabilities = null
               }
             },
@@ -205,6 +230,7 @@ export class McpConnectionManager {
           resources: {
             onChanged: () => {
               if (this.connections.get(serverId)?.generation === generation) {
+                entry.capabilityRevision++
                 entry.capabilities = null
               }
             },
@@ -212,6 +238,7 @@ export class McpConnectionManager {
           prompts: {
             onChanged: () => {
               if (this.connections.get(serverId)?.generation === generation) {
+                entry.capabilityRevision++
                 entry.capabilities = null
               }
             },
@@ -241,10 +268,11 @@ export class McpConnectionManager {
 
     try {
       await client.connect(transport, { timeout: server.connectTimeoutMs, signal })
-      if (this.connections.get(serverId)?.generation !== generation || this.closed) {
+      if (this.connections.get(serverId) !== entry || entry.state !== 'connecting' || this.closed) {
         await transport.close()
         throw new McpTransportError('MCP connection superseded or manager closed during connect')
       }
+      assertCurrentLaunch()
       entry.state = 'ready'
       return this.getConnectionInfo(serverId)!
     } catch (err) {
@@ -293,6 +321,7 @@ export class McpConnectionManager {
     const { auth, server, entry, client } = this.requireReadyAuthorizedServer(rawAuth, serverId)
     authorizeMcpDiscovery(auth, server.scope)
 
+    const revision = ++entry.capabilityRevision
     const snapshot = await discoverServerCapabilities(client, {
       serverId: server.id,
       configFingerprint: server.configFingerprint,
@@ -305,8 +334,12 @@ export class McpConnectionManager {
     if (this.connections.get(serverId)?.generation !== entry.generation) {
       throw new McpTransportError('MCP connection generation changed during discovery')
     }
+    this.requireReadyAuthorizedServer(rawAuth, serverId)
+    if (entry.capabilityRevision !== revision) {
+      throw new McpTrustError('MCP discovery was invalidated before completion')
+    }
     entry.capabilities = snapshot
-    return snapshot
+    return structuredClone(snapshot)
   }
 
   async invokeTool(
@@ -316,7 +349,8 @@ export class McpConnectionManager {
   ): Promise<McpToolInvocationResult> {
     const { auth, server, entry, client } = this.requireReadyAuthorizedServer(rawAuth, serverId)
     const capabilityKey = buildCapabilityKey(server.id, params.toolName)
-    authorizeMcpToolInvocation(auth, server.scope, capabilityKey, params.toolName)
+    const definitionHash = entry.capabilities?.tools.find((tool) => tool.name === params.toolName)?.definitionHash
+    authorizeMcpToolInvocation(auth, server.scope, capabilityKey, params.toolName, definitionHash)
 
     const policyDecision = this.hostPolicy.evaluateToolInvocation(auth, server, params.toolName)
     if (!policyDecision.allowed) {
@@ -388,7 +422,7 @@ export class McpConnectionManager {
       await entry.transport?.close()
     } finally {
       entry.state = 'disconnected'
-      this.connections.delete(serverId)
+      if (this.connections.get(serverId) === entry) this.connections.delete(serverId)
     }
   }
 

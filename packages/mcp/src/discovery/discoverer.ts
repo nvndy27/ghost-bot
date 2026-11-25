@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { McpProtocolError } from '../contracts/errors.ts'
 import { MCP_LIMITS } from '../contracts/limits.ts'
@@ -14,26 +15,25 @@ export function buildCapabilityKey(serverId: string, capabilityName: string): st
   return `${serverId}::${capabilityName}`
 }
 
-function assertBoundedSchema(schema: Record<string, unknown>, depth = 0): void {
+function assertBoundedSchema(value: unknown, depth = 0): void {
   if (depth > MCP_LIMITS.maxSchemaDepth) {
-    throw new McpProtocolError(`Discovered tool schema exceeds maximum nesting depth (${MCP_LIMITS.maxSchemaDepth})`)
+    throw new McpProtocolError('Discovered tool schema exceeds maximum nesting depth')
   }
-  if (depth === 0) {
-    const bytes = Buffer.byteLength(JSON.stringify(schema), 'utf8')
-    if (bytes > MCP_LIMITS.maxSchemaBytes) {
-      throw new McpProtocolError(`Discovered tool schema exceeds maximum size (${MCP_LIMITS.maxSchemaBytes} bytes)`)
-    }
+  if (Array.isArray(value)) {
+    for (const item of value) assertBoundedSchema(item, depth + 1)
+  } else if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) assertBoundedSchema(item, depth + 1)
   }
-  for (const val of Object.values(schema)) {
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
-      assertBoundedSchema(val as Record<string, unknown>, depth + 1)
-    } else if (Array.isArray(val)) {
-      for (const item of val) {
-        if (item && typeof item === 'object' && !Array.isArray(item)) {
-          assertBoundedSchema(item as Record<string, unknown>, depth + 1)
-        }
-      }
-    }
+}
+
+function assertUniqueCapabilities<T>(
+  entries: readonly T[],
+  identity: (entry: T) => string,
+  limit: number,
+): void {
+  const keys = entries.map(identity)
+  if (keys.some((key) => key.length === 0 || key.length > limit) || new Set(keys).size !== keys.length) {
+    throw new McpProtocolError('MCP discovery returned an invalid or duplicate capability identity')
   }
 }
 
@@ -60,6 +60,14 @@ export async function discoverServerCapabilities(
   const resourceTemplates: McpResourceTemplateDescriptor[] = []
   const prompts: McpPromptDescriptor[] = []
 
+  let discoveryBytes = 0
+  function accountForPage(page: unknown): void {
+    discoveryBytes += Buffer.byteLength(JSON.stringify(page), 'utf8')
+    if (discoveryBytes > MCP_LIMITS.maxTotalDiscoveryBytes) {
+      throw new McpProtocolError('MCP discovery exceeds total byte limit')
+    }
+  }
+
   const reqOpts = { timeout: params.timeoutMs, signal: params.signal }
 
   if (serverCaps.tools) {
@@ -67,18 +75,24 @@ export async function discoverServerCapabilities(
     const seenCursors = new Set<string>()
     for (let page = 0; page < MCP_LIMITS.maxDiscoveryPages; page++) {
       const res = await client.listTools(cursor ? { cursor } : undefined, reqOpts)
+      accountForPage(res)
       for (const tool of res.tools) {
         if (tools.length >= MCP_LIMITS.maxDiscoveredTools) {
           throw new McpProtocolError(`Discovered tools exceed limit (${MCP_LIMITS.maxDiscoveredTools})`)
         }
         const inputSchema = (tool.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>
         assertBoundedSchema(inputSchema)
+        const definition = JSON.stringify([tool.name, tool.description ?? '', inputSchema])
+        if (Buffer.byteLength(JSON.stringify(inputSchema), 'utf8') > MCP_LIMITS.maxSchemaBytes) {
+          throw new McpProtocolError('Discovered tool schema exceeds maximum size')
+        }
         tools.push({
           capabilityKey: buildCapabilityKey(params.serverId, tool.name),
           serverId: params.serverId,
-          name: tool.name.slice(0, MCP_LIMITS.maxCapabilityNameLength),
+          name: tool.name,
           description: truncateText(tool.description, MCP_LIMITS.maxCapabilityDescriptionLength),
           inputSchema,
+          definitionHash: createHash('sha256').update(definition).digest('hex'),
         })
       }
       if (!res.nextCursor) break
@@ -98,6 +112,7 @@ export async function discoverServerCapabilities(
     const seenCursors = new Set<string>()
     for (let page = 0; page < MCP_LIMITS.maxDiscoveryPages; page++) {
       const res = await client.listResources(cursor ? { cursor } : undefined, reqOpts)
+      accountForPage(res)
       for (const r of res.resources) {
         if (resources.length >= MCP_LIMITS.maxDiscoveredResources) {
           throw new McpProtocolError(`Discovered resources exceed limit (${MCP_LIMITS.maxDiscoveredResources})`)
@@ -105,7 +120,7 @@ export async function discoverServerCapabilities(
         resources.push({
           capabilityKey: buildCapabilityKey(params.serverId, r.uri),
           serverId: params.serverId,
-          uri: r.uri.slice(0, 2048),
+          uri: r.uri,
           name: r.name.slice(0, MCP_LIMITS.maxCapabilityNameLength),
           description: truncateText(r.description, MCP_LIMITS.maxCapabilityDescriptionLength),
           ...(r.mimeType ? { mimeType: r.mimeType.slice(0, 128) } : {}),
@@ -123,12 +138,13 @@ export async function discoverServerCapabilities(
     }
 
     const tmplRes = await client.listResourceTemplates(undefined, reqOpts).catch(() => ({ resourceTemplates: [] }))
+    accountForPage(tmplRes)
     for (const tmpl of tmplRes.resourceTemplates) {
       if (resourceTemplates.length >= MCP_LIMITS.maxDiscoveredResources) break
       resourceTemplates.push({
         capabilityKey: buildCapabilityKey(params.serverId, tmpl.uriTemplate),
         serverId: params.serverId,
-        uriTemplate: tmpl.uriTemplate.slice(0, 2048),
+        uriTemplate: tmpl.uriTemplate,
         name: tmpl.name.slice(0, MCP_LIMITS.maxCapabilityNameLength),
         description: truncateText(tmpl.description, MCP_LIMITS.maxCapabilityDescriptionLength),
         ...(tmpl.mimeType ? { mimeType: tmpl.mimeType.slice(0, 128) } : {}),
@@ -141,6 +157,7 @@ export async function discoverServerCapabilities(
     const seenCursors = new Set<string>()
     for (let page = 0; page < MCP_LIMITS.maxDiscoveryPages; page++) {
       const res = await client.listPrompts(cursor ? { cursor } : undefined, reqOpts)
+      accountForPage(res)
       for (const p of res.prompts) {
         if (prompts.length >= MCP_LIMITS.maxDiscoveredPrompts) {
           throw new McpProtocolError(`Discovered prompts exceed limit (${MCP_LIMITS.maxDiscoveredPrompts})`)
@@ -148,7 +165,7 @@ export async function discoverServerCapabilities(
         prompts.push({
           capabilityKey: buildCapabilityKey(params.serverId, p.name),
           serverId: params.serverId,
-          name: p.name.slice(0, MCP_LIMITS.maxCapabilityNameLength),
+          name: p.name,
           description: truncateText(p.description, MCP_LIMITS.maxCapabilityDescriptionLength),
           arguments: (p.arguments ?? []).slice(0, 32).map((a) => ({
             name: a.name.slice(0, 128),
@@ -168,6 +185,11 @@ export async function discoverServerCapabilities(
       }
     }
   }
+
+  assertUniqueCapabilities(tools, (tool) => tool.name, MCP_LIMITS.maxCapabilityNameLength)
+  assertUniqueCapabilities(resources, (resource) => resource.uri, 2048)
+  assertUniqueCapabilities(resourceTemplates, (template) => template.uriTemplate, 2048)
+  assertUniqueCapabilities(prompts, (prompt) => prompt.name, MCP_LIMITS.maxCapabilityNameLength)
 
   return McpCapabilitySnapshotSchema.parse({
     serverId: params.serverId,

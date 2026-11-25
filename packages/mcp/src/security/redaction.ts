@@ -16,7 +16,20 @@ const BLOCKED_ENV_VARS = new Set([
   'GH_TOKEN',
   'NPM_TOKEN',
   'NODE_AUTH_TOKEN',
+  'PATH',
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'BASH_ENV',
+  'ENV',
+  'GCONV_PATH',
+  'GLIBC_TUNABLES',
+  'RUBYOPT',
+  'PERL5OPT',
 ])
+
+function isBlockedEnvVar(name: string): boolean {
+  return BLOCKED_ENV_VARS.has(name) || /^(?:LD_|DYLD_|PYTHON)/.test(name)
+}
 
 const SAFE_BASELINE_ENV_KEYS = ['LANG', 'LC_ALL', 'TERM'] as const
 
@@ -44,13 +57,13 @@ export function assertNoCredentialsInServerInput(fields: {
       }
     }
     for (const envVar of fields.transport.envAllowlist) {
-      if (BLOCKED_ENV_VARS.has(envVar)) {
-        throw new McpCredentialError(`MCP envAllowlist cannot include protected provider credential "${envVar}"`)
+      if (isBlockedEnvVar(envVar)) {
+        throw new McpCredentialError(`MCP envAllowlist cannot include protected environment variable "${envVar}"`)
       }
     }
     for (const ref of fields.transport.secretRefs) {
-      if (BLOCKED_ENV_VARS.has(ref.envVar)) {
-        throw new McpCredentialError(`MCP secretRefs cannot target protected provider credential "${ref.envVar}"`)
+      if (isBlockedEnvVar(ref.envVar)) {
+        throw new McpCredentialError(`MCP secretRefs cannot target protected environment variable "${ref.envVar}"`)
       }
       if (ref.label && containsCredentialPattern(ref.label)) {
         throw new McpCredentialError('MCP secretRef label rejected because it matches a recognized credential pattern')
@@ -76,7 +89,7 @@ export function buildMinimalChildEnv(
   }
 
   for (const key of envAllowlist) {
-    if (BLOCKED_ENV_VARS.has(key)) continue
+    if (isBlockedEnvVar(key)) continue
     const val = hostEnv[key]
     if (typeof val === 'string' && !val.includes('\0')) {
       env[key] = val
@@ -84,7 +97,7 @@ export function buildMinimalChildEnv(
   }
 
   for (const [key, val] of Object.entries(resolvedSecrets)) {
-    if (BLOCKED_ENV_VARS.has(key)) continue
+    if (isBlockedEnvVar(key)) continue
     if (typeof val === 'string' && !val.includes('\0')) {
       env[key] = val
     }

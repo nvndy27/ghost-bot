@@ -36,6 +36,7 @@ export const McpPermissionsSchema = z
     canLaunch: z.boolean().default(false),
     canDiscover: z.boolean().default(false),
     allowedTools: z.array(z.string().min(1).max(MCP_LIMITS.maxCapabilityNameLength)).max(200).default([]),
+    allowedToolHashes: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)).optional(),
     allowedResources: z.array(z.string().min(1).max(2048)).max(200).default([]),
     allowedPrompts: z.array(z.string().min(1).max(MCP_LIMITS.maxCapabilityNameLength)).max(200).default([]),
   })
@@ -154,6 +155,7 @@ export const McpToolDescriptorSchema = z
     name: z.string().min(1).max(MCP_LIMITS.maxCapabilityNameLength),
     description: z.string().max(MCP_LIMITS.maxCapabilityDescriptionLength),
     inputSchema: z.record(z.unknown()),
+    definitionHash: Sha256HexSchema,
   })
   .strict()
 

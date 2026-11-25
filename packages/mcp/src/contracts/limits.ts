@@ -19,6 +19,7 @@ export const MCP_LIMITS = {
   maxPendingRequests: 32,
   maxConcurrentConnections: 16,
   maxDiscoveryPages: 20,
+  maxTotalDiscoveryBytes: 524_288, // 512 KiB
   maxDiscoveredTools: 200,
   maxDiscoveredResources: 200,
   maxDiscoveredPrompts: 200,

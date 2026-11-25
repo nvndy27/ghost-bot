@@ -67,6 +67,31 @@ test('capability discovery, repeated cursor detection, schema validation, tool e
     assert.ok(snapshot.resources.some((r) => r.uri === 'synthetic://docs/readme'))
     assert.ok(snapshot.prompts.some((p) => p.name === 'review_note'))
 
+    const echo = snapshot.tools.find((tool) => tool.name === 'echo_literal')!
+    const boundAuth: McpAuthContext = {
+      ...AUTH,
+      permissions: {
+        ...AUTH.permissions,
+        allowedToolHashes: { [echo.capabilityKey]: echo.definitionHash },
+      },
+    }
+    echo.definitionHash = '0'.repeat(64)
+    const boundResult = await manager.invokeTool(boundAuth, srv.id, {
+      toolName: 'echo_literal',
+      args: { text: 'bound grant' },
+    })
+    assert.equal(boundResult.isToolError, false)
+    await assert.rejects(
+      () => manager.invokeTool({
+        ...boundAuth,
+        permissions: {
+          ...boundAuth.permissions,
+          allowedToolHashes: { [echo.capabilityKey]: echo.definitionHash },
+        },
+      }, srv.id, { toolName: 'echo_literal', args: { text: 'changed grant' } }),
+      McpAuthorizationError,
+    )
+
     // Invalid tool arguments rejected by @cfworker/json-schema before dispatch
     await assert.rejects(
       () => manager.invokeTool(AUTH, srv.id, { toolName: 'echo_literal', args: { text: '' } }),

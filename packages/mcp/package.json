@@ -6,7 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/schemas.ts",
-    "./registry": "./src/registry/sqlite-registry.ts",
+    "./registry": "./src/storage/sqlite-registry.ts",
     "./client": "./src/lifecycle/connection-manager.ts"
   },
   "scripts": {

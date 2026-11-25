@@ -78,9 +78,15 @@ export function authorizeMcpToolInvocation(
   scope: McpScope,
   capabilityKey: string,
   toolName: string,
+  definitionHash?: string,
 ): void {
   if (!isAuthorizedToReadScope(auth.host, scope, { includeUserWide: scope.kind === 'user' })) {
     throw new McpAuthorizationError('Authorization context does not match MCP server scope')
+  }
+  const grants = auth.permissions.allowedToolHashes
+  if (grants && (definitionHash === undefined || !Object.hasOwn(grants, capabilityKey) ||
+      grants[capabilityKey] !== definitionHash)) {
+    throw new McpAuthorizationError('Tool definition does not match the authorized MCP grant')
   }
   const allowed = auth.permissions.allowedTools
   if (!allowed.includes(capabilityKey) && !allowed.includes(toolName)) {
