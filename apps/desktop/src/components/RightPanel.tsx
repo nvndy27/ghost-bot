@@ -157,11 +157,19 @@ export function RightPanel({
           </>
         ) : runtimeSnapshot && runtimeSnapshot.usageWindows.length > 0 ? (
           <div style={{ display: 'grid', gap: '8px' }}>
+            <small className="gb-muted" style={{ fontSize: '11px' }}>
+              Source: Provider subscription ({runtimeSnapshot.runtimeMode}
+              {runtimeSnapshot.planType ? ` · ${runtimeSnapshot.planType}` : ''})
+            </small>
             {runtimeSnapshot.usageWindows.map((w) => (
               <div key={w.label}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
                   <span className="gb-muted">Window {w.label}</span>
-                  <span>{w.usedPercent !== null ? `${w.usedPercent}%` : 'Unavailable'}</span>
+                  <span>
+                    {w.usedPercent !== null
+                      ? `${w.usedPercent}% used (${Math.max(0, 100 - w.usedPercent)}% left)`
+                      : 'Unavailable'}
+                  </span>
                 </div>
                 <div className="gb-bar" aria-hidden="true">
                   <div className="gb-bar-fill" style={{ width: `${w.usedPercent ?? 0}%` }} />
@@ -174,9 +182,9 @@ export function RightPanel({
               </div>
             ))}
             <small className="gb-muted" style={{ fontSize: '11px' }}>
-              Status: {runtimeSnapshot.usageStatus}
+              Status: {runtimeSnapshot.status === 'stale' ? 'stale' : runtimeSnapshot.usageStatus}
               {runtimeSnapshot.usageObservedAt
-                ? ` · ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                ? ` · Refreshed ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
                 : ''}
             </small>
             {runtimeSnapshot.lifecycleState && runtimeSnapshot.lifecycleState !== 'connected' && onReconnectRuntime && (

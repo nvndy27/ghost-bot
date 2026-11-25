@@ -3,6 +3,8 @@ import { promisify } from 'node:util'
 import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
 import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
+import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
+import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
 import type {
   ProviderSummary,
   RuntimeLifecycleState,
@@ -49,6 +51,8 @@ export interface RuntimeRegistryOptions {
   codexCommand?: string
   codexVersionOverride?: string | null
   codexClientFactory?: (version: string | null) => CodexMetadataClient
+  openclawAdapter?: OpenClawGatewayAdapter
+  ollamaAdapter?: OllamaLocalAdapter
   cacheTtlMs?: number
 }
 
@@ -259,6 +263,23 @@ export class RuntimeRegistry {
       ]
     }
 
+    const openclaw = this.options.openclawAdapter ?? new OpenClawGatewayAdapter({ timeoutMs: 1500 })
+    const ollama = this.options.ollamaAdapter ?? new OllamaLocalAdapter({ timeoutMs: 1000 })
+    const [ocStatus, olStatus] = await Promise.all([
+      openclaw.inspectGateway().catch((err) => ({
+        available: false,
+        runtimeVersion: null,
+        authState: { status: 'error' as const, detail: err instanceof Error ? err.message : 'Error' },
+        detail: err instanceof Error ? err.message : 'OpenClaw Gateway unavailable',
+        verifiedModes: [] as ('read-only' | 'ask-approval' | 'workspace')[],
+      })),
+      ollama.checkAvailability().catch(() => ({
+        available: false,
+        version: null,
+        detail: 'Local service not detected at http://127.0.0.1:11434',
+      })),
+    ])
+
     return [
       {
         id: 'codex-app-server',
@@ -276,15 +297,15 @@ export class RuntimeRegistry {
         id: 'openclaw',
         label: 'OpenClaw Gateway',
         kind: 'local',
-        status: 'unavailable',
-        detail: 'Phase 0 probe verified read-only health; native adapter pending Phase 2',
+        status: ocStatus.available ? 'connected' : 'unavailable',
+        detail: ocStatus.detail,
       },
       {
         id: 'ollama',
         label: 'Ollama Local',
         kind: 'local',
-        status: 'unavailable',
-        detail: 'Local service not detected at 127.0.0.1:11434',
+        status: olStatus.available ? 'connected' : 'unavailable',
+        detail: olStatus.detail,
       },
     ]
   }

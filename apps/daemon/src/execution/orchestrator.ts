@@ -261,8 +261,12 @@ export class RunOrchestrator {
 
     return this.dbHandle.transaction(() => {
       const staleRuns = this.dbHandle.sqlite
-        .prepare(`SELECT id, status FROM runs WHERE status IN (${activePlaceholders})`)
-        .all(...ACTIVE_RUN_STATUSES) as unknown as Array<{ id: string; status: string }>
+        .prepare(`SELECT id, session_id, status FROM runs WHERE status IN (${activePlaceholders})`)
+        .all(...ACTIVE_RUN_STATUSES) as unknown as Array<{
+        id: string
+        session_id: string
+        status: string
+      }>
 
       if (staleRuns.length === 0) {
         return 0
@@ -335,6 +339,14 @@ export class RunOrchestrator {
           },
           timestamp: now,
         })
+
+        if (stale.status === 'cancelling') {
+          this.sessionsWithUnconfirmedStop.set(
+            stale.session_id,
+            this.runtimeRegistry?.getGeneration() ?? 0,
+          )
+          this.persistDurableQuarantine()
+        }
       }
 
       // Startup reconciliation must never leave pending/resolving approvals actionable.

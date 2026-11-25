@@ -309,7 +309,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     EmptyParamsSchema.parse(params)
-    return queryDaemon('/providers', z.array(ProviderSummarySchema))
+    return queryDaemon('/providers', z.array(ProviderSummarySchema), { timeoutMs: 15_000 })
   })
 
   ipcMain.handle(IPC_CHANNELS.BOTS_LIST, async (event, params) => {

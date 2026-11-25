@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Phase 2E — Multi-Runtime Completion, Packaging & Functional MVP Acceptance
+- Added `OpenClawGatewayAdapter` (`packages/runtime-adapters/openclaw/openclaw-gateway.ts`) with loopback-only validation, `health`/`status`/`models.list` discovery, normalized streaming/tool/approval protocol support, and fail-closed `RuntimePolicyBroker` execution gating.
+- Added optional `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`) with loopback HTTP validation, `/api/version` + `/api/tags` discovery, bounded stateless `/api/chat` NDJSON streaming, `AbortController` cancellation, and `read-only` enforcement.
+- Hardened `JsonRpcClient.close()` to wait for actual child process exit and reject on failed termination, and updated `RunOrchestrator.reconcileOnStartup()` to reconstruct durable quarantine for interrupted `cancelling` runs.
+- Polished `RightPanel.tsx` and `SettingsModal.tsx` usage/rate-limit displays (source, account/plan, used/remaining %, reset timestamp, last refresh, stale status) and increased `ghost:providers:list` timeout to 15s.
+- Added `tests/openclaw-adapter.test.ts`, `tests/ollama-adapter.test.ts`, `tests/phase-2e-mvp.test.ts` (61/61 unit tests across 3 consecutive runs), `scripts/verify-phase-2e-acceptance.mjs` (4 screenshots in `design/reviews/phase-2e/`), `verify:offline` script, and `docs/PHASE2_RELEASE_REPORT.md`.
+
 ### Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
 - Added `RuntimeLifecycleState`, deduplicated `RuntimeRegistry.reconnect()`, and `closeOwnedClient()` (`apps/daemon/src/runtime/registry.ts`).
 - Hardened `RunOrchestrator` quarantine (`sessionsWithUnconfirmedStop`) and added `inspectSession()`, `retryRun()`, and `reconnectRuntime()` behind `SESSIONS_INSPECT`, `RUNS_RETRY`, and `RUNTIME_RECONNECT` IPC/daemon routes.

@@ -233,15 +233,27 @@ export class JsonRpcStdioClient {
     }
 
     const graceMs = this.options.shutdownGraceMs ?? 2000
-    this.closingPromise = new Promise<void>((resolve) => {
+    this.closingPromise = new Promise<void>((resolve, reject) => {
       let settled = false
+      let reapTimer: NodeJS.Timeout | undefined
+      const cleanupTimers = () => {
+        clearTimeout(termTimer)
+        clearTimeout(killTimer)
+        if (reapTimer) clearTimeout(reapTimer)
+      }
       const finish = () => {
         if (settled) return
         settled = true
-        clearTimeout(termTimer)
-        clearTimeout(killTimer)
+        cleanupTimers()
         this.cleanupReaders()
         resolve()
+      }
+      const failClose = (reason: string) => {
+        if (settled) return
+        settled = true
+        cleanupTimers()
+        this.cleanupReaders()
+        reject(new JsonRpcClientError('TRANSPORT_ERROR', reason))
       }
 
       child.once('close', finish)
@@ -256,21 +268,38 @@ export class JsonRpcStdioClient {
         if (this.exitInfo === null) {
           try {
             child.kill('SIGTERM')
-          } catch {
-            finish()
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException)?.code === 'ESRCH') {
+              finish()
+            } else {
+              failClose('Failed to send SIGTERM to owned runtime process')
+            }
           }
         }
       }, Math.min(graceMs, 500))
 
       const killTimer = setTimeout(() => {
-        if (this.exitInfo === null) {
-          try {
-            child.kill('SIGKILL')
-          } catch {
-            // Ignore kill errors if already exited.
-          }
+        if (this.exitInfo !== null) {
+          finish()
+          return
         }
-        finish()
+        try {
+          child.kill('SIGKILL')
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === 'ESRCH') {
+            finish()
+            return
+          }
+          failClose('Failed to send SIGKILL to owned runtime process')
+          return
+        }
+        reapTimer = setTimeout(() => {
+          if (this.exitInfo !== null) {
+            finish()
+          } else {
+            failClose('Owned runtime process did not terminate after SIGKILL')
+          }
+        }, 500)
       }, graceMs)
     })
 

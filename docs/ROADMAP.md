@@ -25,12 +25,12 @@ Gate: restart persistence, UI matches references, offline integration tests pass
 - [x] Phase 2B — Live read-only Codex execution, thread continuity, streaming, and cancellation (**Verified**; 3-turn live Electron+Codex E2E and offline suites passed).
 - [x] Phase 2C — Live tools, durable interactive approvals, and workspace-write permissions (**Verified**; live Deny + Approve once + canary containment + 53/53 tests passed).
 - [x] Phase 2D — Runtime recovery, reconnect, thread inspection, manual retry, and Linux AppImage packaging (**Verified**; 2-turn live recovery, security hardening, and packaged AppImage 2-launch verification passed; RPM packaging deferred to Phase 2E).
-- [ ] Real verified Codex integration; connect/disconnect/stream/cancel/resume.
-- [ ] OpenClaw adapter if verified; optional local Ollama.
-- [ ] Dynamic model/effort, actual permission enforcement, approval/diff display.
-- [ ] Usage source and timestamps; unknown quotas shown correctly; opt-in API costs.
-- [ ] Fedora packaging and security tests.
-Gate: one verified subscription path, real streaming, denial yields no side effect, restart recovery.
+- [x] Real verified Codex integration; connect/disconnect/stream/cancel/resume.
+- [ ] OpenClaw adapter if verified; optional local Ollama (**Implemented & Protocol-Tested** on `feat/phase-2e-functional-mvp`; OpenClaw `2026.11.8` metadata verified, live execution gated; Ollama optional/unavailable on host).
+- [x] Dynamic model/effort, actual permission enforcement, approval/diff display.
+- [x] Usage source and timestamps; unknown quotas shown correctly; opt-in API costs.
+- [ ] Fedora packaging and security tests (AppImage **Verified** via `APPIMAGE_EXTRACT_AND_RUN=1`; RPM **Blocked** on host by missing `libcrypt.so.1`).
+Gate: one verified subscription path, real streaming, denial yields no side effect, restart recovery — **Phase 2E CONDITIONAL PASS** (see `docs/PHASE2_RELEASE_REPORT.md`).
 
 ## Phase 3 — Agent core
 - [ ] Memory and workspace management, tools/MCP registry, skills, terminal/artifacts, audit.

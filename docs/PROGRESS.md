@@ -12,6 +12,21 @@
 | Implemented | Added Fedora/Linux packaging configuration (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`); `rpmbuild` is present on host, `electron-builder` is absent (no AppImage/RPM artifact built yet). |
 | Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**55/55** including `tests/phase-2d-recovery.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs` through `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` (2 screenshots in `design/reviews/phase-2d/`) all passed. |
 
+## Phase 2E — Multi-Runtime Completion, Packaging & Functional MVP Acceptance
+
+2026-11-26. Branched `feat/phase-2e-functional-mvp` from `main` (`4489f2b`). Phase 2E is **Implemented & Offline-Tested** (**CONDITIONAL PASS**: all 61/61 tests across 3 consecutive runs, OpenClaw/Ollama protocol suites, usage/rate-limit polish, daily-use UX & performance acceptance, and packaged AppImage 2-launch verification passed; Fedora RPM build blocked on host by missing `libcrypt.so.1`, and live OpenClaw/Ollama inference not executed without authorization).
+
+| State | Evidence |
+|---|---|
+| Verified | Fixed `JsonRpcClient.close()` (`packages/runtime-adapters/json-rpc-client.ts`) to wait for actual child process exit and reject if `SIGKILL` fails to terminate the process, and updated `RunOrchestrator.reconcileOnStartup()` (`apps/daemon/src/execution/orchestrator.ts`) to reconstruct durable quarantine if a `cancelling` run is interrupted by abrupt daemon termination. |
+| Implemented | Added `OpenClawGatewayAdapter` (`packages/runtime-adapters/openclaw/openclaw-gateway.ts`) with loopback-only URL validation, `health`/`status`/`models.list` discovery (verified live metadata-only against local OpenClaw `2026.11.8 (2d4ab29)`), normalized streaming/tool/approval protocol support, and fail-closed `RuntimePolicyBroker` gating for unverified live execution. |
+| Implemented | Added optional `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`) with loopback-only HTTP validation, `/api/version` + `/api/tags` discovery, bounded stateless `/api/chat` NDJSON streaming (`OLLAMA_MAX_HISTORY_MESSAGES = 24`), `AbortController` cancellation, and `read-only` tool-free enforcement; stays explicitly `unavailable` on host when Ollama is absent without blocking Codex. |
+| Verified | Polished `RightPanel.tsx` and `SettingsModal.tsx` usage/rate-limit displays (provider source, account/plan, window duration, used/remaining %, reset timestamp, last refreshed, current/stale/unavailable status) and increased `ghost:providers:list` IPC timeout to 15s (`apps/desktop/electron/main.ts`). |
+| Verified | Packaged `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` (`121058150` bytes, SHA-256 `f41c1621a07102eb28e85d5727f4416e42c2ce101507664ecf08cb90a6b77e652`) passed `scripts/verify-packaged-appimage.mjs` (0 bundled credentials/user data, `sandboxed: true`, strict CSP, 2-launch SQLite persistence `0700`/`0600`, clean shutdown). |
+| Verified | Measured performance & 15-step daily-use UX acceptance (`scripts/verify-phase-2e-acceptance.mjs`, 4 screenshots in `design/reviews/phase-2e/`): cold `1587ms`, warm `1576ms`, daemon RSS `186 MB`, streaming `204ms`, metadata refresh `4ms`, history load `7ms`, shutdown `2790ms`, `consoleErrors: 0`. |
+| Tested | `pnpm lint`, `pnpm typecheck`, **3 consecutive `pnpm test` runs (`61/61` each)**, `pnpm package:appimage`, Electron smoke, 5 Playwright UI suites (`1B`–`2C`), 4 Electron E2E suites (`persistence`, `1D`, `2A`, `2D`), `verify-packaged-appimage.mjs`, and `verify-phase-2e-acceptance.mjs` all passed. |
+| Blocked | Host RPM build (`pnpm package:rpm`) blocked by missing `libcrypt.so.1` (`libxcrypt-compat`, also absent in local `fedora:45` container); native FUSE AppImage launch blocked by missing `libfuse.so.2`. Live OpenClaw/Ollama inference not authorized. |
+
 ### Phase 2D final acceptance & merge — 2026-11-26
 
 Phase 2D is **Verified** (**PASS** with authorized RPM packaging deferral to Phase 2E) on `feat/phase-2d-recovery-resume` and merged to `main`.
