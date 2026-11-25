@@ -1,5 +1,17 @@
 # Progress log
 
+## Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
+
+2026-11-25. Phase 2B merged to `main` (`a144aaf`); Phase 2C **Implemented & Offline-Tested** on `feat/phase-2c-tools-approvals` (**CONDITIONAL PASS**: zero live tool/workspace-write turns executed pending explicit human authorization of `GHOST_BOT_RUN_LIVE_TOOLS=1`).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added SQLite migration `0004_durable_approvals` (`apps/daemon/src/db/schema.ts`, `migrations.ts`) creating the durable `approvals` table binding approval ID, run/session/agent IDs, runtime generation, account identity, thread/turn/provider request IDs, action type, summary, redacted args, `args_hash`, `permission_mode`, lifecycle status (`pending`, `resolving`, `approved`, `denied`, `expired`, `revoked`, `resolution_failed`), expiry, and decision metadata. |
+| Implemented | Unlocked `ask-approval` (`workspace-write` + `untrusted`) and `workspace` (`workspace-write` + `on-request`, `networkAccess: false`, `excludeSlashTmp: true`, `excludeTmpdirEnvVar: true`) in `RuntimePolicyBroker.authorizeLiveExecution()`, while keeping `full-access` disabled and rejected. |
+| Implemented | Implemented single-use durable `RunOrchestrator.resolveApproval()` with `argsHash` verification, expiration persistence (committed outside rollback), runtime generation checks, `resolution_failed` fail-closed delivery handling, and revocation on cancel, terminal state, and startup reconciliation (`reconcileOnStartup`). |
+| Implemented | Updated `ApprovalCard` (`MessageList.tsx`), `ChatComposer.tsx`, `App.tsx`, and `shared-types/ipc.ts` to support `Approve once` / `Deny`, `resolving` button lock, `expired`/`revoked`/`resolution_failed` states, mock vs live differentiation, and verified `ask-approval`/`workspace` permission selection. |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**52/52** including `tests/phase-2c-approvals.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs`, `verify-phase-1c-ui.mjs`, `verify-phase-1d-ui.mjs`, `verify-phase-2a-ui.mjs`, `verify-phase-2c-ui.mjs` (3 screenshots in `design/reviews/phase-2c/`), `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, and `verify-phase-2a-electron.mjs` all passed. Added opt-in `scripts/verify-phase-2c-live.mjs` (`GHOST_BOT_RUN_LIVE_TOOLS=1`) — not yet executed. |
+
 ## Phase 2B — Live Codex Execution & Streaming
 
 2026-11-25. Phase 2A hardened (`6d132e1`) and merged to `main` (`2ffc521`); Phase 2B **Verified** (`PASS` — all offline checks and authorized 3-turn live Codex Electron E2E passed).

@@ -207,8 +207,8 @@ test('Phase 2B live Codex orchestration: policy gates, thread continuity, instru
       /historical mock session/,
     )
 
-    // 2. Unsupported permission modes in Phase 2B (ask-approval, workspace, full-access) are rejected
-    dbHandle.sqlite.prepare(`UPDATE agents SET permission_mode = 'ask-approval' WHERE id = 'chief'`).run()
+    // 2. Full Access permission mode remains disabled and rejected
+    dbHandle.sqlite.prepare(`UPDATE agents SET permission_mode = 'full-access' WHERE id = 'chief'`).run()
     const liveSession = sessionRepo.createSession({ agentId: 'chief', title: 'Live Codex Chat' })
     await assert.rejects(
       () =>
@@ -217,7 +217,7 @@ test('Phase 2B live Codex orchestration: policy gates, thread continuity, instru
           idempotencyKey: 'k-perm-blocked',
           text: 'hi',
         }),
-      /limited to read-only mode/,
+      /Full Access.*disabled/,
     )
     dbHandle.sqlite.prepare(`UPDATE agents SET permission_mode = 'read-only' WHERE id = 'chief'`).run()
 

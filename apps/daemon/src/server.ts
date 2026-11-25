@@ -552,10 +552,11 @@ export class GhostBotDaemon {
           sendJson(
             res,
             200,
-            orchestrator.resolveApproval(
+            await orchestrator.resolveApproval(
               parsed.data.runId,
               parsed.data.approvalId,
               parsed.data.decision,
+              parsed.data.argsHash,
             ),
           )
           return

@@ -830,9 +830,11 @@ export class CodexAppServerAdapter implements AgentRuntime {
       const summary =
         typeof p.command === 'string'
           ? `Run command: ${p.command}`
-          : typeof p.reason === 'string'
-            ? p.reason
-            : req.method
+          : typeof p.path === 'string'
+            ? `Modify file: ${p.path}`
+            : typeof p.reason === 'string'
+              ? p.reason
+              : req.method
 
       return new Promise<{ decision: 'accept' | 'decline' }>((resolveDecision) => {
         const timer = setTimeout(() => {

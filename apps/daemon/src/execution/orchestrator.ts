@@ -30,6 +30,12 @@ export interface PendingApprovalRecord {
   title: string
   command: string
   risk: 'low' | 'medium' | 'high'
+  actionType?: string
+  argsHash?: string
+  permissionMode?: string
+  expiresAt?: string
+  isMock?: boolean
+  status?: 'pending' | 'resolving' | 'approved' | 'denied' | 'expired' | 'revoked' | 'resolution_failed'
 }
 
 export interface RunRecord {
@@ -87,6 +93,12 @@ interface ActiveRunControl {
     resolve: (decision: 'approved' | 'denied' | 'cancelled') => void
   } | null
   liveCancel?: (runId: string) => Promise<void>
+  liveResolveApproval?: (decision: {
+    approvalId: string
+    runId: string
+    argsHash: string
+    decision: 'allow-once' | 'deny'
+  }) => Promise<void>
   cancelTimeout?: ReturnType<typeof setTimeout>
   donePromise: Promise<void>
 }
@@ -270,6 +282,15 @@ export class RunOrchestrator {
           timestamp: now,
         })
       }
+
+      // Startup reconciliation must never leave pending/resolving approvals actionable.
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE approvals
+           SET status = 'revoked', resolved_at = ?, decision_meta_json = ?
+           WHERE status IN ('pending', 'resolving')`,
+        )
+        .run(now, JSON.stringify({ reason: 'daemon_restarted' }))
 
       return staleRuns.length
     })
@@ -833,6 +854,7 @@ export class RunOrchestrator {
         this.dbHandle.sqlite
           .prepare(`UPDATE runs SET status = 'cancelling' WHERE id = ?`)
           .run(runId)
+        this.revokeApprovalsInTx(runId, 'run_cancelled', now)
         this.eventStore.appendEvent(runId, {
           eventKey: 'run.cancelling',
           type: 'run.cancelling',
@@ -895,26 +917,136 @@ export class RunOrchestrator {
     return result
   }
 
-  resolveApproval(
+  private revokeApprovalsInTx(runId: string, reason: string, now: string): void {
+    const pendingRows = this.dbHandle.sqlite
+      .prepare(`SELECT id FROM approvals WHERE run_id = ? AND status IN ('pending', 'resolving')`)
+      .all(runId) as unknown as Array<{ id: string }>
+
+    if (pendingRows.length === 0) return
+
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE approvals
+         SET status = 'revoked', resolved_at = ?, decision_meta_json = ?
+         WHERE run_id = ? AND status IN ('pending', 'resolving')`,
+      )
+      .run(now, JSON.stringify({ reason }), runId)
+
+    for (const row of pendingRows) {
+      this.eventStore.appendEvent(runId, {
+        eventKey: `approval.revoked:${row.id}`,
+        type: 'approval.revoked',
+        payload: { approvalId: row.id, reason },
+        timestamp: now,
+      })
+    }
+  }
+
+  async resolveApproval(
     runId: string,
     approvalId: string,
     decision: 'approved' | 'denied',
-  ): { run: RunRecord } {
+    expectedArgsHash?: string,
+  ): Promise<{ run: RunRecord }> {
     const control = this.activeControls.get(runId)
-    if (!control?.pendingApproval || control.pendingApproval.spec.approvalId !== approvalId) {
-      throw new DaemonError(
-        'APPROVAL_NOT_FOUND',
-        `No pending approval "${approvalId}" for run "${runId}"`,
-        { statusCode: 404 },
-      )
-    }
 
-    this.dbHandle.transaction(() => {
-      const row = this.dbHandle.sqlite
-        .prepare('SELECT status FROM runs WHERE id = ?')
-        .get(runId) as { status: string } | undefined
+    const prep = this.dbHandle.transaction(() => {
+      const appRow = this.dbHandle.sqlite
+        .prepare(
+          `SELECT id, run_id, runtime_generation, args_hash, permission_mode, status, expires_at
+           FROM approvals
+           WHERE id = ? AND run_id = ?`,
+        )
+        .get(approvalId, runId) as
+        | {
+            id: string
+            run_id: string
+            runtime_generation: number
+            args_hash: string
+            permission_mode: string
+            status: string
+            expires_at: string
+          }
+        | undefined
 
-      if (!row || row.status !== 'awaiting_approval') {
+      const runRow = this.dbHandle.sqlite
+        .prepare('SELECT status, runtime_id FROM runs WHERE id = ?')
+        .get(runId) as { status: string; runtime_id: string } | undefined
+
+      if (!runRow) {
+        throw new DaemonError('RUN_NOT_FOUND', `Run "${runId}" was not found`, { statusCode: 404 })
+      }
+
+      if (!appRow) {
+        if (!control?.pendingApproval || control.pendingApproval.spec.approvalId !== approvalId) {
+          throw new DaemonError(
+            'APPROVAL_NOT_FOUND',
+            `No pending approval "${approvalId}" for run "${runId}"`,
+            { statusCode: 404 },
+          )
+        }
+      }
+
+      if (appRow) {
+        if (appRow.status !== 'pending') {
+          throw new DaemonError(
+            'APPROVAL_ALREADY_RESOLVED',
+            `Approval "${approvalId}" is already in state "${appRow.status}"`,
+            { statusCode: 409 },
+          )
+        }
+        const now = new Date().toISOString()
+        const expiresMs = Date.parse(appRow.expires_at)
+        if (Number.isFinite(expiresMs) && Date.now() > expiresMs) {
+          this.dbHandle.sqlite
+            .prepare(`UPDATE approvals SET status = 'expired', resolved_at = ? WHERE id = ?`)
+            .run(now, approvalId)
+          this.eventStore.appendEvent(runId, {
+            eventKey: `approval.expired:${approvalId}`,
+            type: 'approval.expired',
+            payload: { approvalId },
+            timestamp: now,
+          })
+          return { outcome: 'expired' as const, isCodex: false, argsHash: '' }
+        }
+        if (expectedArgsHash && expectedArgsHash !== appRow.args_hash) {
+          throw new DaemonError(
+            'APPROVAL_ARGS_MISMATCH',
+            'Approval action arguments hash mismatch',
+            { statusCode: 409 },
+          )
+        }
+        if (
+          runRow.runtime_id === 'codex' &&
+          this.runtimeRegistry &&
+          this.runtimeRegistry.getGeneration() !== appRow.runtime_generation
+        ) {
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE approvals SET status = 'revoked', resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+            )
+            .run(now, JSON.stringify({ reason: 'runtime_generation_changed' }), approvalId)
+          this.eventStore.appendEvent(runId, {
+            eventKey: `approval.revoked:${approvalId}`,
+            type: 'approval.revoked',
+            payload: { approvalId, reason: 'runtime_generation_changed' },
+            timestamp: now,
+          })
+          return { outcome: 'revoked_generation' as const, isCodex: false, argsHash: '' }
+        }
+
+        if (runRow.status !== 'awaiting_approval') {
+          throw new DaemonError(
+            'INVALID_RUN_TRANSITION',
+            `Run "${runId}" is not awaiting approval`,
+            { statusCode: 409 },
+          )
+        }
+
+        this.dbHandle.sqlite
+          .prepare(`UPDATE approvals SET status = 'resolving' WHERE id = ? AND status = 'pending'`)
+          .run(approvalId)
+      } else if (runRow.status !== 'awaiting_approval') {
         throw new DaemonError(
           'INVALID_RUN_TRANSITION',
           `Run "${runId}" is not awaiting approval`,
@@ -922,22 +1054,102 @@ export class RunOrchestrator {
         )
       }
 
+      return {
+        outcome: 'proceed' as const,
+        isCodex: runRow.runtime_id === 'codex',
+        argsHash: appRow?.args_hash ?? 'mock',
+      }
+    })
+
+    if (prep.outcome === 'expired') {
+      throw new DaemonError('APPROVAL_EXPIRED', `Approval "${approvalId}" has expired`, {
+        statusCode: 410,
+      })
+    }
+    if (prep.outcome === 'revoked_generation') {
+      throw new DaemonError(
+        'RUNTIME_GENERATION_CHANGED',
+        'Runtime generation changed; approval was revoked.',
+        { statusCode: 409 },
+      )
+    }
+
+    if (prep.isCodex) {
+      if (!control?.liveResolveApproval) {
+        const now = new Date().toISOString()
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE approvals SET status = 'resolution_failed', resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+          )
+          .run(now, JSON.stringify({ reason: 'adapter_unavailable' }), approvalId)
+        this.eventStore.appendEvent(runId, {
+          eventKey: `approval.resolution_failed:${approvalId}`,
+          type: 'approval.resolution_failed',
+          payload: { approvalId, reason: 'adapter_unavailable' },
+          timestamp: now,
+        })
+        throw new DaemonError(
+          'APPROVAL_DELIVERY_FAILED',
+          'Live Codex adapter is unavailable to receive approval decision',
+          { statusCode: 503 },
+        )
+      }
+
+      try {
+        await control.liveResolveApproval({
+          approvalId,
+          runId,
+          argsHash: prep.argsHash,
+          decision: decision === 'approved' ? 'allow-once' : 'deny',
+        })
+      } catch (err) {
+        const now = new Date().toISOString()
+        const safeErr = redactSecrets(err instanceof Error ? err.message : String(err))
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE approvals SET status = 'resolution_failed', resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+          )
+          .run(now, JSON.stringify({ reason: safeErr }), approvalId)
+        this.eventStore.appendEvent(runId, {
+          eventKey: `approval.resolution_failed:${approvalId}`,
+          type: 'approval.resolution_failed',
+          payload: { approvalId, reason: safeErr },
+          timestamp: now,
+        })
+        throw new DaemonError('APPROVAL_DELIVERY_FAILED', safeErr, { statusCode: 502 })
+      }
+    }
+
+    this.dbHandle.transaction(() => {
+      const row = this.dbHandle.sqlite
+        .prepare('SELECT status FROM runs WHERE id = ?')
+        .get(runId) as { status: string } | undefined
+      if (!row || row.status !== 'awaiting_approval') {
+        return
+      }
       assertLegalTransition('awaiting_approval', 'running')
       const now = new Date().toISOString()
       this.dbHandle.sqlite
         .prepare(`UPDATE runs SET status = 'running' WHERE id = ?`)
         .run(runId)
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE approvals SET status = ?, resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+        )
+        .run(decision, now, JSON.stringify({ decision }), approvalId)
       this.eventStore.appendEvent(runId, {
         eventKey: `approval.resolved:${approvalId}`,
         type: 'approval.resolved',
-        payload: { approvalId, decision },
+        payload: { approvalId, decision, isMock: !prep.isCodex },
         timestamp: now,
       })
     })
 
-    const pending = control.pendingApproval
-    control.pendingApproval = null
-    pending.resolve(decision)
+    if (control?.pendingApproval?.spec.approvalId === approvalId) {
+      const pending = control.pendingApproval
+      control.pendingApproval = null
+      pending.resolve(decision)
+    }
 
     return { run: this.getRun(runId) }
   }
@@ -996,6 +1208,8 @@ export class RunOrchestrator {
       this.dbHandle.sqlite
         .prepare('UPDATE runs SET status = ?, ended_at = ?, error_json = ? WHERE id = ?')
         .run(params.terminalStatus, now, errorJson, params.runId)
+
+      this.revokeApprovalsInTx(params.runId, `run_${params.terminalStatus}`, now)
 
       const isMockMeta = row.runtime_id !== 'codex'
       const contentJson = serializeMessageContent(params.accumulatedText, {
@@ -1183,10 +1397,45 @@ export class RunOrchestrator {
 
       if (plan.approval) {
         maybeFlush(true)
-        const approvalSpec = plan.approval
+        const mockApprovalId = `${plan.approval.approvalId}_${runId}`
+        const approvalSpec: PendingApprovalRecord = {
+          ...plan.approval,
+          approvalId: mockApprovalId,
+          actionType: 'mock.workspaceWrite',
+          argsHash: 'mock',
+          permissionMode: 'ask-approval',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          isMock: true,
+          status: 'pending',
+        }
         const decisionPromise = new Promise<'approved' | 'denied' | 'cancelled'>((resolve) => {
           control.pendingApproval = { spec: approvalSpec, resolve }
         })
+
+        const nowApp = new Date().toISOString()
+        const runMeta = this.dbHandle.sqlite
+          .prepare('SELECT agent_id FROM runs WHERE id = ?')
+          .get(runId) as { agent_id: string } | undefined
+        this.dbHandle.sqlite
+          .prepare(
+            `INSERT OR IGNORE INTO approvals (
+               id, run_id, session_id, agent_id, runtime_generation, account_id,
+               thread_id, turn_id, provider_request_id, action_type, action_summary,
+               args_json, args_hash, permission_mode, status, decision_meta_json,
+               created_at, expires_at, resolved_at
+             ) VALUES (?, ?, ?, ?, 0, 'local', NULL, NULL, ?, 'mock.workspaceWrite', ?, ?, 'mock', 'ask-approval', 'pending', NULL, ?, ?, NULL)`,
+          )
+          .run(
+            mockApprovalId,
+            runId,
+            sessionId,
+            runMeta?.agent_id ?? 'chief',
+            mockApprovalId,
+            approvalSpec.command,
+            JSON.stringify({ command: approvalSpec.command }),
+            nowApp,
+            approvalSpec.expiresAt!,
+          )
 
         this.transitionRun(runId, 'awaiting_approval', {
           eventKey: `approval.requested:${approvalSpec.approvalId}`,
@@ -1196,6 +1445,11 @@ export class RunOrchestrator {
             title: approvalSpec.title,
             command: approvalSpec.command,
             risk: approvalSpec.risk,
+            actionType: approvalSpec.actionType,
+            argsHash: approvalSpec.argsHash,
+            permissionMode: approvalSpec.permissionMode,
+            expiresAt: approvalSpec.expiresAt,
+            isMock: true,
           },
         })
 
@@ -1509,36 +1763,104 @@ export class RunOrchestrator {
             timestamp: ev.timestamp,
           })
         } else if (ev.type === 'approval.requested') {
-          this.eventStore.appendEvent(runId, {
-            eventKey: `codex.evt:${ev.seq}`,
-            type: 'approval.requested',
-            payload: {
-              approvalId: ev.approvalId,
-              title: ev.summary,
-              tool: ev.tool,
-              argsHash: ev.argsHash,
-              blockedInPhase2B: true,
-            },
-            timestamp: ev.timestamp,
-          })
-          if (typeof adapter.resolveApproval === 'function') {
-            await adapter
-              .resolveApproval({
+          const now = new Date().toISOString()
+          const blockedReadOnly = permission === 'read-only'
+          this.dbHandle.sqlite
+            .prepare(
+              `INSERT OR IGNORE INTO approvals (
+                 id, run_id, session_id, agent_id, runtime_generation, account_id,
+                 thread_id, turn_id, provider_request_id, action_type, action_summary,
+                 args_json, args_hash, permission_mode, status, decision_meta_json,
+                 created_at, expires_at, resolved_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
+            )
+            .run(
+              ev.approvalId,
+              runId,
+              sessionId,
+              agentId,
+              generation,
+              accountKey,
+              providerSession.externalId,
+              ev.approvalId,
+              ev.tool,
+              redactSecrets(ev.summary),
+              JSON.stringify({ summary: redactSecrets(ev.summary) }),
+              ev.argsHash,
+              permission,
+              blockedReadOnly ? 'denied' : 'pending',
+              now,
+              ev.expiresAt,
+            )
+
+          if (blockedReadOnly) {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `codex.evt:${ev.seq}`,
+              type: 'approval.requested',
+              payload: {
                 approvalId: ev.approvalId,
-                runId,
+                title: ev.summary,
+                tool: ev.tool,
                 argsHash: ev.argsHash,
-                decision: 'deny',
-              })
-              .catch(() => undefined)
+                blockedInReadOnly: true,
+              },
+              timestamp: ev.timestamp,
+            })
+            if (typeof adapter.resolveApproval === 'function') {
+              await adapter
+                .resolveApproval({
+                  approvalId: ev.approvalId,
+                  runId,
+                  argsHash: ev.argsHash,
+                  decision: 'deny',
+                })
+                .catch(() => undefined)
+            }
+            this.dbHandle.sqlite
+              .prepare(`UPDATE approvals SET resolved_at = ?, decision_meta_json = ? WHERE id = ?`)
+              .run(new Date().toISOString(), JSON.stringify({ reason: 'read_only_mode' }), ev.approvalId)
+            this.eventStore.appendEvent(runId, {
+              eventKey: `approval.denied:${ev.approvalId}`,
+              type: 'approval.denied',
+              payload: {
+                approvalId: ev.approvalId,
+                reason: 'Read-only mode denies privileged approval requests by policy.',
+              },
+            })
+          } else {
+            if (typeof adapter.resolveApproval === 'function') {
+              control.liveResolveApproval = (dec) => adapter.resolveApproval!(dec)
+            }
+            control.pendingApproval = {
+              spec: {
+                approvalId: ev.approvalId,
+                title: ev.summary,
+                command: ev.summary,
+                risk: 'medium',
+                actionType: ev.tool,
+                argsHash: ev.argsHash,
+                permissionMode: permission,
+                expiresAt: ev.expiresAt,
+                isMock: false,
+                status: 'pending',
+              },
+              resolve: () => undefined,
+            }
+            this.transitionRun(runId, 'awaiting_approval', {
+              eventKey: `codex.evt:${ev.seq}`,
+              type: 'approval.requested',
+              payload: {
+                approvalId: ev.approvalId,
+                title: ev.summary,
+                command: ev.summary,
+                tool: ev.tool,
+                argsHash: ev.argsHash,
+                permissionMode: permission,
+                expiresAt: ev.expiresAt,
+                isMock: false,
+              },
+            })
           }
-          this.eventStore.appendEvent(runId, {
-            eventKey: `approval.denied:${ev.approvalId}`,
-            type: 'approval.denied',
-            payload: {
-              approvalId: ev.approvalId,
-              reason: 'Phase 2B read-only mode denies privileged approval requests by policy.',
-            },
-          })
         } else if (ev.type === 'run.completed') {
           sawTerminal = true
           flushCodexBuffer(true)

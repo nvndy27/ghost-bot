@@ -183,3 +183,38 @@ export const auditLogs = sqliteTable('audit_logs', {
   redactedJson: text('redacted_json').notNull(),
   timestamp: text('timestamp').notNull(),
 })
+
+export const approvals = sqliteTable(
+  'approvals',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'restrict' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'restrict' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'restrict' }),
+    runtimeGeneration: integer('runtime_generation').notNull(),
+    accountId: text('account_id').notNull(),
+    threadId: text('thread_id'),
+    turnId: text('turn_id'),
+    providerRequestId: text('provider_request_id'),
+    actionType: text('action_type').notNull(),
+    actionSummary: text('action_summary').notNull(),
+    argsJson: text('args_json').notNull(),
+    argsHash: text('args_hash').notNull(),
+    permissionMode: text('permission_mode').notNull(),
+    status: text('status').notNull(),
+    decisionMetaJson: text('decision_meta_json'),
+    createdAt: text('created_at').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    resolvedAt: text('resolved_at'),
+  },
+  (t) => [
+    index('idx_approvals_run_status').on(t.runId, t.status),
+    index('idx_approvals_session_created').on(t.sessionId, t.createdAt),
+  ],
+)

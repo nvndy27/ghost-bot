@@ -54,18 +54,50 @@ export function ApprovalCard({
   onReviewDiff: (approval: PendingApproval) => void
   onResolve: (approvalId: string, decision: 'approved' | 'denied') => void
 }) {
+  const isResolving = approval.decision === 'resolving'
+  const isPending = approval.decision === 'pending' || isResolving
+  const scopeLabel = approval.isMock === false ? 'live' : 'mock'
+
+  const statusText = (() => {
+    switch (approval.decision) {
+      case 'approved':
+        return `Approved once (${scopeLabel})`
+      case 'denied':
+        return `Denied (${scopeLabel})`
+      case 'expired':
+        return `Expired (${scopeLabel})`
+      case 'revoked':
+        return `Revoked (${scopeLabel})`
+      case 'resolution_failed':
+        return `Delivery failed (${scopeLabel})`
+      default:
+        return ''
+    }
+  })()
+
   return (
     <div className="gb-card" role="region" aria-label="Approval request">
       <div className="gb-approval-title">
         <span aria-hidden="true">🛡</span>
         <span>{approval.title}</span>
+        {approval.permissionMode && (
+          <span className="gb-badge" style={{ marginLeft: 'auto', fontSize: '11px' }}>
+            {approval.permissionMode}
+          </span>
+        )}
       </div>
+      {approval.actionType && (
+        <div className="gb-muted" style={{ fontSize: '12px', marginBottom: '4px' }}>
+          Action: <code>{approval.actionType}</code>
+        </div>
+      )}
       <div>{approval.description}</div>
-      {approval.decision === 'pending' ? (
+      {isPending ? (
         <div className="gb-approval-actions">
           <button
             type="button"
             className="gb-btn-outline"
+            disabled={isResolving}
             onClick={() => onReviewDiff(approval)}
           >
             Review diff
@@ -73,23 +105,23 @@ export function ApprovalCard({
           <button
             type="button"
             className="gb-btn-outline"
+            disabled={isResolving}
             onClick={() => onResolve(approval.id, 'denied')}
           >
-            Deny
+            {isResolving ? 'Resolving...' : 'Deny'}
           </button>
           <button
             type="button"
             className="gb-btn-accent"
+            disabled={isResolving}
             onClick={() => onResolve(approval.id, 'approved')}
           >
-            Approve
+            {isResolving ? 'Resolving...' : 'Approve once'}
           </button>
         </div>
       ) : (
         <div style={{ marginTop: '8px' }}>
-          <span className="gb-badge">
-            {approval.decision === 'approved' ? 'Approved (mock)' : 'Denied (mock)'}
-          </span>
+          <span className="gb-badge">{statusText}</span>
         </div>
       )}
     </div>

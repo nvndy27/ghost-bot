@@ -514,7 +514,11 @@ function registerIpcHandlers(): void {
       ResolveApprovalResponseSchema,
       {
         method: 'POST',
-        body: { approvalId: parsed.approvalId, decision: parsed.decision },
+        body: {
+          approvalId: parsed.approvalId,
+          decision: parsed.decision,
+          ...(parsed.argsHash ? { argsHash: parsed.argsHash } : {}),
+        },
       },
     )
   })

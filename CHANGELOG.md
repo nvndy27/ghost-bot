@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
+- Added SQLite migration `0004_durable_approvals` (`approvals` table) and durable approval lifecycle (`pending`, `resolving`, `approved`, `denied`, `expired`, `revoked`, `resolution_failed`) in `RunOrchestrator`.
+- Unlocked verified `ask-approval` and `workspace` execution modes in `RuntimePolicyBroker.authorizeLiveExecution()` (`networkAccess: false`, `excludeSlashTmp: true`, `excludeTmpdirEnvVar: true`) while keeping `full-access` disabled.
+- Updated `ApprovalCard`, `ChatComposer`, `App.tsx`, and `shared-types/ipc.ts` for `Approve once` / `Deny`, duplicate-click prevention, `argsHash` verification, and clear mock vs live approval labels.
+- Added `tests/phase-2c-approvals.test.ts` (52/52 unit tests), `scripts/verify-phase-2c-ui.mjs` (3 screenshots in `design/reviews/phase-2c/`), and opt-in `scripts/verify-phase-2c-live.mjs` (`GHOST_BOT_RUN_LIVE_TOOLS=1`).
+
 ### Phase 2B — Live Codex Execution & Streaming
 - Connected `CodexAppServerAdapter` to `RunOrchestrator` via `RuntimeRegistry.getExecutionAdapter()` and `RuntimePolicyBroker.authorizeLiveExecution()`, enforcing verified `0.172.0` Codex version, ChatGPT subscription auth, canonical workspace, and `read-only` mode for Phase 2B.
 - Persisted `sessions.external_session_id` and `account_id` before `turn/start`, supporting same-thread `thread/resume` continuation, instruction composition (`bot.instructions` + `settings.personalization`), end-to-end `turn/interrupt` cancellation, and automatic denial of unexpected live approval requests (`approval.denied`).
