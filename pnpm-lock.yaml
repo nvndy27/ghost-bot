@@ -85,6 +85,15 @@ importers:
         specifier: ^4.9.0
         version: 4.9.0
 
+  packages/knowledge:
+    dependencies:
+      '@ghost-bot/memory':
+        specifier: workspace:*
+        version: link:../memory
+      zod:
+        specifier: ^3.25.67
+        version: 3.25.76
+
   packages/memory:
     dependencies:
       zod:
