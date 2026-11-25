@@ -185,7 +185,18 @@ test('Phase 2D recovery: inspectSession, manual retry, and quarantine persistenc
     assert.equal(inspAfterReconnect.quarantined, false)
     assert.equal(inspAfterReconnect.resumable, true)
 
+    // Durable quarantine survives orchestrator/daemon restart
+    ;(orchestrator as unknown as { addQuarantine: (sid: string) => void }).addQuarantine(sess.id)
     await orchestrator.stop()
+    const orchestratorReloaded = new RunOrchestrator(dbHandle, { runtimeRegistry: registry })
+    assert.equal(orchestratorReloaded.inspectSession(sess.id).quarantined, true)
+    dbHandle.sqlite
+      .prepare("UPDATE sessions SET runtime_id = 'codex', external_session_id = ? WHERE id = ?")
+      .run('thread-not-verified', sess.id)
+    assert.equal(registry.getLifecycleState(), 'connected')
+    assert.equal(orchestratorReloaded.inspectSession(sess.id).providerThreadStatus, 'unknown')
+    await orchestratorReloaded.stop()
+
     await registry.stop()
     dbHandle.close()
   } finally {

@@ -8,10 +8,8 @@ files:
   - dist-electron/**/*
   - package.json
 extraResources:
-  - from: ../daemon/src
-    to: daemon/src
-  - from: ../daemon/package.json
-    to: daemon/package.json
+  - from: dist-daemon
+    to: daemon
 linux:
   target:
     - AppImage
@@ -28,7 +26,8 @@ linux:
     - --ozone-platform-hint=auto
 rpm:
   packageName: ghost-bot
-  license: MIT
+  artifactName: ghost-bot-${version}.${arch}.rpm
+  synopsis: Ghost Bot Desktop Workspace
   depends:
     - gtk3
     - libnotify

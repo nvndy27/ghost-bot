@@ -126,11 +126,14 @@ async function startDaemon(): Promise<void> {
 
   daemonToken = randomBytes(32).toString('hex')
   daemonSocketPath = join(runtimeDir, 'daemon.sock')
-  const daemonEntry = join(repoRoot, 'apps', 'daemon', 'src', 'index.ts')
+  const daemonEntry = app.isPackaged
+    ? join(process.resourcesPath, 'daemon', 'daemon.mjs')
+    : join(repoRoot, 'apps', 'daemon', 'src', 'index.ts')
+  const daemonCwd = app.isPackaged ? process.resourcesPath : repoRoot
   const runtimeMode = process.env.GHOST_BOT_RUNTIME_MODE === 'mock' ? 'mock' : 'codex'
 
   const child = spawn(process.execPath, [daemonEntry], {
-    cwd: repoRoot,
+    cwd: daemonCwd,
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
@@ -230,7 +233,7 @@ async function stopDaemon(): Promise<void> {
 function queryDaemon<T>(
   path: string,
   schema: z.ZodType<T>,
-  options?: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown },
+  options?: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown; timeoutMs?: number },
 ): Promise<T> {
   return new Promise((resolveReq, rejectReq) => {
     const payload = options?.body !== undefined ? JSON.stringify(options.body) : undefined
@@ -248,7 +251,7 @@ function queryDaemon<T>(
               }
             : {}),
         },
-        timeout: 5000,
+        timeout: options?.timeoutMs ?? 5000,
       },
       (res) => {
         const chunks: Buffer[] = []
@@ -415,7 +418,7 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = RuntimeSnapshotParamsSchema.parse(params)
     const path = parsed?.refresh ? '/runtime/snapshot?refresh=1' : '/runtime/snapshot'
-    return queryDaemon(path, RuntimeSnapshotSchema)
+    return queryDaemon(path, RuntimeSnapshotSchema, parsed?.refresh ? { timeoutMs: 25_000 } : undefined)
   })
 
   ipcMain.handle(IPC_CHANNELS.SESSIONS_LIST, async (event, params) => {
@@ -528,7 +531,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.RUNTIME_RECONNECT, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     EmptyParamsSchema.parse(params)
-    return queryDaemon('/runtime/reconnect', RuntimeSnapshotSchema, { method: 'POST' })
+    return queryDaemon('/runtime/reconnect', RuntimeSnapshotSchema, {
+      method: 'POST',
+      timeoutMs: 25_000,
+    })
   })
 
   ipcMain.handle(IPC_CHANNELS.SESSIONS_INSPECT, async (event, params) => {
@@ -537,6 +543,7 @@ function registerIpcHandlers(): void {
     return queryDaemon(
       `/sessions/${encodeURIComponent(sessionId)}/inspect`,
       SessionInspectionResponseSchema,
+      { timeoutMs: 25_000 },
     )
   })
 

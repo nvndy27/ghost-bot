@@ -7,6 +7,8 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/dist-electron/**',
+      '**/dist-daemon/**',
+      '**/release/**',
       '**/out/**',
       '**/.vite/**',
       'prototype/**',

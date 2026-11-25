@@ -551,6 +551,10 @@ export const SessionInspectionResponseSchema = z.object({
   agentId: BotIdSchema,
   runtimeId: z.string(),
   externalSessionId: z.string().nullable(),
+  providerThreadStatus: z
+    .enum(['not_applicable', 'accessible', 'unavailable', 'unknown'])
+    .optional(),
+  hasToolActivity: z.boolean().optional(),
   resumable: z.boolean(),
   reason: z.string(),
   quarantined: z.boolean(),

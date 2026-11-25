@@ -1,13 +1,23 @@
 {
   "name": "@ghost-bot/desktop",
   "version": "0.1.0",
+  "description": "Ghost Bot local-first desktop AI workspace",
+  "homepage": "https://github.com/nvndy27/ghost-bot",
+  "author": {
+    "name": "Ghost Bot Contributors",
+    "email": "205423992+nvndy27@users.noreply.github.com"
+  },
+  "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "build": "vite build && tsc -p tsconfig.electron.json"
+    "build": "vite build && tsc -p tsconfig.electron.json && node scripts/bundle-daemon.mjs",
+    "package:linux": "pnpm build && electron-builder --linux --config electron-builder.yml --publish never",
+    "package:appimage": "pnpm build && electron-builder --linux AppImage --config electron-builder.yml --publish never",
+    "package:rpm": "pnpm build && electron-builder --linux rpm --config electron-builder.yml --publish never"
   },
   "dependencies": {
     "@ghost-bot/avatar": "workspace:*",
@@ -21,6 +31,7 @@
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.5.2",
     "electron": "^36.3.2",
+    "electron-builder": "26.0.12",
     "vite": "^6.3.5"
   }
 }

@@ -161,6 +161,8 @@ export interface RunOrchestratorOptions {
   policyBroker?: RuntimePolicyBroker
 }
 
+const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
+
 export class RunOrchestrator {
   readonly eventStore: RunEventStore
   private readonly dbHandle: DatabaseHandle
@@ -177,6 +179,58 @@ export class RunOrchestrator {
     this.settingsRepo = options?.settingsRepo
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
     this.eventStore = new RunEventStore(dbHandle)
+    this.loadDurableQuarantine()
+  }
+
+  private loadDurableQuarantine(): void {
+    try {
+      const row = this.dbHandle.sqlite
+        .prepare('SELECT value_json FROM settings WHERE key = ?')
+        .get(QUARANTINE_SETTINGS_KEY) as { value_json: string } | undefined
+      if (!row) return
+      const parsed = JSON.parse(row.value_json) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [sid, val] of Object.entries(parsed)) {
+          if (typeof val === 'number' && Number.isFinite(val)) {
+            this.sessionsWithUnconfirmedStop.set(sid, val)
+          }
+        }
+      }
+    } catch {
+      // ignore malformed quarantine map
+    }
+  }
+
+  private persistDurableQuarantine(): void {
+    const obj: Record<string, number> = {}
+    for (const [sid, gen] of this.sessionsWithUnconfirmedStop.entries()) {
+      obj[sid] = gen
+    }
+    this.dbHandle.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(QUARANTINE_SETTINGS_KEY, JSON.stringify(obj), new Date().toISOString())
+  }
+
+  private addQuarantine(sessionId: string): void {
+    this.sessionsWithUnconfirmedStop.set(sessionId, this.runtimeRegistry?.getGeneration() ?? 0)
+    this.persistDurableQuarantine()
+  }
+
+  private clearQuarantineForSession(sessionId: string): void {
+    if (this.sessionsWithUnconfirmedStop.delete(sessionId)) {
+      this.persistDurableQuarantine()
+    }
+  }
+
+  private clearAllQuarantine(): void {
+    if (this.sessionsWithUnconfirmedStop.size > 0) {
+      this.sessionsWithUnconfirmedStop.clear()
+      this.persistDurableQuarantine()
+    }
   }
 
   private rowToRun(row: RawRunRow): RunRecord {
@@ -830,7 +884,7 @@ export class RunOrchestrator {
     if (this.runtimeRegistry) {
       await this.runtimeRegistry.reconnect()
     }
-    this.sessionsWithUnconfirmedStop.clear()
+    this.clearAllQuarantine()
   }
 
   inspectSession(sessionId: string): {
@@ -838,6 +892,8 @@ export class RunOrchestrator {
     agentId: string
     runtimeId: string
     externalSessionId: string | null
+    providerThreadStatus: 'not_applicable' | 'accessible' | 'unavailable' | 'unknown'
+    hasToolActivity: boolean
     resumable: boolean
     reason: string
     quarantined: boolean
@@ -902,11 +958,30 @@ export class RunOrchestrator {
       reason = `Session runtime "${sess.runtime_id}" differs from bot runtime "${bot.runtime_id}"; start a New chat.`
     }
 
+    const toolCountRow = lastRunRow
+      ? (this.dbHandle.sqlite
+          .prepare(`SELECT COUNT(*) AS cnt FROM run_events WHERE run_id = ? AND type = 'tool.started'`)
+          .get(lastRunRow.id) as { cnt: number } | undefined)
+      : undefined
+    const hasToolActivity = Number(toolCountRow?.cnt ?? 0) > 0
+
+    let providerThreadStatus: 'not_applicable' | 'accessible' | 'unavailable' | 'unknown' =
+      'not_applicable'
+    if (sess.runtime_id === 'codex') {
+      if (!sess.external_session_id) {
+        providerThreadStatus = 'unavailable'
+      } else {
+        providerThreadStatus = 'unknown'
+      }
+    }
+
     return {
       sessionId: sess.id,
       agentId: sess.agent_id,
       runtimeId: sess.runtime_id,
       externalSessionId: sess.external_session_id,
+      providerThreadStatus,
+      hasToolActivity,
       resumable,
       reason,
       quarantined,
@@ -1021,10 +1096,7 @@ export class RunOrchestrator {
             try {
               const cur = this.getRun(runId)
               if (!isTerminalStatus(cur.status)) {
-                this.sessionsWithUnconfirmedStop.set(
-                  cur.sessionId,
-                  this.runtimeRegistry?.getGeneration() ?? 0,
-                )
+                this.addQuarantine(cur.sessionId)
                 this.finalizeRun({
                   runId,
                   sessionId: cur.sessionId,
@@ -2000,7 +2072,7 @@ export class RunOrchestrator {
           }
         } else if (ev.type === 'run.completed') {
           sawTerminal = true
-          this.sessionsWithUnconfirmedStop.delete(sessionId)
+          this.clearQuarantineForSession(sessionId)
           flushCodexBuffer(true)
           this.finalizeRun({
             runId,
@@ -2016,7 +2088,7 @@ export class RunOrchestrator {
           break
         } else if (ev.type === 'run.cancelled') {
           sawTerminal = true
-          this.sessionsWithUnconfirmedStop.delete(sessionId)
+          this.clearQuarantineForSession(sessionId)
           flushCodexBuffer(true)
           const cancelledText =
             accumulatedText.trim().length > 0
