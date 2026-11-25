@@ -1,0 +1,32 @@
+export const KNOWLEDGE_SCHEMA_VERSION = 1 as const
+
+export const KNOWLEDGE_LIMITS = {
+  maxIdLength: 128,
+  maxTitleLength: 200,
+  maxCollectionNameLength: 120,
+  maxCollectionDescriptionLength: 512,
+  maxFilenameLength: 255,
+  maxTagLength: 64,
+  maxTagsCount: 20,
+  maxDocumentBytes: 2 * 1024 * 1024, // 2 MiB
+  maxExtractedChars: 1_000_000,
+  minTargetChunkChars: 64,
+  defaultTargetChunkChars: 800,
+  maxChunkChars: 4000,
+  defaultOverlapChars: 100,
+  maxOverlapChars: 500,
+  maxChunksPerDocument: 500,
+  maxSectionPathDepth: 6,
+  maxQueryLength: 512,
+  maxQueryTokens: 16,
+  maxListLimit: 100,
+  defaultListLimit: 25,
+  maxSearchLimit: 50,
+  defaultSearchLimit: 10,
+  maxSearchCandidates: 500,
+  maxCitationExcerptChars: 280,
+  maxContextDocuments: 20,
+  maxContextChunks: 50,
+  maxContextChars: 65_536,
+  maxContextBytes: 131_072,
+} as const

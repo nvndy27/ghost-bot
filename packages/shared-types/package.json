@@ -10,7 +10,7 @@
     "./ipc": "./ipc.ts"
   },
   "dependencies": {
-    "zod": "^3.25.67"
+    "zod": "^4.6.7"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

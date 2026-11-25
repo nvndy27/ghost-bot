@@ -1,5 +1,15 @@
 # Progress log
 
+## Phase 3D.0 — Core and Extension Integration Foundation
+
+2026-11-26. Branched `feat/phase-3d0-integration-foundation` from `main` (`07839ff`), merged accepted Track B (`d7ec6ba`, `feat/phase-3c-mcp-foundation`), and upgraded `zod` to `4.6.7` across all 6 dependent workspace packages. Phase 3D.0 is **Verified** (**PASS**) with zero `0005+` migrations or Phase 3D.1–3D.4 daemon wiring. See [Phase 3D.0 report](extensions/phase-3d0-integration-report.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Merged `d7ec6ba` (`--no-ff`) onto `07839ff` preserving Track A (`electron-builder@26.0.12`, `apps/desktop/scripts/build-rpm.mjs`, migrations `0001`–`0004`) and Track B (`@ghost-bot/memory`, `@ghost-bot/knowledge`, `@ghost-bot/mcp` remaining daemon-agnostic). |
+| Verified | Upgraded `"zod": "^4.6.7"` across all 6 workspace packages (`shared-types`, `memory`, `knowledge`, `mcp`, `desktop`, `daemon`), resolving `GHSA-mrhx-c7xc-m3w5` (`corepack pnpm audit --prod`: `No known vulnerabilities found`; `corepack pnpm list -r zod --depth 0`: all `zod@4.6.7`). Fixed Zod v4 strictness in `packages/shared-types/ipc.ts` (`.prefault({})` on `AppSettingsSchema` sections) and `packages/mcp/src/contracts/schemas.ts` (`z.record(z.string(), z.unknown())`). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm lint`, `corepack pnpm -r --if-present build`, `node scripts/verify-phase-2e-acceptance.mjs` (`0` console errors, `daemonExitedCleanly: true`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `62/62` core = **102/102** each) all passed. |
+
 ## Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
 
 2026-11-26. Phase 2C merged to `main` (`c7891af`); Phase 2D **Implemented & Offline-Tested** on `feat/phase-2d-recovery-resume` (**CONDITIONAL PASS**: `55/55` unit tests and Electron recovery E2E passed; `electron-builder` not installed for AppImage/RPM artifact build and `GHOST_BOT_RUN_LIVE_RECOVERY=1` not executed without new live budget).

@@ -227,11 +227,11 @@ export const PrivacySettingsSchema = z.object({
 })
 
 export const AppSettingsSchema = z.object({
-  general: GeneralSettingsSchema.default({}),
-  appearance: AppearanceSettingsSchema.default({}),
-  personalization: PersonalizationSettingsSchema.default({}),
-  permissions: PermissionsSettingsSchema.default({}),
-  privacy: PrivacySettingsSchema.default({}),
+  general: GeneralSettingsSchema.prefault({}),
+  appearance: AppearanceSettingsSchema.prefault({}),
+  personalization: PersonalizationSettingsSchema.prefault({}),
+  permissions: PermissionsSettingsSchema.prefault({}),
+  privacy: PrivacySettingsSchema.prefault({}),
 })
 
 export type AppSettings = z.infer<typeof AppSettingsSchema>

@@ -33,6 +33,7 @@ Gate: restart persistence, UI matches references, offline integration tests pass
 Gate: one verified subscription path, real streaming, denial yields no side effect, restart recovery — **Phase 2 Gate PASS** (see `docs/PHASE2_RELEASE_REPORT.md`).
 
 ## Phase 3 — Agent core
+- **Verified** (Phase 3D.0 Integration Foundation) — Merged Track B independent packages (`@ghost-bot/memory`, `@ghost-bot/knowledge`, `@ghost-bot/mcp`) onto `main` (`07839ff`), upgraded all workspaces to `zod@4.6.7` (`GHSA-mrhx-c7xc-m3w5` resolved, `0` prod vulnerabilities), and passed `typecheck`, `lint`, `build`, `verify-phase-2e-acceptance.mjs`, and 3 consecutive `102/102` test runs (see [Phase 3D.0 report](extensions/phase-3d0-integration-report.md)).
 - [ ] Memory and workspace management, tools/MCP registry, skills, terminal/artifacts, audit.
 - [ ] Add other supported runtime/provider adapters according to verified matrix.
 Gate: no cross-agent leaks; tool and memory consent validated.
