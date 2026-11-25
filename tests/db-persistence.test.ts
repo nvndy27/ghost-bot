@@ -88,13 +88,13 @@ test('SQLite database initializes with 0700/0600 permissions, foreign keys, idem
   }
 })
 
-test('BotRepository supports CRUD, duplicate, transaction rollback, and corrupt config recovery', async () => {
+test('BotRepository supports CRUD, duplicate, transaction rollback, workspace validation, and corrupt config recovery', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-repo-'))
   try {
     const handle = await openGhostBotDatabase(dataDir)
     const repo = new BotRepository(handle)
 
-    const created = repo.createBot({
+    const created = await repo.createBot({
       name: 'Audit Bot',
       description: 'Checks diffs',
       instructions: 'Be strict.',
@@ -109,37 +109,85 @@ test('BotRepository supports CRUD, duplicate, transaction rollback, and corrupt 
       runtimeId: 'mock-offline',
       modelId: 'gpt-6.2-mock',
       effort: 'high',
-      workspacePath: '~/Projects/ghost-bot',
+      workspacePath: dataDir,
       permission: 'read-only',
     })
     assert.equal(created.name, 'Audit Bot')
 
-    const updated = repo.updateBot({
+    const updated = await repo.updateBot({
       id: created.id,
       patch: { name: 'Audit Bot v2', permission: 'workspace' },
     })
     assert.equal(updated.name, 'Audit Bot v2')
     assert.equal(updated.permission, 'workspace')
 
-    const dup = repo.duplicateBot(created.id)
+    const dup = await repo.duplicateBot(created.id)
     assert.equal(dup.name, 'Audit Bot v2 (Copy)')
+
+    // Workspace path validation rejects traversal, relative paths, and missing directories
+    for (const badWs of ['../escape', 'relative/path', '/nonexistent-ghost-bot-ws-99999', '/tmp\0bad']) {
+      await assert.rejects(
+        () =>
+          repo.createBot({
+            name: 'BadWS',
+            description: '',
+            instructions: '',
+            avatar: { kind: 'preset', shape: 'ghost', color: '#292929', eyes: 'classic', rotation: 0, animation: true },
+            runtimeId: 'mock-offline',
+            modelId: 'gpt-6.2-mock',
+            effort: 'low',
+            workspacePath: badWs,
+            permission: 'read-only',
+          }),
+        { code: 'INVALID_WORKSPACE' },
+      )
+    }
+
+    // Deleting a bot with a session preserves conversation history (soft-archive + ON DELETE RESTRICT)
+    const now = new Date().toISOString()
+    handle.sqlite
+      .prepare(
+        `INSERT INTO sessions (id, agent_id, account_id, runtime_id, external_session_id, title, created_at)
+         VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run('sess-1', created.id, 'acc-1', 'mock-offline', 'Test session', now)
+    handle.sqlite
+      .prepare(
+        `INSERT INTO messages (id, session_id, role, content_json, created_at, run_id)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+      )
+      .run('msg-1', 'sess-1', 'user', JSON.stringify({ text: 'hello' }), now)
+
+    assert.throws(() => handle.sqlite.prepare('DELETE FROM agents WHERE id = ?').run(created.id))
+    repo.deleteBot(created.id)
+    assert.equal(repo.getBot(created.id), null)
+    const preservedMsg = handle.sqlite.prepare('SELECT id FROM messages WHERE id = ?').get('msg-1') as
+      | { id: string }
+      | undefined
+    assert.equal(preservedMsg?.id, 'msg-1')
+
+    // Unsupported future schema version fails explicitly without modifying DB
+    handle.sqlite
+      .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+      .run(999, '999_future', now)
+    assert.throws(() => runMigrations(handle.sqlite), /Unsupported database schema version 999/)
 
     // Transaction rollback leaves state intact on error.
     assert.throws(() =>
       handle.transaction(() => {
         handle.sqlite
           .prepare('UPDATE agents SET name = ? WHERE id = ?')
-          .run('ShouldRollback', created.id)
+          .run('ShouldRollback', dup.id)
         throw new Error('simulated failure')
       }),
     )
-    assert.equal(repo.getBot(created.id)?.name, 'Audit Bot v2')
+    assert.equal(repo.getBot(dup.id)?.name, 'Audit Bot v2 (Copy)')
 
     // Corrupt stored JSON recovers gracefully without crashing listBots.
     handle.sqlite
       .prepare('UPDATE agents SET avatar_json = ?, permission_mode = ? WHERE id = ?')
-      .run('{broken-json', 'full-access', created.id)
-    const recovered = repo.getBot(created.id)
+      .run('{broken-json', 'full-access', dup.id)
+    const recovered = repo.getBot(dup.id)
     assert.equal(recovered?.permission, 'ask-approval')
     assert.equal(recovered?.avatar.kind, 'preset')
 

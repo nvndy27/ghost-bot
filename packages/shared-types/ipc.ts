@@ -125,7 +125,7 @@ export const CreateBotInputSchema = z.object({
   runtimeId: z.string().min(1).max(64).default('mock-offline'),
   modelId: z.string().min(1).max(128).default('gpt-6.2-mock'),
   effort: z.enum(['low', 'medium', 'high']).default('medium'),
-  workspacePath: z.string().trim().min(1).max(512).default('~/Projects/ghost-bot'),
+  workspacePath: z.string().trim().min(1).max(512).default('~'),
   permission: BotPermissionSchema.default('ask-approval'),
 })
 

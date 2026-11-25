@@ -215,14 +215,14 @@ export class GhostBotDaemon {
             statusCode: 400,
           })
         }
-        sendJson(res, 201, repo.createBot(parsed.data))
+        sendJson(res, 201, await repo.createBot(parsed.data))
         return
       }
 
       const dupMatch = /^\/bots\/([^/]+)\/duplicate$/.exec(url.pathname)
       if (req.method === 'POST' && dupMatch) {
         const id = BotIdSchema.parse(decodeURIComponent(dupMatch[1]))
-        sendJson(res, 201, repo.duplicateBot(id))
+        sendJson(res, 201, await repo.duplicateBot(id))
         return
       }
 
@@ -240,7 +240,7 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          sendJson(res, 200, repo.updateBot(parsed.data))
+          sendJson(res, 200, await repo.updateBot(parsed.data))
           return
         }
         if (req.method === 'DELETE') {

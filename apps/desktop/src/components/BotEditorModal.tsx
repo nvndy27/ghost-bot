@@ -65,7 +65,7 @@ export function BotEditorModal({
   const [permission, setPermission] = useState<'read-only' | 'ask-approval' | 'workspace'>(
     'ask-approval',
   )
-  const [workspacePath, setWorkspacePath] = useState('~/Projects/ghost-bot')
+  const [workspacePath, setWorkspacePath] = useState('~')
   const [avatar, setAvatar] = useState<AvatarConfig>(DEFAULT_PRESET_AVATAR)
   const [previewState, setPreviewState] = useState<AvatarStatus>('idle')
   const [dirty, setDirty] = useState(false)
@@ -96,7 +96,7 @@ export function BotEditorModal({
       setModelId(MOCK_MODELS[0].id)
       setEffort('medium')
       setPermission('ask-approval')
-      setWorkspacePath('~/Projects/ghost-bot')
+      setWorkspacePath('~')
       setAvatar(DEFAULT_PRESET_AVATAR)
     }
     setPreviewState('idle')
@@ -157,6 +157,7 @@ export function BotEditorModal({
       setErrorMsg('SVG file exceeds the 32 KB limit.')
       return
     }
+    setSubmitting(true)
     try {
       const rawSvg = await file.text()
       const res = await onImportSvg(rawSvg, file.name.slice(0, 60))
@@ -164,6 +165,8 @@ export function BotEditorModal({
       setAvatar({ kind: 'custom', svgDataUrl: res.svgDataUrl, label: res.label })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Custom SVG import failed')
+    } finally {
+      setSubmitting(false)
     }
   }
 

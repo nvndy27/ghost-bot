@@ -59,16 +59,35 @@ try {
     await app2.close()
   }
 
-  // Launch 3: Restart -> Verify deletion persisted
+  // Launch 3: Restart -> Verify deletion persisted, then delete all remaining seeded bots
   const app3 = await launchDesktop()
   try {
     const page = await app3.firstWindow()
     await page.waitForSelector('text=Chief of Staff')
     const count = await page.locator('[role="option"]', { hasText: 'E2E Edited Bot' }).count()
     assert.equal(count, 0, 'Deleted bot must not reappear after restart')
-    console.log(JSON.stringify({ electronPersistenceE2E: 'passed', launches: 3 }))
+
+    for (let i = 0; i < 6; i += 1) {
+      const editBtn = page.getByRole('button', { name: 'Edit bot' })
+      if ((await editBtn.count()) === 0) break
+      await editBtn.click()
+      await page.getByRole('button', { name: 'Delete' }).click()
+      await page.getByRole('button', { name: 'Confirm delete' }).click()
+    }
+    await page.waitForSelector('text=No bots yet')
   } finally {
     await app3.close()
+  }
+
+  // Launch 4: Restart -> Verify deleted default bots are NOT recreated
+  const app4 = await launchDesktop()
+  try {
+    const page = await app4.firstWindow()
+    await page.waitForSelector('text=No bots yet')
+    assert.equal(await page.locator('[role="option"]').count(), 0, 'Deleted seeded bots must not be recreated')
+    console.log(JSON.stringify({ electronPersistenceE2E: 'passed', launches: 4 }))
+  } finally {
+    await app4.close()
   }
 } finally {
   await rm(dataDir, { recursive: true, force: true })

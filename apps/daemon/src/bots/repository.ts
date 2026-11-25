@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import {
   BotAvatarConfigSchema,
@@ -91,6 +94,49 @@ function rowToBotRecord(row: AgentRow): BotRecord {
   })
 }
 
+async function validateAndCanonicalizeWorkspace(rawPath: string): Promise<string> {
+  const trimmed = rawPath.trim()
+  if (!trimmed || trimmed.includes('\0')) {
+    throw new DaemonError('INVALID_WORKSPACE', 'Workspace path is empty or contains NUL bytes', {
+      statusCode: 400,
+    })
+  }
+  const segments = trimmed.split(/[\\/]+/)
+  if (segments.includes('..')) {
+    throw new DaemonError('INVALID_WORKSPACE', 'Relative traversal (..) is not allowed in workspace path', {
+      statusCode: 400,
+    })
+  }
+
+  let expanded = trimmed
+  if (trimmed === '~') {
+    expanded = homedir()
+  } else if (trimmed.startsWith('~/')) {
+    expanded = join(homedir(), trimmed.slice(2))
+  } else if (!isAbsolute(trimmed)) {
+    throw new DaemonError('INVALID_WORKSPACE', 'Workspace path must be absolute or start with ~/', {
+      statusCode: 400,
+    })
+  }
+
+  const resolved = resolve(expanded)
+  try {
+    const canonical = await realpath(resolved)
+    const st = await stat(canonical)
+    if (!st.isDirectory()) {
+      throw new DaemonError('INVALID_WORKSPACE', 'Workspace path is not a directory', {
+        statusCode: 400,
+      })
+    }
+    return canonical
+  } catch (err) {
+    if (err instanceof DaemonError) throw err
+    throw new DaemonError('INVALID_WORKSPACE', 'Workspace directory does not exist or is inaccessible', {
+      statusCode: 400,
+    })
+  }
+}
+
 export class BotRepository {
   private readonly handle: DatabaseHandle
 
@@ -144,8 +190,9 @@ export class BotRepository {
     return row ? rowToBotRecord(row) : null
   }
 
-  createBot(rawInput: CreateBotInput): BotRecord {
+  async createBot(rawInput: CreateBotInput): Promise<BotRecord> {
     const input = CreateBotInputSchema.parse(rawInput)
+    const canonicalWorkspace = await validateAndCanonicalizeWorkspace(input.workspacePath)
     const avatar =
       input.avatar.kind === 'custom'
         ? {
@@ -175,7 +222,7 @@ export class BotRepository {
           input.runtimeId,
           input.modelId,
           input.effort,
-          input.workspacePath,
+          canonicalWorkspace,
           input.permission,
           now,
           now,
@@ -190,12 +237,17 @@ export class BotRepository {
     })
   }
 
-  updateBot(rawInput: UpdateBotInput): BotRecord {
+  async updateBot(rawInput: UpdateBotInput): Promise<BotRecord> {
     const { id, patch } = UpdateBotInputSchema.parse(rawInput)
     const existing = this.getBot(id)
     if (!existing) {
       throw new DaemonError('NOT_FOUND', `Bot ${id} not found`, { statusCode: 404 })
     }
+
+    const nextWorkspace =
+      patch.workspacePath !== undefined
+        ? await validateAndCanonicalizeWorkspace(patch.workspacePath)
+        : existing.workspacePath
 
     const nextAvatar =
       patch.avatar?.kind === 'custom'
@@ -223,7 +275,7 @@ export class BotRepository {
           patch.runtimeId ?? existing.runtimeId,
           patch.modelId ?? existing.modelId,
           patch.effort ?? existing.effort,
-          patch.workspacePath ?? existing.workspacePath,
+          nextWorkspace,
           patch.permission ?? existing.permission,
           now,
           id,
@@ -234,7 +286,7 @@ export class BotRepository {
     })
   }
 
-  duplicateBot(id: string): BotRecord {
+  async duplicateBot(id: string): Promise<BotRecord> {
     const existing = this.getBot(id)
     if (!existing) {
       throw new DaemonError('NOT_FOUND', `Bot ${id} not found`, { statusCode: 404 })
@@ -261,7 +313,10 @@ export class BotRepository {
     const now = new Date().toISOString()
 
     return this.handle.transaction(() => {
-      this.handle.sqlite.prepare('DELETE FROM agents WHERE id = ?').run(id)
+      // Soft-archive agent so historical sessions, messages, usage_records, and audit_logs remain intact.
+      this.handle.sqlite
+        .prepare('UPDATE agents SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL')
+        .run(now, now, id)
       const remaining = this.handle.sqlite
         .prepare(
           'SELECT id FROM agents WHERE archived_at IS NULL ORDER BY created_at ASC, name ASC LIMIT 1',

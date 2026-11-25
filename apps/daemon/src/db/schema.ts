@@ -60,7 +60,7 @@ export const teamMembers = sqliteTable(
       .references(() => teams.id, { onDelete: 'cascade' }),
     agentId: text('agent_id')
       .notNull()
-      .references(() => agents.id, { onDelete: 'cascade' }),
+      .references(() => agents.id, { onDelete: 'restrict' }),
     role: text('role').notNull(),
   },
   (t) => [primaryKey({ columns: [t.teamId, t.agentId] })],
@@ -72,7 +72,7 @@ export const sessions = sqliteTable(
     id: text('id').primaryKey(),
     agentId: text('agent_id')
       .notNull()
-      .references(() => agents.id, { onDelete: 'cascade' }),
+      .references(() => agents.id, { onDelete: 'restrict' }),
     accountId: text('account_id').notNull(),
     runtimeId: text('runtime_id').notNull(),
     externalSessionId: text('external_session_id'),

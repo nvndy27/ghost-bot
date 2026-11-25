@@ -2,6 +2,8 @@ import DOMPurify from 'isomorphic-dompurify'
 
 export const MAX_SVG_BYTES = 32 * 1024
 export const MAX_SVG_ELEMENTS = 150
+export const MAX_SVG_DEPTH = 32
+export const MAX_SVG_ATTR_LENGTH = 8192
 
 const ALLOWED_SVG_TAGS = new Set([
   'svg',
@@ -67,51 +69,77 @@ function validateSanitizedSvgTree(sanitizedSvg: string): string | null {
   const tagPattern = /<\s*(\/?)\s*([a-zA-Z0-9:_-]+)([^>]*)>/g
   let elementCount = 0
   let rootChecked = false
+  const tagStack: string[] = []
   let match: RegExpExecArray | null
 
   while ((match = tagPattern.exec(trimmed)) !== null) {
     const isClosing = match[1] === '/'
     const tagName = match[2].toLowerCase()
     const rawAttrs = match[3] ?? ''
+    const isSelfClosing = !isClosing && /\/\s*$/.test(rawAttrs)
 
     if (!ALLOWED_SVG_TAGS.has(tagName)) {
       return `Disallowed SVG element: <${tagName}>`
     }
 
-    if (!isClosing) {
-      elementCount += 1
-      if (elementCount > MAX_SVG_ELEMENTS) {
-        return `SVG exceeds maximum element count (${MAX_SVG_ELEMENTS})`
+    if (isClosing) {
+      const expected = tagStack.pop()
+      if (expected !== tagName) {
+        return `Malformed SVG closing tag </${tagName}>`
       }
-      if (!rootChecked) {
-        rootChecked = true
-        if (tagName !== 'svg') {
-          return 'Root element must be <svg>'
-        }
-      }
+      continue
+    }
 
-      const attrPattern = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
-      let attrMatch: RegExpExecArray | null
-      while ((attrMatch = attrPattern.exec(rawAttrs)) !== null) {
-        const attrName = attrMatch[1].toLowerCase()
-        const attrVal = attrMatch[2] ?? attrMatch[3] ?? ''
-        if (attrName.startsWith('on') || FORBIDDEN_ATTR_NAMES.includes(attrName)) {
-          return `Disallowed SVG attribute: ${attrName}`
-        }
-        if (attrName === 'xmlns' && attrVal === 'http://www.w3.org/2000/svg') {
-          continue
-        }
-        if (UNSAFE_VALUE_PATTERN.test(attrVal)) {
-          return `Disallowed external or scriptable value in attribute ${attrName}`
-        }
-        if (attrName === 'width' || attrName === 'height') {
-          const num = Number.parseFloat(attrVal)
-          if (Number.isFinite(num) && (num <= 0 || num > 2048)) {
-            return `SVG ${attrName} out of allowed bounds (1..2048)`
-          }
+    elementCount += 1
+    if (elementCount > MAX_SVG_ELEMENTS) {
+      return `SVG exceeds maximum element count (${MAX_SVG_ELEMENTS})`
+    }
+    if (!rootChecked) {
+      rootChecked = true
+      if (tagName !== 'svg') {
+        return 'Root element must be <svg>'
+      }
+    }
+    if (!isSelfClosing) {
+      tagStack.push(tagName)
+      if (tagStack.length > MAX_SVG_DEPTH) {
+        return `SVG exceeds maximum nesting depth (${MAX_SVG_DEPTH})`
+      }
+    }
+
+    const seenAttrs = new Set<string>()
+    const attrPattern = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+    let attrMatch: RegExpExecArray | null
+    while ((attrMatch = attrPattern.exec(rawAttrs)) !== null) {
+      const attrName = attrMatch[1].toLowerCase()
+      const attrVal = attrMatch[2] ?? attrMatch[3] ?? ''
+      if (seenAttrs.has(attrName)) {
+        return `Duplicate SVG attribute: ${attrName}`
+      }
+      seenAttrs.add(attrName)
+      if (attrVal.length > MAX_SVG_ATTR_LENGTH) {
+        return `SVG attribute ${attrName} exceeds maximum length (${MAX_SVG_ATTR_LENGTH})`
+      }
+      if (attrName.startsWith('on') || FORBIDDEN_ATTR_NAMES.includes(attrName)) {
+        return `Disallowed SVG attribute: ${attrName}`
+      }
+      if (attrName === 'xmlns' && attrVal === 'http://www.w3.org/2000/svg') {
+        continue
+      }
+      if (UNSAFE_VALUE_PATTERN.test(attrVal)) {
+        return `Disallowed external or scriptable value in attribute ${attrName}`
+      }
+      if (attrName === 'width' || attrName === 'height') {
+        const num = Number.parseFloat(attrVal)
+        if (Number.isFinite(num) && (num <= 0 || num > 2048)) {
+          return `SVG ${attrName} out of allowed bounds (1..2048)`
         }
       }
     }
+  }
+
+  if (tagStack.length > 0) {
+    return `Malformed SVG: unclosed <${tagStack[tagStack.length - 1]}> element`
   }
 
   return null
@@ -143,9 +171,9 @@ export function sanitizeCustomSvg(rawInput: string): SvgSanitizeResult {
     return { ok: false, reason: `SVG exceeds ${MAX_SVG_BYTES} byte limit` }
   }
 
-  // Reject XML DTD/entity/processing-instruction constructs before DOMPurify parsing.
-  if (/<!DOCTYPE|<!ENTITY|<!ATTLIST|<\?xml-stylesheet/i.test(rawInput)) {
-    return { ok: false, reason: 'XML DTD, ENTITY, or stylesheet declarations are not allowed' }
+  // Reject XML DTD/entity/comment/CDATA/processing-instruction constructs before DOMPurify parsing.
+  if (/<!DOCTYPE|<!ENTITY|<!ATTLIST|<!\[CDATA\[|<!--|<\?xml-stylesheet/i.test(rawInput)) {
+    return { ok: false, reason: 'XML DTD, ENTITY, comment, CDATA, or stylesheet declarations are not allowed' }
   }
 
   // Reject explicitly forbidden elements up front so adversarial inputs fail closed rather than silently mutating.
@@ -160,6 +188,23 @@ export function sanitizeCustomSvg(rawInput: string): SvgSanitizeResult {
   const withoutSvgNs = rawInput.replace(/xmlns\s*=\s*["']http:\/\/www\.w3\.org\/2000\/svg["']/gi, '')
   if (UNSAFE_VALUE_PATTERN.test(withoutSvgNs)) {
     return { ok: false, reason: 'External URLs, data URIs, or scriptable CSS are not allowed' }
+  }
+
+  // Reject duplicate attributes on rawInput to prevent parser-differential tricks.
+  const rawTagPattern = /<\s*[a-zA-Z0-9:_-]+([^>]*)>/g
+  let rawTagMatch: RegExpExecArray | null
+  while ((rawTagMatch = rawTagPattern.exec(rawInput)) !== null) {
+    const rawAttrs = rawTagMatch[1] ?? ''
+    const seen = new Set<string>()
+    const rawAttrPattern = /\s([a-zA-Z0-9:_-]+)\s*=/g
+    let m: RegExpExecArray | null
+    while ((m = rawAttrPattern.exec(rawAttrs)) !== null) {
+      const attr = m[1].toLowerCase()
+      if (seen.has(attr)) {
+        return { ok: false, reason: `Duplicate SVG attribute: ${attr}` }
+      }
+      seen.add(attr)
+    }
   }
 
   const sanitized = DOMPurify.sanitize(rawInput, {

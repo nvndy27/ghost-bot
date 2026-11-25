@@ -1,4 +1,4 @@
-import { chmod, mkdir } from 'node:fs/promises'
+import { chmod, mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -26,8 +26,9 @@ export function defaultDataDir(): string {
 }
 
 export async function openGhostBotDatabase(dataDir?: string): Promise<DatabaseHandle> {
-  const dir = resolve(dataDir ?? process.env.GHOST_BOT_DATA_DIR ?? defaultDataDir())
-  await mkdir(dir, { recursive: true, mode: 0o700 })
+  const requestedDir = resolve(dataDir ?? process.env.GHOST_BOT_DATA_DIR ?? defaultDataDir())
+  await mkdir(requestedDir, { recursive: true, mode: 0o700 })
+  const dir = await realpath(requestedDir)
   await chmod(dir, 0o700)
 
   const dbPath = join(dir, 'ghost-bot.sqlite')
@@ -39,6 +40,8 @@ export async function openGhostBotDatabase(dataDir?: string): Promise<DatabaseHa
     sqlite.exec('PRAGMA busy_timeout = 5000;')
     runMigrations(sqlite)
     await chmod(dbPath, 0o600).catch(() => undefined)
+    await chmod(`${dbPath}-wal`, 0o600).catch(() => undefined)
+    await chmod(`${dbPath}-shm`, 0o600).catch(() => undefined)
   } catch (err) {
     throw new DaemonError(
       'DB_INIT_FAILED',

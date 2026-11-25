@@ -63,7 +63,7 @@ export const MIGRATIONS: readonly Migration[] = [
 
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
         account_id TEXT NOT NULL,
         runtime_id TEXT NOT NULL,
         external_session_id TEXT,
@@ -125,6 +125,14 @@ export function runMigrations(sqlite: DatabaseSync): number {
     version: number
   }>
   const applied = new Set(rows.map((r) => r.version))
+  const latestSupported = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0
+  for (const v of applied) {
+    if (v > latestSupported) {
+      throw new Error(
+        `Unsupported database schema version ${v} (latest supported: ${latestSupported})`,
+      )
+    }
+  }
   let count = 0
 
   for (const migration of MIGRATIONS) {

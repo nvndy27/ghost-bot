@@ -16,14 +16,22 @@ test('sanitizes valid SVG into inert base64 data URL', () => {
 test('rejects adversarial SVG payloads (scripts, event handlers, foreignObject, external refs, DTD, oversized)', () => {
   const adversarialPayloads = [
     '<svg><script>alert(1)</script></svg>',
+    '<svg><ScRiPt>alert(1)</ScRiPt></svg>',
     '<svg onload="alert(1)"><circle cx="10" cy="10" r="5"/></svg>',
     '<svg><circle cx="10" cy="10" r="5" onclick="fetch(\'https://evil.test\')"/></svg>',
-    '<svg><foreignObject><body><iframe src="https://evil.test"></iframe></body></foreignObject></svg>',
+    '<svg><FoReIgNoBjEcT><body><iframe src="https://evil.test"></iframe></body></FoReIgNoBjEcT></svg>',
     '<svg><image href="https://evil.test/x.png"/></svg>',
     '<svg><a xlink:href="javascript:alert(1)"><rect width="10" height="10"/></a></svg>',
+    '<svg><a href="&#x6a;avascript:alert(1)"><rect width="10" height="10"/></a></svg>',
     '<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg><text>&xxe;</text></svg>',
+    '<svg><!-- comment --><circle cx="10" cy="10" r="5"/></svg>',
+    '<svg><![CDATA[<script>alert(1)</script>]]></svg>',
     '<svg><rect width="10" height="10" style="background:url(https://evil.test)"/></svg>',
     '<svg><animate attributeName="x" from="0" to="10"/></svg>',
+    '<svg><circle cx="10" cy="10" r="5" fill="#000" fill="#fff"/></svg>',
+    `<svg>${'<g>'.repeat(35)}<circle cx="1" cy="1" r="1"/>${'</g>'.repeat(35)}</svg>`,
+    `<svg><path d="M0 0 ${'L1 '.repeat(3000)}"/></svg>`,
+    '<g><circle cx="1" cy="1" r="1"/></g>',
     `<svg>${'<circle cx="1" cy="1" r="1"/>'.repeat(200)}</svg>`,
     `<svg><path d="M0 0 ${'L1 1 '.repeat(8000)}"/></svg>`,
   ]
