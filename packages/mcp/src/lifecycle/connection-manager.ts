@@ -83,6 +83,7 @@ export class McpConnectionManager {
   private readonly gracefulShutdownMs?: number
 
   private readonly connections = new Map<string, ManagedConnection>()
+  private readonly unsubscribeInvalidation?: () => void
   private generationCounter = 0
   private closed = false
 
@@ -95,6 +96,11 @@ export class McpConnectionManager {
     this.maxMessageBytes = options.maxMessageBytes
     this.maxStderrBytes = options.maxStderrBytes
     this.gracefulShutdownMs = options.gracefulShutdownMs
+    if (typeof this.registry.subscribeInvalidation === 'function') {
+      this.unsubscribeInvalidation = this.registry.subscribeInvalidation((serverId) => {
+        void this.disconnect(serverId)
+      })
+    }
   }
 
   private assertOpen(): void {
@@ -442,6 +448,7 @@ export class McpConnectionManager {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.unsubscribeInvalidation?.()
     await this.disconnectAll()
   }
 }

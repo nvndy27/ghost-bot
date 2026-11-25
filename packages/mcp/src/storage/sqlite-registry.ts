@@ -28,7 +28,11 @@ import type {
   UpdateMcpServerInput,
 } from '../contracts/types.ts'
 import { computeServerConfigFingerprint } from '../registry/fingerprint.ts'
-import type { McpRegistryRepository, McpServerListResult } from '../registry/interface.ts'
+import type {
+  McpRegistryInvalidationListener,
+  McpRegistryRepository,
+  McpServerListResult,
+} from '../registry/interface.ts'
 import {
   authorizeMcpRegister,
   canManageMcpServer,
@@ -37,6 +41,7 @@ import {
   resolveAuthorizedMcpScopes,
   validateMcpAuthContext,
 } from '../security/authorization.ts'
+import { assertBoundedInputShape } from '../security/input-bounds.ts'
 import { assertNoCredentialsInServerInput } from '../security/redaction.ts'
 import { computeLaunchBinaryDigestSync } from '../security/path-guard.ts'
 import type { McpDatabaseHandle } from './sqlite-client.ts'
@@ -103,12 +108,30 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   private readonly handle: McpDatabaseHandle
   private readonly clock: Clock
   private readonly idGenerator: IdGenerator
+  private readonly invalidationListeners = new Set<McpRegistryInvalidationListener>()
   private closed = false
 
   constructor(handle: McpDatabaseHandle, options: SqliteMcpRegistryOptions = {}) {
     this.handle = handle
     this.clock = options.clock ?? (() => new Date())
     this.idGenerator = options.idGenerator ?? (() => randomUUID())
+  }
+
+  subscribeInvalidation(listener: McpRegistryInvalidationListener): () => void {
+    this.invalidationListeners.add(listener)
+    return () => {
+      this.invalidationListeners.delete(listener)
+    }
+  }
+
+  private emitInvalidation(serverId: string): void {
+    for (const listener of this.invalidationListeners) {
+      try {
+        listener(serverId)
+      } catch {
+        // Never allow listener errors to corrupt registry transactions.
+      }
+    }
   }
 
   private assertOpen(): void {
@@ -128,6 +151,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   register(rawAuth: McpAuthContext, rawInput: RegisterMcpServerInput): McpServerConfig {
     this.assertOpen()
     const auth = validateMcpAuthContext(rawAuth)
+    assertBoundedInputShape(rawInput)
     const parsed = RegisterMcpServerInputSchema.safeParse(rawInput)
     if (!parsed.success) {
       throw new McpValidationError(
@@ -246,6 +270,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   list(rawAuth: McpAuthContext, rawQuery: ListMcpServersQuery = {}): McpServerListResult {
     this.assertOpen()
     const auth = validateMcpAuthContext(rawAuth)
+    assertBoundedInputShape(rawQuery)
     const parsed = ListMcpServersQuerySchema.safeParse(rawQuery)
     if (!parsed.success) {
       throw new McpValidationError(
@@ -289,6 +314,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
     if (!McpServerIdSchema.safeParse(serverId).success) {
       throw new McpValidationError('Invalid MCP server ID')
     }
+    assertBoundedInputShape(rawInput)
     const parsed = UpdateMcpServerInputSchema.safeParse(rawInput)
     if (!parsed.success) {
       throw new McpValidationError(
@@ -304,7 +330,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
 
     const now = this.nowIso()
     try {
-      return this.handle.transaction(() => {
+      const result = this.handle.transaction(() => {
         const row = this.handle.sqlite
           .prepare('SELECT * FROM mcp_servers WHERE id = ?')
           .get(serverId) as Record<string, unknown> | undefined
@@ -356,8 +382,12 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
             updated.id,
           )
 
-        return updated
+        return { updated, configChanged }
       })
+      if (result.configChanged) {
+        this.emitInvalidation(result.updated.id)
+      }
+      return result.updated
     } catch (err) {
       if (err instanceof McpError) throw err
       if (isUniqueConstraintError(err)) {
@@ -376,11 +406,13 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   }
 
   disable(rawAuth: McpAuthContext, serverId: string): McpServerConfig {
-    return this.mutateState(rawAuth, serverId, (existing, now) => ({
+    const updated = this.mutateState(rawAuth, serverId, (existing, now) => ({
       ...existing,
       enabled: false,
       updatedAt: now,
     }))
+    this.emitInvalidation(serverId)
+    return updated
   }
 
   approveTrust(rawAuth: McpAuthContext, serverId: string): McpServerConfig {
@@ -397,7 +429,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   }
 
   revokeTrust(rawAuth: McpAuthContext, serverId: string): McpServerConfig {
-    return this.mutateState(rawAuth, serverId, (existing, now) => ({
+    const updated = this.mutateState(rawAuth, serverId, (existing, now) => ({
       ...existing,
       enabled: false,
       trustState: 'revoked',
@@ -405,6 +437,8 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       trustedBinaryDigest: null,
       updatedAt: now,
     }))
+    this.emitInvalidation(serverId)
+    return updated
   }
 
   private mutateState(
@@ -464,6 +498,9 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       }
 
       const res = this.handle.sqlite.prepare('DELETE FROM mcp_servers WHERE id = ?').run(existing.id)
+      if (res.changes > 0) {
+        this.emitInvalidation(existing.id)
+      }
       return res.changes > 0
     })
   }
@@ -471,6 +508,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.invalidationListeners.clear()
     this.handle.close()
   }
 }

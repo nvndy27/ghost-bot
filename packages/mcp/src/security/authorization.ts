@@ -7,10 +7,12 @@ import {
 import { McpAuthorizationError } from '../contracts/errors.ts'
 import { McpAuthContextSchema } from '../contracts/schemas.ts'
 import type { McpAuthContext, McpScope, McpScopeKind, ParsedMcpAuthContext } from '../contracts/types.ts'
+import { assertBoundedInputShape } from './input-bounds.ts'
 
 export { getScopeKey }
 
 export function validateMcpAuthContext(rawAuth: McpAuthContext): ParsedMcpAuthContext {
+  assertBoundedInputShape(rawAuth)
   const parsed = McpAuthContextSchema.safeParse(rawAuth)
   if (!parsed.success) {
     throw new McpAuthorizationError('Invalid or missing MCP authorization context')

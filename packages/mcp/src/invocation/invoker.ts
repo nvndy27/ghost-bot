@@ -11,6 +11,8 @@ import {
 } from '../contracts/errors.ts'
 import { MCP_LIMITS } from '../contracts/limits.ts'
 import type { McpCapabilitySnapshot } from '../contracts/types.ts'
+import { assertSafeSupportedJsonSchema } from '../discovery/discoverer.ts'
+import { assertBoundedInputShape } from '../security/input-bounds.ts'
 
 export interface McpToolInvocationResult {
   readonly kind: 'untrusted_mcp_tool_result'
@@ -25,6 +27,7 @@ export interface McpToolInvocationResult {
 }
 
 function validateArgsAgainstSchema(args: Record<string, unknown>, inputSchema: Record<string, unknown>): void {
+  assertBoundedInputShape(args)
   const argsBytes = Buffer.byteLength(JSON.stringify(args), 'utf8')
   if (argsBytes > MCP_LIMITS.maxToolArgsBytes) {
     throw new McpValidationError(`Tool arguments exceed maximum size (${MCP_LIMITS.maxToolArgsBytes} bytes)`)
@@ -33,6 +36,7 @@ function validateArgsAgainstSchema(args: Record<string, unknown>, inputSchema: R
   if (schemaBytes > MCP_LIMITS.maxSchemaBytes) {
     throw new McpProtocolError('Tool input schema exceeds maximum allowed size')
   }
+  assertSafeSupportedJsonSchema(inputSchema)
 
   // Validate locally with no remote $ref resolution; clone args to prevent mutation
   const validator = new Validator(inputSchema as Schema, '2020-12', false)

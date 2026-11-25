@@ -13,6 +13,8 @@ export interface McpServerListResult {
   readonly offset: number
 }
 
+export type McpRegistryInvalidationListener = (serverId: string) => void
+
 export interface McpRegistryRepository {
   register(auth: McpAuthContext, input: RegisterMcpServerInput): McpServerConfig
   getById(auth: McpAuthContext, serverId: string, options?: { includeUserWide?: boolean }): McpServerConfig | null
@@ -23,5 +25,6 @@ export interface McpRegistryRepository {
   approveTrust(auth: McpAuthContext, serverId: string): McpServerConfig
   revokeTrust(auth: McpAuthContext, serverId: string): McpServerConfig
   delete(auth: McpAuthContext, serverId: string): boolean
+  subscribeInvalidation?(listener: McpRegistryInvalidationListener): () => void
   close(): void
 }

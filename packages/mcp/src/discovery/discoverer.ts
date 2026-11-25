@@ -15,28 +15,57 @@ export function buildCapabilityKey(serverId: string, capabilityName: string): st
   return `${serverId}::${capabilityName}`
 }
 
-function assertBoundedSchema(value: unknown, depth = 0): void {
-  if (depth > MCP_LIMITS.maxSchemaDepth) {
-    throw new McpProtocolError('Discovered tool schema exceeds maximum nesting depth')
+const DISALLOWED_SCHEMA_KEYWORDS = new Set([
+  '$ref',
+  '$defs',
+  'definitions',
+  '$dynamicRef',
+  '$dynamicAnchor',
+  '$recursiveRef',
+  '$recursiveAnchor',
+  '$anchor',
+  'pattern',
+  'patternProperties',
+  'format',
+])
+
+const COMBINATOR_KEYWORDS = new Set(['allOf', 'anyOf', 'oneOf'])
+
+export function assertSafeSupportedJsonSchema(value: unknown): void {
+  let nodeCount = 0
+
+  function walk(node: unknown, depth: number): void {
+    if (depth > MCP_LIMITS.maxSchemaDepth) {
+      throw new McpProtocolError('Discovered tool schema exceeds maximum nesting depth')
+    }
+    nodeCount++
+    if (nodeCount > MCP_LIMITS.maxSchemaNodes) {
+      throw new McpProtocolError(`Discovered tool schema exceeds maximum node count (${MCP_LIMITS.maxSchemaNodes})`)
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1)
+      return
+    }
+    if (node !== null && typeof node === 'object') {
+      const obj = node as Record<string, unknown>
+      for (const [key, val] of Object.entries(obj)) {
+        if (DISALLOWED_SCHEMA_KEYWORDS.has(key)) {
+          throw new McpProtocolError(`Unsupported JSON Schema keyword "${key}" rejected for bounded validation`)
+        }
+        if (COMBINATOR_KEYWORDS.has(key) && Array.isArray(val) && val.length > MCP_LIMITS.maxSchemaCombinatorBranches) {
+          throw new McpProtocolError(
+            `JSON Schema "${key}" exceeds maximum branch count (${MCP_LIMITS.maxSchemaCombinatorBranches})`,
+          )
+        }
+        if (key === 'enum' && Array.isArray(val) && val.length > MCP_LIMITS.maxSchemaEnumItems) {
+          throw new McpProtocolError('Discovered tool schema enum exceeds maximum items')
+        }
+        walk(val, depth + 1)
+      }
+    }
   }
-  if (Array.isArray(value)) {
-    for (const item of value) assertBoundedSchema(item, depth + 1)
-  } else if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>
-    if (typeof obj.$ref === 'string' && /^https?:\/\//i.test(obj.$ref)) {
-      throw new McpProtocolError('Discovered tool schema must not contain remote $ref URLs')
-    }
-    if ('$dynamicRef' in obj || '$recursiveRef' in obj) {
-      throw new McpProtocolError('Discovered tool schema contains unsupported dynamic/recursive $ref')
-    }
-    if (typeof obj.pattern === 'string' && obj.pattern.length > MCP_LIMITS.maxSchemaPatternLength) {
-      throw new McpProtocolError('Discovered tool schema pattern exceeds maximum length')
-    }
-    if (Array.isArray(obj.enum) && obj.enum.length > MCP_LIMITS.maxSchemaEnumItems) {
-      throw new McpProtocolError('Discovered tool schema enum exceeds maximum items')
-    }
-    for (const item of Object.values(obj)) assertBoundedSchema(item, depth + 1)
-  }
+
+  walk(value, 0)
 }
 
 function assertUniqueCapabilities<T>(
@@ -94,7 +123,7 @@ export async function discoverServerCapabilities(
           throw new McpProtocolError(`Discovered tools exceed limit (${MCP_LIMITS.maxDiscoveredTools})`)
         }
         const inputSchema = (tool.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>
-        assertBoundedSchema(inputSchema)
+        assertSafeSupportedJsonSchema(inputSchema)
         const definition = JSON.stringify([tool.name, tool.description ?? '', inputSchema])
         if (Buffer.byteLength(JSON.stringify(inputSchema), 'utf8') > MCP_LIMITS.maxSchemaBytes) {
           throw new McpProtocolError('Discovered tool schema exceeds maximum size')
