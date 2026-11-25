@@ -377,3 +377,84 @@ test('Daemon HTTP routes serve sessions, messages, runs, events, cancel, and app
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Phase 2A hardening: idempotency conflict, active-run bot archival guard, single-daemon lock, and idempotent reconciliation', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gb-hardening-2a-'))
+  const token = 'test-daemon-token-hardening-2a'
+  const daemon1 = new GhostBotDaemon({
+    authToken: token,
+    port: 0,
+    dataDir: dir,
+    runtimeMode: 'mock',
+  })
+  const daemon2 = new GhostBotDaemon({
+    authToken: token,
+    port: 0,
+    dataDir: dir,
+    runtimeMode: 'mock',
+  })
+  try {
+    const { address } = await daemon1.start()
+
+    // 1. Second daemon on same dataDir fails closed with DAEMON_ALREADY_RUNNING
+    await assert.rejects(() => daemon2.start(), /already owns/)
+
+    const created = await daemonRequest(address, token, '/sessions', {
+      method: 'POST',
+      body: { agentId: 'chief', title: 'Hardening Session' },
+    })
+    assert.equal(created.status, 201)
+    const sessionId = String(created.json.id)
+
+    // 2. Start a slow run, verify idempotency conflict on different text, and bot archival block
+    const s1 = await daemonRequest(address, token, '/runs', {
+      method: 'POST',
+      body: { sessionId, idempotencyKey: 'hard-key-1', text: 'slow-cancel test prompt' },
+    })
+    assert.equal(s1.status, 201)
+    const runId = String((s1.json.run as Record<string, unknown>).id)
+
+    const conflict = await daemonRequest(address, token, '/runs', {
+      method: 'POST',
+      body: { sessionId, idempotencyKey: 'hard-key-1', text: 'different prompt payload' },
+    })
+    assert.equal(conflict.status, 409)
+    assert.equal(conflict.json.code, 'IDEMPOTENCY_CONFLICT')
+
+    const deleteDuringRun = await daemonRequest(address, token, '/bots/chief', {
+      method: 'DELETE',
+    })
+    assert.equal(deleteDuringRun.status, 409)
+    assert.equal(deleteDuringRun.json.code, 'ACTIVE_RUN_EXISTS')
+
+    // Wrong-run approval resolution fails with 404
+    const wrongApproval = await daemonRequest(address, token, `/runs/${runId}/approval`, {
+      method: 'POST',
+      body: { approvalId: 'nonexistent', decision: 'approved' },
+    })
+    assert.equal(wrongApproval.status, 404)
+
+    const cancelled = await daemonRequest(address, token, `/runs/${runId}/cancel`, {
+      method: 'POST',
+    })
+    assert.equal(cancelled.status, 200)
+
+    for (let i = 0; i < 40; i += 1) {
+      const r = await daemonRequest(address, token, `/runs/${runId}`)
+      if (isTerminalStatus(String(r.json.status) as 'cancelled')) break
+      await new Promise((res) => setTimeout(res, 25))
+    }
+
+    await daemon1.stop()
+
+    // 3. After daemon1 stops, daemon2 can acquire lock and reconcileOnStartup is idempotent
+    const { address: addr2 } = await daemon2.start()
+    const runAfterRestart = await daemonRequest(addr2, token, `/runs/${runId}`)
+    assert.equal(runAfterRestart.status, 200)
+    assert.equal(runAfterRestart.json.status, 'cancelled')
+  } finally {
+    await daemon1.stop().catch(() => undefined)
+    await daemon2.stop().catch(() => undefined)
+    await rm(dir, { recursive: true, force: true })
+  }
+})

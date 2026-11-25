@@ -55,6 +55,7 @@ interface ActiveRun {
   runId: string
   threadId: string
   turnId: string | null
+  pendingNotifications: JsonRpcNotification[]
   seq: number
   queue: AgentEvent[]
   waiter: (() => void) | null
@@ -547,6 +548,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
       runId: request.runId,
       threadId: request.session.externalId,
       turnId: null,
+      pendingNotifications: [],
       seq: 0,
       queue: [],
       waiter: null,
@@ -573,6 +575,12 @@ export class CodexAppServerAdapter implements AgentRuntime {
         throw new JsonRpcClientError('MALFORMED_PAYLOAD', 'Invalid turn/start response')
       }
       active.turnId = turn.id
+      if (active.pendingNotifications.length > 0) {
+        const buffered = active.pendingNotifications.splice(0, active.pendingNotifications.length)
+        for (const bufferedNotif of buffered) {
+          this.handleNotification(bufferedNotif)
+        }
+      }
 
       if (active.cancelled && !active.done) {
         try {
@@ -699,8 +707,16 @@ export class CodexAppServerAdapter implements AgentRuntime {
         : typeof turnObj?.id === 'string'
           ? turnObj.id
           : null
-    if (active.turnId !== null && notifTurnId !== null && notifTurnId !== active.turnId) {
-      return
+    if (notifTurnId !== null) {
+      if (active.turnId === null) {
+        // turn/start response and notifications can arrive in the same stdout read chunk before
+        // the turn/start promise continuation assigns active.turnId; buffer until turnId is known.
+        active.pendingNotifications.push(n)
+        return
+      }
+      if (notifTurnId !== active.turnId) {
+        return
+      }
     }
 
     switch (n.method) {
@@ -794,6 +810,9 @@ export class CodexAppServerAdapter implements AgentRuntime {
       req.method === 'applyPatchApproval'
     ) {
       if (!active) {
+        return { decision: 'decline' }
+      }
+      if (active.turnId !== null && typeof p.turnId === 'string' && p.turnId !== active.turnId) {
         return { decision: 'decline' }
       }
       const approvalId =

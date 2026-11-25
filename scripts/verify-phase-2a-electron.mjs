@@ -38,9 +38,47 @@ try {
     await page.getByRole('button', { name: 'Send message' }).click()
     await page.waitForSelector('text=daemon-owned Mock Runtime', { timeout: 8000 })
 
-    // 2. Create a new conversation and verify session switch works
+    // 1b. Verify idempotency retry with same key deduplicates and different text returns conflict
+    const idemCheck = await page.evaluate(async () => {
+      const bots = await window.ghostBot.listBots()
+      const sessions = await window.ghostBot.listSessions({ agentId: bots.bots[0].id })
+      const sid = sessions.activeSessionId
+      const r1 = await window.ghostBot.startRun({
+        sessionId: sid,
+        idempotencyKey: 'e2e-idem-1',
+        text: 'Idempotency probe',
+      })
+      const r2 = await window.ghostBot.startRun({
+        sessionId: sid,
+        idempotencyKey: 'e2e-idem-1',
+        text: 'Idempotency probe',
+      })
+      let conflictBlocked = false
+      try {
+        await window.ghostBot.startRun({
+          sessionId: sid,
+          idempotencyKey: 'e2e-idem-1',
+          text: 'Different payload',
+        })
+      } catch {
+        conflictBlocked = true
+      }
+      return { sameRunId: r1.run.id === r2.run.id, deduplicated: r2.deduplicated, conflictBlocked }
+    })
+    assert.equal(idemCheck.sameRunId, true)
+    assert.equal(idemCheck.deduplicated, true)
+    assert.equal(idemCheck.conflictBlocked, true)
+    await page.waitForTimeout(350)
+
+    // 2. Create a new conversation, test cancel, and verify approval flow
     await page.getByRole('button', { name: 'New conversation' }).click()
     await page.waitForTimeout(200)
+    await composer.fill('Run slow-cancel test')
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await page.waitForSelector('button[aria-label="Stop generation"]', { timeout: 5000 })
+    await page.getByRole('button', { name: 'Stop generation' }).click()
+    await page.waitForSelector('text=Cancelled', { timeout: 5000 })
+
     await composer.fill('Second conversation approval check')
     await page.getByRole('button', { name: 'Send message' }).click()
     await page.waitForSelector('text=Approve simulated workspace write', { timeout: 8000 })

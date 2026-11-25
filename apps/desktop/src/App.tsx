@@ -212,18 +212,20 @@ export function App() {
         window.clearInterval(streamTimerRef.current)
       }
       for (const timer of runPollTimersRef.current.values()) {
-        window.clearInterval(timer)
+        window.clearTimeout(timer)
       }
       runPollTimersRef.current.clear()
+      runSeqCursorRef.current.clear()
     }
   }, [])
 
   const stopPollingRun = (runId: string) => {
     const existing = runPollTimersRef.current.get(runId)
     if (existing !== undefined) {
-      window.clearInterval(existing)
+      window.clearTimeout(existing)
       runPollTimersRef.current.delete(runId)
     }
+    runSeqCursorRef.current.delete(`active:${runId}`)
   }
 
   const refreshSessionMessages = async (sessionId: string, runOverride?: RunRecord | null) => {
@@ -249,18 +251,39 @@ export function App() {
       stopPollingRun(run.id)
       return
     }
-    if (runPollTimersRef.current.has(run.id)) return
+    const activeKey = `active:${run.id}`
+    if (runSeqCursorRef.current.has(activeKey)) return
+    runSeqCursorRef.current.set(activeKey, 1)
+
+    const scheduleNext = (delayMs: number) => {
+      if (!runSeqCursorRef.current.has(activeKey)) return
+      const timer = window.setTimeout(() => {
+        void pollOnce()
+      }, delayMs)
+      runPollTimersRef.current.set(run.id, timer)
+    }
 
     const pollOnce = async () => {
+      if (!runSeqCursorRef.current.has(activeKey)) return
       try {
-        const afterSeq = runSeqCursorRef.current.get(run.id) ?? 0
-        const [eventsRes, latestRun] = await Promise.all([
-          bridge.getRunEvents({ runId: run.id, afterSeq, limit: 200 }),
-          bridge.getRun(run.id),
-        ])
+        const collectedEvents: Awaited<ReturnType<typeof bridge.getRunEvents>>['events'] = []
+        let afterSeq = runSeqCursorRef.current.get(run.id) ?? 0
+        let hasMore = true
+        let pages = 0
+        while (hasMore && pages < 5) {
+          const page = await bridge.getRunEvents({ runId: run.id, afterSeq, limit: 200 })
+          if (page.events.length > 0) {
+            collectedEvents.push(...page.events)
+            afterSeq = page.lastSeq
+          }
+          hasMore = page.hasMore
+          pages += 1
+        }
+        const latestRun = await bridge.getRun(run.id)
+        if (!runSeqCursorRef.current.has(activeKey)) return
 
-        if (eventsRes.events.length > 0) {
-          runSeqCursorRef.current.set(run.id, eventsRes.lastSeq)
+        if (collectedEvents.length > 0) {
+          runSeqCursorRef.current.set(run.id, afterSeq)
           setMessagesBySession((prev) => {
             const list = prev[sessionId] ?? []
             const targetIdx = assistantMessageId
@@ -274,7 +297,7 @@ export function App() {
             let nextTools = target.tools ? [...target.tools] : []
             let nextApproval = target.approval
 
-            for (const evt of eventsRes.events) {
+            for (const evt of collectedEvents) {
               if (evt.type === 'message.delta' && typeof evt.payload.delta === 'string') {
                 nextText += evt.payload.delta
               } else if (evt.type === 'tool.started') {
@@ -341,6 +364,8 @@ export function App() {
           await refreshSessionMessages(sessionId, latestRun)
           const sessRes = await bridge.listSessions({ agentId: botId })
           setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
+        } else {
+          scheduleNext(120)
         }
       } catch (err) {
         stopPollingRun(run.id)
@@ -348,10 +373,6 @@ export function App() {
       }
     }
 
-    const timer = window.setInterval(() => {
-      void pollOnce()
-    }, 120)
-    runPollTimersRef.current.set(run.id, timer)
     void pollOnce()
   }
 

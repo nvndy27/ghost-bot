@@ -292,8 +292,24 @@ export class RunOrchestrator {
 
       if (existingRun) {
         const userMsg = this.dbHandle.sqlite
-          .prepare(`SELECT id FROM messages WHERE run_id = ? AND role = 'user' LIMIT 1`)
-          .get(existingRun.id) as { id: string } | undefined
+          .prepare(`SELECT id, content_json FROM messages WHERE run_id = ? AND role = 'user' LIMIT 1`)
+          .get(existingRun.id) as { id: string; content_json: string } | undefined
+        if (userMsg) {
+          let existingText = ''
+          try {
+            const parsed = JSON.parse(userMsg.content_json) as { text?: unknown }
+            if (typeof parsed.text === 'string') existingText = parsed.text
+          } catch {
+            // ignore
+          }
+          if (existingText !== trimmedText) {
+            throw new DaemonError(
+              'IDEMPOTENCY_CONFLICT',
+              'Idempotency key was already used with a different prompt payload',
+              { statusCode: 409 },
+            )
+          }
+        }
         const assistantMsg = this.dbHandle.sqlite
           .prepare(`SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' LIMIT 1`)
           .get(existingRun.id) as { id: string } | undefined

@@ -1,7 +1,8 @@
 import { timingSafeEqual } from 'node:crypto'
-import { chmod } from 'node:fs/promises'
+import { chmod, open, readFile, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+import { dirname, join } from 'node:path'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import {
   AppearanceSettingsSchema,
@@ -79,6 +80,8 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+const ACTIVE_DAEMON_LOCKS = new Set<string>()
+
 export class GhostBotDaemon {
   private readonly options: DaemonServerOptions
   private readonly runtimeMode: 'codex' | 'mock'
@@ -88,6 +91,7 @@ export class GhostBotDaemon {
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
   private runOrchestrator: RunOrchestrator | null = null
+  private lockFilePath: string | null = null
   private server: Server | null = null
   private readonly startedAt = Date.now()
 
@@ -103,12 +107,75 @@ export class GhostBotDaemon {
     })
   }
 
+  private async acquireDaemonLock(lockPath: string): Promise<void> {
+    if (ACTIVE_DAEMON_LOCKS.has(lockPath)) {
+      throw new DaemonError(
+        'DAEMON_ALREADY_RUNNING',
+        `Another Ghost Bot daemon (pid ${process.pid}) already owns ${dirname(lockPath)}`,
+        { statusCode: 409 },
+      )
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const handle = await open(lockPath, 'wx', 0o600)
+        try {
+          await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8')
+        } finally {
+          await handle.close()
+        }
+        ACTIVE_DAEMON_LOCKS.add(lockPath)
+        this.lockFilePath = lockPath
+        return
+      } catch (err) {
+        const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : ''
+        if (code !== 'EEXIST') throw err
+
+        let existingPid: number | null = null
+        try {
+          const raw = await readFile(lockPath, 'utf8')
+          const parsed = JSON.parse(raw) as { pid?: unknown }
+          if (typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+            existingPid = parsed.pid
+          }
+        } catch {
+          // Malformed or empty lock file -> treat as stale if unreadable
+        }
+
+        if (existingPid !== null && existingPid !== process.pid) {
+          let isAlive = false
+          try {
+            process.kill(existingPid, 0)
+            isAlive = true
+          } catch (killErr) {
+            const killCode =
+              killErr && typeof killErr === 'object' && 'code' in killErr ? String(killErr.code) : ''
+            if (killCode === 'EPERM') isAlive = true
+          }
+          if (isAlive) {
+            throw new DaemonError(
+              'DAEMON_ALREADY_RUNNING',
+              `Another Ghost Bot daemon (pid ${existingPid}) already owns ${dirname(lockPath)}`,
+              { statusCode: 409 },
+            )
+          }
+        }
+        await unlink(lockPath).catch(() => undefined)
+      }
+    }
+  }
+
   async start(): Promise<{ address: string }> {
     if (this.server) {
       throw new DaemonError('ALREADY_STARTED', 'Daemon server is already running')
     }
 
     const dbHandle = await openGhostBotDatabase(this.options.dataDir)
+    try {
+      await this.acquireDaemonLock(join(dirname(dbHandle.dbPath), 'daemon.lock'))
+    } catch (err) {
+      dbHandle.close()
+      throw err
+    }
     seedInitialBotsIfNeeded(dbHandle)
     this.dbHandle = dbHandle
     this.botRepo = new BotRepository(dbHandle)
@@ -164,6 +231,12 @@ export class GhostBotDaemon {
     if (this.dbHandle) {
       this.dbHandle.close()
       this.dbHandle = null
+    }
+    if (this.lockFilePath) {
+      const p = this.lockFilePath
+      this.lockFilePath = null
+      ACTIVE_DAEMON_LOCKS.delete(p)
+      await unlink(p).catch(() => undefined)
     }
   }
 

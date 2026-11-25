@@ -445,3 +445,55 @@ test('tightens existing 0755 Codex profile directory permissions to 0700 on init
     await rm(profileDir, { recursive: true, force: true })
   }
 })
+
+test('buffers coalesced turn/start + notifications deterministically and filters stale turnId', async () => {
+  const coalescedScript = `
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-coal' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        // Emit turn/start response, stale-turn delta, valid-turn delta, and completion in ONE coalesced write
+        process.stdout.write(
+          JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-real' } } }) + '\\n' +
+          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-stale', itemId: 'i0', delta: 'stale' } }) + '\\n' +
+          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-real', itemId: 'i1', delta: 'fresh' } }) + '\\n' +
+          JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-coal', turn: { id: 'turn-real', status: 'completed' } } }) + '\\n'
+        );
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-coal-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', coalescedScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'ask-approval',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    for await (const ev of adapter.run({ runId: 'run-coal', session, text: 'hi' })) {
+      events.push(ev)
+    }
+    assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'stale'), false)
+    assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'fresh'), true)
+    assert.equal(events.at(-1)?.type, 'run.completed')
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})

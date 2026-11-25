@@ -20,3 +20,9 @@ In Phase 1B–1D, mock chat streaming lived inside React `setInterval` timers in
 
 - Switching conversations or restarting Electron preserves exact session, message, tool, approval, and run state.
 - Phase 2B can plug `CodexAppServerAdapter` into `RunOrchestrator` behind `RuntimePolicyBroker` without changing UI contracts or SQLite tables.
+
+### Hardening & Concurrency Model (Review Follow-up)
+- **Single-daemon ownership**: `GhostBotDaemon.start()` acquires an `O_EXCL` `0600` `daemon.lock` file in `dataDir` (plus process-wide `ACTIVE_DAEMON_LOCKS` tracking) before `reconcileOnStartup()`, preventing a second daemon instance from corrupting or prematurely interrupting live runs.
+- **Idempotency conflict detection**: Reusing `(session_id, idempotency_key)` with a different prompt payload returns `409 IDEMPOTENCY_CONFLICT` rather than silently returning the earlier run.
+- **Active-run archival guard**: `BotRepository.deleteBot()` rejects soft-archival with `409 ACTIVE_RUN_EXISTS` while any run for that bot is non-terminal.
+- **Event transport**: Renderer polling uses self-scheduling `120ms` `setTimeout` after `pollOnce()` completes (with pagination draining), preventing overlapping in-flight IPC requests. Phase 2B can keep cursor polling or add an optional push wake-up without altering persistence invariants.
