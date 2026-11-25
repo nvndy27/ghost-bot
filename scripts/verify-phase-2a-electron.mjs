@@ -153,8 +153,8 @@ try {
         return { blocked: true, message: err instanceof Error ? err.message : String(err) }
       }
     })
-    assert.equal(res.blocked, true, 'Codex live inference must be blocked in Phase 2A')
-    assert.match(res.message, /Live AI inference.*disabled/)
+    assert.equal(res.blocked, true, 'Historical mock session must not run live Codex inference')
+    assert.match(res.message, /historical mock session|Live AI inference/)
   } finally {
     await appCodex.close()
   }

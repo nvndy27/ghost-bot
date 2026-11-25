@@ -51,6 +51,7 @@ function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
     id: rec.id,
     name: rec.name,
     description: rec.description,
+    runtimeId: rec.runtimeId,
     statusLabel: 'Ready',
     avatarStatus: 'idle',
     avatar: rec.avatar,
@@ -315,14 +316,19 @@ export function App() {
                 const appId = String(evt.payload.approvalId ?? 'approval')
                 const title = String(evt.payload.title ?? 'Approval required')
                 const cmd = String(evt.payload.command ?? '')
+                const blockedInPhase2B = Boolean(evt.payload.blockedInPhase2B)
                 nextApproval = {
                   id: appId,
                   title,
                   description: cmd,
-                  diffTitle: 'Simulated action preview',
+                  diffTitle: blockedInPhase2B
+                    ? 'Blocked in Phase 2B read-only mode'
+                    : 'Simulated action preview',
                   diffText: cmd,
-                  decision: 'pending',
+                  decision: blockedInPhase2B ? 'denied' : 'pending',
                 }
+              } else if (evt.type === 'approval.denied' && nextApproval) {
+                nextApproval = { ...nextApproval, decision: 'denied' }
               } else if (evt.type === 'approval.resolved' && nextApproval) {
                 const decision = evt.payload.decision === 'approved' ? 'approved' : 'denied'
                 nextApproval = { ...nextApproval, decision }
@@ -364,6 +370,9 @@ export function App() {
           await refreshSessionMessages(sessionId, latestRun)
           const sessRes = await bridge.listSessions({ agentId: botId })
           setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
+          if (latestRun.runtimeId === 'codex') {
+            void handleRefreshRuntime().catch(() => undefined)
+          }
         } else {
           scheduleNext(120)
         }
