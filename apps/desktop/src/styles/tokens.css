@@ -1,0 +1,32 @@
+:root {
+  --gb-canvas: #181818;
+  --gb-sidebar: #303030;
+  --gb-panel: #181818;
+  --gb-surface: #262626;
+  --gb-border: #393939;
+  --gb-text: #e8e8e8;
+  --gb-muted: #b6b6b6;
+  --gb-accent: #79978a;
+  --gb-radius-sm: 6px;
+  --gb-radius-md: 10px;
+  --gb-radius-lg: 14px;
+  --gb-font: system-ui, -apple-system, sans-serif;
+  --gb-font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--gb-canvas);
+  color: var(--gb-text);
+  font-family: var(--gb-font);
+  font-size: var(--gb-font-size);
+  line-height: 1.5;
+}

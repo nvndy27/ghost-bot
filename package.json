@@ -2,8 +2,22 @@
   "name": "ghost-bot",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
+    "dev": "pnpm --filter @ghost-bot/desktop dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "eslint packages apps tests",
     "test": "node --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^24.10.1",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.53.1"
   }
 }

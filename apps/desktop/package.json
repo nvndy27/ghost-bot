@@ -1,0 +1,26 @@
+{
+  "name": "@ghost-bot/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build": "vite build && tsc -p tsconfig.electron.json"
+  },
+  "dependencies": {
+    "@ghost-bot/avatar": "workspace:*",
+    "@ghost-bot/shared-types": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.5.2",
+    "electron": "^36.3.2",
+    "vite": "^6.3.5"
+  }
+}
