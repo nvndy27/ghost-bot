@@ -32,6 +32,6 @@ Renderer has no Node, secrets or direct CLI. Preload exposes allowlisted typed c
 ## Deployment
 Start single-user local. Bind IPC/daemon to local socket or loopback with random auth token and origin validation. Keep no internet-exposed gateway by default. Fedora systemd user service later with explicit enablement; sleep/shutdown interrupts local schedules. Remote worker only after threat model and encrypted transport. Electron sandbox/contextIsolation on, nodeIntegration off, CSP, strict navigation and external-link handling. Verify Wayland compatibility.
 
-## Phase 0 evidence
+## Phase 0 & Phase 1 evidence
 
-See [provider matrix](PROVIDER_MATRIX.md) for the observed Codex and OpenClaw surfaces. [ADR 0003](adr/0003-provider-probes-and-permissions.md) records how discovery evidence and execution permissions are evaluated. The proposed initial SQLite migration scope and transactional projection rules are in [DB schema](DB_SCHEMA.md).
+See [provider matrix](PROVIDER_MATRIX.md) for the observed Codex and OpenClaw surfaces. [ADR 0003](adr/0003-provider-probes-and-permissions.md), [ADR 0004](adr/0004-codex-jsonrpc-and-sandbox-containment.md), and [ADR 0005](adr/0005-node-sqlite-and-drizzle.md) record protocol discovery, sandbox containment, and `node:sqlite` + Drizzle decisions. The daemon owns `RuntimeRegistry` (`apps/daemon/src/runtime/registry.ts`), `RuntimePolicyBroker` (`apps/daemon/src/runtime/policy-broker.ts`), `BotRepository`, and `SettingsRepository` (`apps/daemon/src/settings/repository.ts`).

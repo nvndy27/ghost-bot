@@ -3,22 +3,23 @@ import { chmod } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
-import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
-import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import {
+  AppearanceSettingsSchema,
+  AppSettingsPatchSchema,
   BotIdSchema,
   CreateBotInputSchema,
   ImportAvatarSvgInputSchema,
   SetActiveBotParamsSchema,
   UpdateBotInputSchema,
 } from '@ghost-bot/shared-types/ipc'
-import type { DaemonHealthResponse, ProviderSummary } from '@ghost-bot/shared-types/ipc'
-import type { RuntimePermissionEvidence } from '@ghost-bot/shared-types/permissions'
+import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
 import { BotRepository } from './bots/repository.ts'
 import { openGhostBotDatabase } from './db/client.ts'
 import type { DatabaseHandle } from './db/client.ts'
 import { seedInitialBotsIfNeeded } from './db/seed.ts'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
+import { RuntimeRegistry } from './runtime/registry.ts'
+import { SettingsRepository } from './settings/repository.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -69,34 +70,13 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-export function resolveCodexVerifiedEvidence(
-  codexVersion: string | null,
-): RuntimePermissionEvidence | null {
-  // Bind permission evidence to verified Codex App Server >= 0.172.0 capabilities
-  // confirmed in Phase 0B/0C (read-only, ask-approval, workspace with excludeSlashTmp).
-  if (!codexVersion) return null
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(codexVersion.trim())
-  if (!match) return null
-  const major = Number(match[1])
-  const minor = Number(match[2])
-  if (major > 0 || (major === 0 && minor >= 172)) {
-    return {
-      sandboxEnforced: true,
-      approvalEnforced: true,
-      sensitiveActionsEnforced: true,
-      verifiedModes: ['read-only', 'ask-approval', 'workspace'],
-    }
-  }
-  return null
-}
-
 export class GhostBotDaemon {
   private readonly options: DaemonServerOptions
   private readonly runtimeMode: 'codex' | 'mock'
-  private readonly codex: CodexAppServerAdapter
-  private readonly mock: MockRuntimeAdapter
+  private readonly runtimeRegistry: RuntimeRegistry
   private dbHandle: DatabaseHandle | null = null
   private botRepo: BotRepository | null = null
+  private settingsRepo: SettingsRepository | null = null
   private server: Server | null = null
   private readonly startedAt = Date.now()
 
@@ -106,12 +86,10 @@ export class GhostBotDaemon {
     }
     this.options = options
     this.runtimeMode = options.runtimeMode ?? 'codex'
-    const evidence = resolveCodexVerifiedEvidence(options.codexVersion ?? '0.172.0')
-    this.codex = new CodexAppServerAdapter({
-      permissionEvidence: evidence,
-      fullAccessOptIn: false,
+    this.runtimeRegistry = new RuntimeRegistry({
+      runtimeMode: this.runtimeMode,
+      codexVersionOverride: options.codexVersion,
     })
-    this.mock = new MockRuntimeAdapter()
   }
 
   async start(): Promise<{ address: string }> {
@@ -123,6 +101,7 @@ export class GhostBotDaemon {
     seedInitialBotsIfNeeded(dbHandle)
     this.dbHandle = dbHandle
     this.botRepo = new BotRepository(dbHandle)
+    this.settingsRepo = new SettingsRepository(dbHandle)
 
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
@@ -155,14 +134,14 @@ export class GhostBotDaemon {
   }
 
   async stop(): Promise<void> {
-    await this.codex.close()
-    await this.mock.disconnect()
+    await this.runtimeRegistry.stop()
     if (this.server) {
       const srv = this.server
       this.server = null
       await new Promise<void>((resolve) => srv.close(() => resolve()))
     }
     this.botRepo = null
+    this.settingsRepo = null
     if (this.dbHandle) {
       this.dbHandle.close()
       this.dbHandle = null
@@ -190,9 +169,48 @@ export class GhostBotDaemon {
       }
 
       if (req.method === 'GET' && url.pathname === '/providers') {
-        const providers = await this.getProviders()
+        const providers = await this.runtimeRegistry.listProviders()
         sendJson(res, 200, providers)
         return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/runtime/snapshot') {
+        const refresh = url.searchParams.get('refresh') === '1'
+        const snap = await this.runtimeRegistry.getSnapshot(refresh)
+        sendJson(res, 200, snap)
+        return
+      }
+
+      const settingsRepo = this.settingsRepo
+      if (settingsRepo) {
+        if (req.method === 'GET' && url.pathname === '/settings') {
+          sendJson(res, 200, settingsRepo.getSettings())
+          return
+        }
+        if (req.method === 'PATCH' && url.pathname === '/settings') {
+          const body = await readJsonBody(req)
+          const parsed = AppSettingsPatchSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid settings patch', { statusCode: 400 })
+          }
+          sendJson(res, 200, settingsRepo.updateSettings(parsed.data))
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/settings/reset') {
+          sendJson(res, 200, settingsRepo.resetSettings())
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/settings/migrate-local') {
+          const body = await readJsonBody(req)
+          const parsed = AppearanceSettingsSchema.partial().safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid legacy settings payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, settingsRepo.migrateLegacyAppearance(parsed.data))
+          return
+        }
       }
 
       const repo = this.botRepo
@@ -287,43 +305,5 @@ export class GhostBotDaemon {
       const normalized = normalizeDaemonError(err)
       sendJson(res, normalized.statusCode, normalized.body)
     }
-  }
-
-  private async getProviders(): Promise<ProviderSummary[]> {
-    const list: ProviderSummary[] = []
-    if (this.runtimeMode === 'mock') {
-      list.push({
-        id: this.mock.id,
-        label: 'Mock Offline Runtime',
-        kind: 'mock',
-        status: 'mock',
-        detail: 'Explicit offline mock runtime (no real provider calls)',
-      })
-      return list
-    }
-
-    const codexAuth = await this.codex.getAuthStatus()
-    list.push({
-      id: this.codex.id,
-      label: 'OpenAI Codex (ChatGPT Subscription)',
-      kind: 'subscription',
-      status: codexAuth.status === 'connected' ? 'connected' : 'disconnected',
-      detail: codexAuth.detail ?? 'Managed ChatGPT profile',
-    })
-    list.push({
-      id: 'openclaw',
-      label: 'OpenClaw Gateway',
-      kind: 'local',
-      status: 'unavailable',
-      detail: 'Phase 0 probe verified read-only health; native adapter pending Phase 2',
-    })
-    list.push({
-      id: 'ollama',
-      label: 'Ollama Local',
-      kind: 'local',
-      status: 'unavailable',
-      detail: 'Local service not detected at 127.0.0.1:11434',
-    })
-    return list
   }
 }

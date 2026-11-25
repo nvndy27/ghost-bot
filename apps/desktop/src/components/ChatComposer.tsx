@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
+import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { MOCK_MODELS } from '../data/mockWorkspace.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
@@ -9,6 +10,7 @@ export interface ChatComposerProps {
   draft: string
   isStreaming: boolean
   isMockMode: boolean
+  runtimeSnapshot: RuntimeSnapshot | null
   onDraftChange: (value: string) => void
   onModelChange: (modelId: string) => void
   onEffortChange: (effort: string) => void
@@ -22,6 +24,7 @@ export function ChatComposer({
   draft,
   isStreaming,
   isMockMode,
+  runtimeSnapshot,
   onDraftChange,
   onModelChange,
   onEffortChange,
@@ -49,7 +52,13 @@ export function ChatComposer({
     }
   }
 
-  const activeModel = MOCK_MODELS.find((m) => m.id === bot.modelId) ?? MOCK_MODELS[0]
+  const availableModels = isMockMode
+    ? [...MOCK_MODELS]
+    : (runtimeSnapshot?.models ?? [])
+  const activeModel =
+    availableModels.find((m) => m.id === bot.modelId) ??
+    availableModels[0] ??
+    { id: bot.modelId, label: bot.modelId, efforts: ['low', 'medium', 'high'] }
   const canSend = isMockMode && !isStreaming && draft.trim().length > 0
 
   return (
@@ -85,25 +94,30 @@ export function ChatComposer({
 
             <select
               aria-label="Model"
-              value={isMockMode ? bot.modelId : 'unavailable'}
-              disabled={!isMockMode || isStreaming}
+              value={bot.modelId}
+              disabled={isStreaming || availableModels.length === 0}
               onChange={(e) => onModelChange(e.target.value)}
             >
-              {isMockMode ? (
-                MOCK_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))
+              {availableModels.length === 0 ? (
+                <option value={bot.modelId}>No models discovered</option>
               ) : (
-                <option value="unavailable">Models connect in Phase 2</option>
+                <>
+                  {!availableModels.some((m) => m.id === bot.modelId) && (
+                    <option value={bot.modelId}>{bot.modelId} (Unavailable)</option>
+                  )}
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </>
               )}
             </select>
 
             <select
               aria-label="Reasoning effort"
               value={bot.effort}
-              disabled={!isMockMode || isStreaming}
+              disabled={isStreaming || availableModels.length === 0}
               onChange={(e) => onEffortChange(e.target.value)}
             >
               {activeModel.efforts.map((eff) => (

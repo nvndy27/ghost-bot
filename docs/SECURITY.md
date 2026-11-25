@@ -16,6 +16,12 @@ contextIsolation, sandbox, nodeIntegration:false, restrictive CSP, validate IPC 
 ## Meeting assistant
 Only with participant awareness/consent and platform-supported integration; opt-in recording, transcript retention and deletion controls. No covert recording.
 
+## Phase 1D Settings & Runtime Bridge boundary
+
+- `SettingsRepository` persists only non-secret user preferences (`general`, `appearance`, `personalization`, `permissions`, `privacy`) under `app.settings.v1`; credentials, access tokens, and refresh tokens are never stored in SQLite or exposed to renderer state. Mandatory secret redaction (`redactSecrets`, `redactStructuredValue`) is always enforced and cannot be disabled by the user; `privacy.redactLogs` controls optional extra diagnostic masking only.
+- `RuntimeRegistry` and `RuntimePolicyBroker` expose metadata-only endpoints (`GET /runtime/snapshot`, `GET /providers`) with request deduplication, 30s TTL caching, runtime generation & account-switch cache invalidation, secret redaction, and zero model inference (`turn/start` is not exposed in Phase 1D).
+- `RuntimePolicyBroker` binds verified permission evidence to the exact verified Codex version set (`0.172.0`) and fails closed on unverified older or newer versions, `full-access`, `mock` execution, `apiKey` accounts, and non-canonical workspaces. Dedicated `~/.config/ghost-bot/codex-profile` uses `0600` `auth.json` managed by official Codex CLI login without touching `~/.codex`.
+
 ## Phase 1C persistence and custom SVG boundary
 
 - SQLite persistence (`ghost-bot.sqlite`, `-wal`, `-shm`) is owned exclusively by `@ghost-bot/daemon` under a canonicalized `0700` data directory with `0600` file permissions, separate from the `0700` Unix socket runtime directory. Foreign keys and `BEGIN IMMEDIATE` transactions are enforced on every connection.
