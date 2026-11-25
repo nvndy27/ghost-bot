@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { avatarPresets } from '@ghost-bot/avatar/presets'
 import type { ProviderSummary } from '@ghost-bot/shared-types/ipc'
+import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, UiPreferences } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 
@@ -48,12 +49,14 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SectionId>('appearance')
+  const modalRef = useRef<HTMLDivElement | null>(null)
+  useModalDialog(open, modalRef, onClose)
 
   if (!open) return null
 
   return (
     <div className="gb-modal-backdrop" role="dialog" aria-modal="true" aria-label="Settings">
-      <div className="gb-modal">
+      <div ref={modalRef} tabIndex={-1} className="gb-modal">
         <div className="gb-modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <strong>Settings</strong>

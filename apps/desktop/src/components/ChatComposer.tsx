@@ -39,6 +39,8 @@ export function ChatComposer({
   }, [draft])
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ignore Enter during IME composition (e.g. Vietnamese Telex/VNI, Japanese, Chinese).
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (!isStreaming && draft.trim() && isMockMode) {

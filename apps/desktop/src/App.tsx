@@ -164,6 +164,8 @@ export function App() {
     if (!overrideText) setDraft('')
 
     const botId = activeBot.id
+    const botName = activeBot.name
+    const toolId = `tool-${Date.now()}`
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
@@ -182,7 +184,7 @@ export function App() {
       text: '',
       streaming: true,
       timestamp: 'Just now',
-      tools: [{ id: `tool-${Date.now()}`, label: 'Simulated workspace check', status: 'running' }],
+      tools: [{ id: toolId, label: 'Simulated workspace check', status: 'running' }],
     }
 
     setMessagesByBot((prev) => ({
@@ -212,14 +214,14 @@ export function App() {
             text: partial,
             streaming: !finished,
             tools: finished
-              ? [{ id: `tool-done-${Date.now()}`, label: 'Simulated workspace check', status: 'done' }]
+              ? [{ id: toolId, label: 'Simulated workspace check', status: 'done' }]
               : m.tools,
             approval:
               finished && includeApproval
                 ? {
                     id: `app-${Date.now()}`,
                     title: 'Approval required',
-                    description: `${activeBot.name} requests simulated file edit`,
+                    description: `${botName} requests simulated file edit`,
                     diffTitle: 'notes.md (simulated preview)',
                     diffText: '--- a/notes.md\n+++ b/notes.md\n+ Added simulated task item',
                     decision: 'pending',
@@ -319,7 +321,7 @@ export function App() {
         <ChatComposer
           bot={activeBot}
           draft={draft}
-          isStreaming={streamingBotId === activeBot.id}
+          isStreaming={streamingBotId !== null}
           isMockMode={isMockMode}
           onDraftChange={setDraft}
           onModelChange={(modelId) => updateActiveBot({ modelId })}

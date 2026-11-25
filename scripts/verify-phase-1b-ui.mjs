@@ -57,14 +57,24 @@ try {
   // 1. Dark workspace 1440x900
   await page.screenshot({ path: join(outDir, 'workspace-dark-1440x900.png') })
 
-  // 2. Approval & Diff preview
-  await page.getByRole('button', { name: 'Review diff' }).click()
+  // 2. Approval & Diff preview + Escape restoration
+  const reviewDiffBtn = page.getByRole('button', { name: 'Review diff' })
+  await reviewDiffBtn.focus()
+  await reviewDiffBtn.click()
   await page.waitForSelector('text=ROADMAP.md (simulated preview)')
   await page.screenshot({ path: join(outDir, 'approval-and-diff.png') })
-  await page.getByRole('button', { name: 'Close diff preview' }).click()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('text=ROADMAP.md (simulated preview)').count(), 0, 'Escape should close diff modal')
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Review diff',
+    'Focus should restore to Review diff trigger',
+  )
 
-  // 3. Settings Appearance + 12 avatars + 7 states
-  await page.getByRole('button', { name: 'Open Settings' }).click()
+  // 3. Settings Appearance + 12 avatars + 7 states + focus trap + Escape
+  const settingsBtn = page.getByRole('button', { name: 'Open Settings' })
+  await settingsBtn.focus()
+  await settingsBtn.click()
   await page.waitForSelector('text=Ghost Avatar Presets (12)')
   const presetCount = await page.locator('[aria-label$=" preset"]').count()
   assert.equal(presetCount, 12, 'Expected 12 avatar presets')
@@ -72,22 +82,34 @@ try {
   assert.equal(stateCount, 7, 'Expected 7 avatar states')
   await page.screenshot({ path: join(outDir, 'settings-appearance.png') })
 
+  // Verify focus stays inside Settings dialog when pressing Shift+Tab from first focusable
+  await page.keyboard.press('Shift+Tab')
+  const insideSettings = await page.evaluate(
+    () => Boolean(document.activeElement?.closest('[role="dialog"]')),
+  )
+  assert.equal(insideSettings, true, 'Focus trap must keep focus inside Settings dialog')
+
   // Scroll down in settings content to capture avatar states cleanly
   await page.locator('.gb-settings-content').evaluate((el) => {
     el.scrollTop = el.scrollHeight
   })
   await page.screenshot({ path: join(outDir, 'avatar-states.png') })
 
-  // Switch to Light theme
+  // Switch to Light theme and verify persistence across reload
   await page.getByLabel('Theme').selectOption('light')
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light')
-  await page.getByRole('button', { name: 'Close settings' }).click()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('[role="dialog"]').count(), 0, 'Escape should close Settings')
   await page.screenshot({ path: join(outDir, 'workspace-light-1440x900.png') })
 
-  // Switch back to Dark theme for collapsed screenshot
+  await page.reload({ waitUntil: 'networkidle' })
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'light', 'Theme preference should persist across reload')
+
+  // Switch to System and then Dark theme for collapsed screenshot
   await page.getByRole('button', { name: 'Open Settings' }).click()
+  await page.getByLabel('Theme').selectOption('system')
   await page.getByLabel('Theme').selectOption('dark')
-  await page.getByRole('button', { name: 'Close settings' }).click()
+  await page.keyboard.press('Escape')
 
   // 4. Bot search & selection
   await page.getByLabel('Search bots').fill('Researcher')
@@ -103,6 +125,19 @@ try {
   assert.equal(fullAccessDisabled, true, 'Full Access must remain disabled')
 
   const composer = page.getByLabel('Message Researcher')
+  // Whitespace-only message cannot be submitted
+  await composer.fill('   ')
+  assert.equal(await page.getByRole('button', { name: 'Send message' }).isDisabled(), true)
+
+  // IME composition Enter must not send
+  await composer.fill('Tiếng Việt')
+  await composer.evaluate((el) => {
+    const evt = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    Object.defineProperty(evt, 'isComposing', { value: true })
+    el.dispatchEvent(evt)
+  })
+  assert.equal(await page.locator('text=Simulated mock reply').count(), 0, 'IME Enter must not send')
+
   await composer.fill('Line 1')
   await composer.press('Shift+Enter')
   await composer.type('Line 2')
@@ -118,12 +153,21 @@ try {
   await page.getByRole('button', { name: 'Collapse workspace panel' }).click()
   await page.screenshot({ path: join(outDir, 'sidebars-collapsed.png') })
 
-  // 7. Minimum window size check (no horizontal overflow)
-  await page.setViewportSize({ width: 960, height: 640 })
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  )
-  assert.equal(overflow, false, 'Expected no horizontal overflow at 960x640')
+  // 7. Viewport matrix check (no horizontal overflow at 1920x1080, 1440x900, 1366x768, 960x640)
+  await page.getByRole('button', { name: 'Expand left sidebar' }).click()
+  await page.getByRole('button', { name: 'Expand right workspace' }).click()
+  for (const vp of [
+    { width: 1920, height: 1080 },
+    { width: 1440, height: 900 },
+    { width: 1366, height: 768 },
+    { width: 960, height: 640 },
+  ]) {
+    await page.setViewportSize(vp)
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    )
+    assert.equal(overflow, false, `Expected no horizontal overflow at ${vp.width}x${vp.height}`)
+  }
 
   assert.deepEqual(consoleErrors, [], `Unexpected console errors: ${consoleErrors.join('; ')}`)
   console.log(JSON.stringify({ uiVerification: 'passed', screenshots: 6, consoleErrors: 0 }))

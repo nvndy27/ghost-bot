@@ -16,7 +16,7 @@ Opt-in integration: Codex dedicated ChatGPT profile (`node scripts/verify-codex-
 
 - `pnpm lint` — **pass** (0 errors across `packages`, `apps`, `tests`).
 - `pnpm typecheck` — **pass** across all 5 TypeScript workspace packages.
-- `pnpm test` — **25/25 offline tests pass** (Phase 0 + Step 0 hardening + Phase 1A daemon/IPC/security).
+- `pnpm test` — **27/27 offline tests pass** (Phase 0 + Step 0 hardening + Phase 1A daemon/IPC/security + Phase 1B `UiPreferencesSchema` fallback).
 - `pnpm build` — **pass** (Vite renderer bundle + Electron main/preload compilation + daemon typecheck).
 - `GHOST_BOT_SMOKE_EXIT=1 GHOST_BOT_RUNTIME_MODE=mock pnpm --filter @ghost-bot/desktop exec electron dist-electron/main.js` — **pass** (verifies React render, `sandbox: true`, preload IPC `getAppInfo`/`getDaemonHealth`/`listProviders`, and 0 console errors).
-- `node scripts/verify-phase-1b-ui.mjs` — **pass** (Playwright UI tests + 6 screenshots in `design/reviews/phase-1b/`, 0 console errors, 960x640 no-overflow).
+- `node scripts/verify-phase-1b-ui.mjs` — **pass** (Playwright UI tests across `1920x1080`, `1440x900`, `1366x768`, `960x640` + IME guard + modal focus trap/Escape + reload persistence + 6 screenshots in `design/reviews/phase-1b/`, 0 console errors).

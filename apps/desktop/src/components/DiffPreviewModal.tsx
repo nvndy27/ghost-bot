@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { PendingApproval } from '../types/workspace.ts'
 
 export function DiffPreviewModal({
@@ -7,11 +9,19 @@ export function DiffPreviewModal({
   approval: PendingApproval | null
   onClose: () => void
 }) {
+  const modalRef = useRef<HTMLDivElement | null>(null)
+  useModalDialog(approval !== null, modalRef, onClose)
+
   if (!approval) return null
 
   return (
     <div className="gb-modal-backdrop" role="dialog" aria-modal="true" aria-label="Diff preview">
-      <div className="gb-modal" style={{ maxWidth: '620px' }}>
+      <div
+        ref={modalRef}
+        tabIndex={-1}
+        className="gb-modal"
+        style={{ maxWidth: '620px' }}
+      >
         <div className="gb-modal-head">
           <strong>{approval.diffTitle}</strong>
           <button type="button" onClick={onClose} aria-label="Close diff preview">
