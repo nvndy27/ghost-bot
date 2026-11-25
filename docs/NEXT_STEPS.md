@@ -1,9 +1,10 @@
 # Next steps
 
-Phase 1A (desktop scaffold) is **Verified**. Proceed to **Phase 1B — Main workspace UI** after acceptance review:
+Phase 1B (main workspace UI) is **Verified** and ready for visual review. Next milestone: **Phase 1C — Bot management and persistence**:
 
-1. Implement the three-panel desktop layout in `apps/desktop/src/` matching `design/references/workspace-dark.png` and `prototype/` (left sidebar with search, bot list, animated SVG avatars, create bot button, teams, settings; center workspace with header, message stream, tool/approval cards, bottom composer with model/effort/permission selectors and send/stop; right sidebar with live workspace placeholder, active tasks, routines, connected tools, account usage).
-2. Support Light, Dark, and System themes using `design/tokens.json`, resizable/collapsible sidebars, keyboard navigation, and `prefers-reduced-motion`.
-3. Follow sequentially with Phase 1C (SQLite migrations, Bot CRUD, Ghost Avatar System) and Phase 1D (ChatGPT-inspired 13-section Settings & runtime bridge).
+1. Implement SQLite with versioned migrations in `@ghost-bot/daemon` (`agents`, `teams`, `team_members`, `provider_accounts`, `model_profiles`, `sessions`, `messages`, `settings`, `usage_records`, `audit_logs` per `docs/DB_SCHEMA.md`).
+2. Implement persistent Bot CRUD (create, rename, edit instructions, duplicate, delete with confirmation, provider/model/effort/permission/workspace configuration) over typed Zod-validated IPC.
+3. Implement the full Ghost Avatar System editor (shape, color palette, eye style, rotation, randomize, live preview, sanitized custom SVG upload) and migrate temporary UI preferences from `localStorage` to SQLite.
+4. Proceed to Phase 1D (13-section Settings & runtime bridge) after Phase 1C acceptance.
 
-Start with [progress](PROGRESS.md), [design system](DESIGN_SYSTEM.md), and [DB schema](DB_SCHEMA.md).
+Start with [progress](PROGRESS.md), [DB schema](DB_SCHEMA.md), and [design system](DESIGN_SYSTEM.md).

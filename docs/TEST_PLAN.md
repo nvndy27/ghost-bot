@@ -11,3 +11,12 @@ Opt-in integration: Codex dedicated ChatGPT profile (`node scripts/verify-codex-
 - `node scripts/verify-codex-live.mjs` — **all live Codex checks pass** on `gpt-6.2-sol` (`chatgpt` `plus` profile): streaming, read-only read, denied write, workspace write, outside-workspace write blocked (`excludeSlashTmp: true`), approval rejection with no side effect, cancellation, and session resume continuity.
 - `node scripts/probe-openclaw.mjs` & `openclaw gateway probe --json` — **pass** (`ok: true`, `ws://127.0.0.1:18789`, `operator.read`).
 - `node scripts/probe-ollama.mjs` — **blocked** (no local Ollama binary or listener at `127.0.0.1:11434`).
+
+## Phase 1A & 1B commands and results
+
+- `pnpm lint` — **pass** (0 errors across `packages`, `apps`, `tests`).
+- `pnpm typecheck` — **pass** across all 5 TypeScript workspace packages.
+- `pnpm test` — **27/27 offline tests pass** (Phase 0 + Step 0 hardening + Phase 1A daemon/IPC/security + Phase 1B `UiPreferencesSchema` fallback).
+- `pnpm build` — **pass** (Vite renderer bundle + Electron main/preload compilation + daemon typecheck).
+- `GHOST_BOT_SMOKE_EXIT=1 GHOST_BOT_RUNTIME_MODE=mock pnpm --filter @ghost-bot/desktop exec electron dist-electron/main.js` — **pass** (verifies React render, `sandbox: true`, preload IPC `getAppInfo`/`getDaemonHealth`/`listProviders`, and 0 console errors).
+- `node scripts/verify-phase-1b-ui.mjs` — **pass** (Playwright UI tests across `1920x1080`, `1440x900`, `1366x768`, `960x640` + IME guard + modal focus trap/Escape + reload persistence + 6 screenshots in `design/reviews/phase-1b/`, 0 console errors).
