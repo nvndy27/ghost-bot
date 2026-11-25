@@ -280,7 +280,7 @@ export class GhostBotDaemon {
       if (req.method === 'POST' && url.pathname === '/runtime/reconnect') {
         const snap = await this.runtimeRegistry.reconnect()
         if (this.runOrchestrator) {
-          await this.runOrchestrator.reconnectRuntime().catch(() => undefined)
+          await this.runOrchestrator.reconnectRuntime()
         }
         sendJson(res, 200, snap)
         return
@@ -487,7 +487,7 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          sendJson(res, 200, orchestrator.inspectSession(idCheck.data))
+          sendJson(res, 200, await orchestrator.inspectSession(idCheck.data))
           return
         }
 

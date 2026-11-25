@@ -18,7 +18,7 @@ if (process.env.GHOST_BOT_RUN_LIVE_RECOVERY !== '1') {
   process.exit(0)
 }
 
-const MAX_TURNS_BUDGET = 1
+const MAX_TURNS_BUDGET = 2
 let attemptedTurns = 0
 
 function consumeTurnBudget(label) {
@@ -137,15 +137,44 @@ try {
     await page.waitForSelector('text=Chief of Staff')
     await page.waitForSelector('text=GHOST_2D_TOKEN_91', { timeout: 15_000 })
 
+    // Verify no automatic inference occurred during restart before reconnect
+    const preReconnectDb = new DatabaseSync(join(dataDir, 'ghost-bot.sqlite'))
+    try {
+      const preRuns = preReconnectDb
+        .prepare('SELECT id, status FROM runs WHERE session_id = ?')
+        .all(sessionId)
+      assert.equal(preRuns.length, 1, `Expected 1 run before reconnect, got ${preRuns.length}`)
+    } finally {
+      preReconnectDb.close()
+    }
+
     const reconnected = await page.evaluate(() => window.ghostBot.reconnectRuntime())
     assert.equal(reconnected.status, 'available')
     assert.equal(reconnected.lifecycleState, 'connected')
 
     const inspection = await page.evaluate((id) => window.ghostBot.inspectSession(id), sessionId)
-    assert.equal(inspection.providerThreadStatus, 'unknown')
+    assert.equal(inspection.providerThreadStatus, 'accessible')
     assert.equal(inspection.resumable, true)
     assert.equal(inspection.quarantined, false)
-    await page.screenshot({ path: join(outDir, '04-live-reconnected-inspected.png') })
+
+    const composer = page.getByLabel('Message Chief of Staff')
+    consumeTurnBudget('Turn 2')
+    await composer.fill('What exact token did I ask you to reply with in the previous turn?')
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await page.waitForFunction(
+      () => !document.querySelector('button[aria-label="Stop generation"]'),
+      null,
+      { timeout: 45_000 },
+    )
+    await page.screenshot({ path: join(outDir, '04-live-turn2-reconnected.png') })
+
+    const msgs = await page.evaluate((id) => window.ghostBot.listMessages({ sessionId: id }), sessionId)
+    const assistantMessages = msgs.messages.filter((m) => m.role === 'assistant')
+    assert.equal(assistantMessages.length, 2, `Expected 2 assistant messages, got ${assistantMessages.length}`)
+    assert.ok(
+      assistantMessages[1].text.includes('GHOST_2D_TOKEN_91'),
+      `Expected Turn 2 reply to recall GHOST_2D_TOKEN_91, got: ${assistantMessages[1].text}`,
+    )
   } finally {
     await app2.close()
   }
@@ -161,8 +190,14 @@ try {
     const runs = db2
       .prepare('SELECT id, status FROM runs WHERE session_id = ? ORDER BY created_at ASC')
       .all(sessionId)
-    assert.equal(runs.length, 1, `Expected 1 run after restart/reconnect, got ${runs.length}`)
+    assert.equal(runs.length, 2, `Expected 2 runs after Turn 2, got ${runs.length}`)
     assert.equal(runs[0].status, 'completed')
+    assert.equal(runs[1].status, 'completed')
+
+    const evtCount = db2
+      .prepare('SELECT COUNT(*) AS cnt FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE session_id = ?)')
+      .get(sessionId).cnt
+    assert.ok(Number(evtCount) >= 4, `Expected persisted run_events >= 4, got ${evtCount}`)
   } finally {
     db2.close()
   }

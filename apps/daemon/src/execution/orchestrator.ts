@@ -887,7 +887,7 @@ export class RunOrchestrator {
     this.clearAllQuarantine()
   }
 
-  inspectSession(sessionId: string): {
+  async inspectSession(sessionId: string): Promise<{
     sessionId: string
     agentId: string
     runtimeId: string
@@ -899,7 +899,7 @@ export class RunOrchestrator {
     quarantined: boolean
     lastRun: RunRecord | null
     approvalsCount: number
-  } {
+  }> {
     const sess = this.dbHandle.sqlite
       .prepare(
         `SELECT id, agent_id, account_id, runtime_id, external_session_id, archived_at FROM sessions WHERE id = ?`,
@@ -958,12 +958,7 @@ export class RunOrchestrator {
       reason = `Session runtime "${sess.runtime_id}" differs from bot runtime "${bot.runtime_id}"; start a New chat.`
     }
 
-    const toolCountRow = lastRunRow
-      ? (this.dbHandle.sqlite
-          .prepare(`SELECT COUNT(*) AS cnt FROM run_events WHERE run_id = ? AND type = 'tool.started'`)
-          .get(lastRunRow.id) as { cnt: number } | undefined)
-      : undefined
-    const hasToolActivity = Number(toolCountRow?.cnt ?? 0) > 0
+    const hasToolActivity = lastRunRow ? this.hasToolActivityForRun(lastRunRow.id) : false
 
     let providerThreadStatus: 'not_applicable' | 'accessible' | 'unavailable' | 'unknown' =
       'not_applicable'
@@ -971,7 +966,46 @@ export class RunOrchestrator {
       if (!sess.external_session_id) {
         providerThreadStatus = 'unavailable'
       } else {
-        providerThreadStatus = 'unknown'
+        let accountMismatch = false
+        if (this.runtimeRegistry) {
+          const snap = await this.runtimeRegistry.getSnapshot(false).catch(() => null)
+          if (snap?.status === 'available' && snap.lifecycleState === 'connected') {
+            try {
+              const exec = await this.runtimeRegistry.getExecutionAdapter()
+              const currentAccountKey = `${snap.authMethod}:${snap.planType ?? ''}:${snap.workspaceName ?? ''}`
+              if (
+                sess.account_id &&
+                sess.account_id !== 'local' &&
+                sess.account_id !== 'local-default' &&
+                sess.account_id !== currentAccountKey
+              ) {
+                accountMismatch = true
+                providerThreadStatus = 'unavailable'
+                resumable = false
+                reason = 'Session belongs to a different account; start a New chat.'
+              } else if (typeof exec.adapter.readThread === 'function') {
+                const threadRead = await exec.adapter.readThread(sess.external_session_id)
+                providerThreadStatus = threadRead.accessible ? 'accessible' : 'unavailable'
+                if (!threadRead.accessible) {
+                  resumable = false
+                  reason =
+                    threadRead.reason ?? 'Provider thread is no longer accessible; start a New chat.'
+                }
+              } else {
+                providerThreadStatus = 'unknown'
+              }
+            } catch {
+              providerThreadStatus = 'unknown'
+            }
+          } else {
+            providerThreadStatus = 'unknown'
+          }
+        } else {
+          providerThreadStatus = 'unknown'
+        }
+        if (accountMismatch) {
+          providerThreadStatus = 'unavailable'
+        }
       }
     }
 
@@ -990,7 +1024,26 @@ export class RunOrchestrator {
     }
   }
 
-  async retryRun(input: { runId: string; idempotencyKey: string }): Promise<StartRunResult> {
+  private hasToolActivityForRun(runId: string): boolean {
+    const toolCountRow = this.dbHandle.sqlite
+      .prepare(
+        `SELECT COUNT(*) AS cnt
+         FROM run_events
+         WHERE run_id = ? AND type IN ('tool.started', 'tool.requested', 'tool.completed', 'approval.requested')`,
+      )
+      .get(runId) as { cnt: number } | undefined
+    if (Number(toolCountRow?.cnt ?? 0) > 0) return true
+    const appRow = this.dbHandle.sqlite
+      .prepare(`SELECT COUNT(*) AS cnt FROM approvals WHERE run_id = ?`)
+      .get(runId) as { cnt: number } | undefined
+    return Number(appRow?.cnt ?? 0) > 0
+  }
+
+  async retryRun(input: {
+    runId: string
+    idempotencyKey: string
+    confirmSideEffects?: boolean
+  }): Promise<StartRunResult> {
     const orig = this.getRun(input.runId)
     if (orig.status !== 'failed' && orig.status !== 'interrupted' && orig.status !== 'cancelled') {
       throw new DaemonError(
@@ -1004,6 +1057,13 @@ export class RunOrchestrator {
         'RUN_STOP_UNCONFIRMED',
         `Cannot retry while previous cancellation in session "${orig.sessionId}" is unconfirmed.`,
         { statusCode: 409, retryable: true },
+      )
+    }
+    if (this.hasToolActivityForRun(orig.id) && input.confirmSideEffects !== true) {
+      throw new DaemonError(
+        'RETRY_CONFIRMATION_REQUIRED',
+        'Previous run had tool or approval activity that may have already applied side effects. Explicit confirmation is required before retrying.',
+        { statusCode: 409 },
       )
     }
 

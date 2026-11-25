@@ -1,10 +1,10 @@
 # Next steps
 
-## Phase 2D release gate
+## Phase 2E — Packaging & remaining Phase 2 MVP adapters
 
-1. Review the [latest Phase 2D evidence](PROGRESS.md#phase-2d-continuation--2026-11-26), including Fedora packaging and offline recovery.
-2. With a fresh authorized turn budget, finish the Codex restart/reconnect check and verify provider-side access to the persisted thread before claiming live continuation.
-3. Re-evaluate the Phase 2D acceptance gate before merging. Keep other phases on their existing branches.
+1. Build and verify the Fedora RPM package (`pnpm package:rpm`) in an environment with `libcrypt.so.1` (`libxcrypt-compat`) or system `fpm` (`USE_SYSTEM_FPM=true`).
+2. Complete remaining Phase 2 items: OpenClaw Gateway adapter (if verified), optional local Ollama adapter, and usage source/reset timestamp polish.
+3. Keep `full-access` (`dangerFullAccess`) and persistent `Approve Always` gated until explicit verification.
 
 ## Earlier Phase 2 plan
 

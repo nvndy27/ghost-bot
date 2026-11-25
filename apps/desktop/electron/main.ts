@@ -555,7 +555,12 @@ function registerIpcHandlers(): void {
       StartRunResponseSchema,
       {
         method: 'POST',
-        body: { idempotencyKey: parsed.idempotencyKey },
+        body: {
+          idempotencyKey: parsed.idempotencyKey,
+          ...(parsed.confirmSideEffects !== undefined
+            ? { confirmSideEffects: parsed.confirmSideEffects }
+            : {}),
+        },
       },
     )
   })

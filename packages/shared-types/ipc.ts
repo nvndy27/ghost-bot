@@ -568,6 +568,7 @@ export const RetryRunInputSchema = z
   .object({
     runId: RunIdSchema,
     idempotencyKey: z.string().trim().min(1).max(128),
+    confirmSideEffects: z.boolean().optional(),
   })
   .strict()
 

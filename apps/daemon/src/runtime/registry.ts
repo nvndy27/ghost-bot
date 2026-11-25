@@ -39,6 +39,7 @@ export interface CodexMetadataClient {
 export interface CodexExecutionClient extends CodexMetadataClient {
   createSession(config: SessionConfig): Promise<Session>
   resumeSession(threadId: string, config: SessionConfig): Promise<Session>
+  readThread?(threadId: string): Promise<{ accessible: boolean; reason?: string }>
   run(request: AgentRequest): AsyncIterable<AgentEvent>
   cancel(runId: string): Promise<void>
 }
@@ -110,12 +111,23 @@ export class RuntimeRegistry {
     this.cachedSnapshot = null
     this.cachedAtMs = 0
     this.lastAccountKey = null
-    this.lifecycleState = 'disconnected'
     if (this.codexClient) {
       const client = this.codexClient
-      this.codexClient = null
-      await client.close().catch(() => undefined)
+      try {
+        await client.close()
+        this.codexClient = null
+      } catch (err) {
+        this.lifecycleState = 'failed'
+        throw new DaemonError(
+          'RUNTIME_TERMINATION_FAILED',
+          err instanceof Error
+            ? `Failed to terminate owned runtime process: ${err.message}`
+            : 'Failed to terminate owned runtime process',
+          { statusCode: 503, retryable: true },
+        )
+      }
     }
+    this.lifecycleState = 'disconnected'
     return this.generation
   }
 

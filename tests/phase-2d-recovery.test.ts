@@ -149,14 +149,15 @@ test('Phase 2D recovery: inspectSession, manual retry, and quarantine persistenc
     for (let i = 0; i < 40 && !isTerminalStatus(orchestrator.getRun(failStart.run.id).status); i += 1) {
       await new Promise((r) => setTimeout(r, 20))
     }
-    const insp1 = orchestrator.inspectSession(sess.id)
+    const insp1 = await orchestrator.inspectSession(sess.id)
     assert.equal(insp1.resumable, true)
     assert.equal(insp1.lastRun?.status, 'failed')
 
-    // Manual retry creates a new run without auto-replaying
+    // Manual retry creates a new run without auto-replaying (explicitly confirming tool activity)
     const retried = await orchestrator.retryRun({
       runId: failStart.run.id,
       idempotencyKey: 'k-2d-retry-1',
+      confirmSideEffects: true,
     })
     assert.notEqual(retried.run.id, failStart.run.id)
 
@@ -166,7 +167,7 @@ test('Phase 2D recovery: inspectSession, manual retry, and quarantine persistenc
       orchestrator as unknown as { sessionsWithUnconfirmedStop: Map<string, number> }
     ).sessionsWithUnconfirmedStop.set(sess.id, registry.getGeneration())
     await registry.closeOwnedClient()
-    const inspQ = orchestrator.inspectSession(sess.id)
+    const inspQ = await orchestrator.inspectSession(sess.id)
     assert.equal(inspQ.quarantined, true)
     assert.equal(inspQ.resumable, false)
 
@@ -181,7 +182,7 @@ test('Phase 2D recovery: inspectSession, manual retry, and quarantine persistenc
     )
 
     await orchestrator.reconnectRuntime()
-    const inspAfterReconnect = orchestrator.inspectSession(sess.id)
+    const inspAfterReconnect = await orchestrator.inspectSession(sess.id)
     assert.equal(inspAfterReconnect.quarantined, false)
     assert.equal(inspAfterReconnect.resumable, true)
 
@@ -189,14 +190,138 @@ test('Phase 2D recovery: inspectSession, manual retry, and quarantine persistenc
     ;(orchestrator as unknown as { addQuarantine: (sid: string) => void }).addQuarantine(sess.id)
     await orchestrator.stop()
     const orchestratorReloaded = new RunOrchestrator(dbHandle, { runtimeRegistry: registry })
-    assert.equal(orchestratorReloaded.inspectSession(sess.id).quarantined, true)
+    assert.equal((await orchestratorReloaded.inspectSession(sess.id)).quarantined, true)
     dbHandle.sqlite
       .prepare("UPDATE sessions SET runtime_id = 'codex', external_session_id = ? WHERE id = ?")
       .run('thread-not-verified', sess.id)
     assert.equal(registry.getLifecycleState(), 'connected')
-    assert.equal(orchestratorReloaded.inspectSession(sess.id).providerThreadStatus, 'unknown')
+    assert.equal((await orchestratorReloaded.inspectSession(sess.id)).providerThreadStatus, 'unknown')
     await orchestratorReloaded.stop()
 
+    await registry.stop()
+    dbHandle.close()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Phase 2D security: termination failure keeps quarantine, tool retry requires confirmation, and inspectSession checks account & thread', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ghost-bot-2d-sec-'))
+  try {
+    const dbHandle = await openGhostBotDatabase(dir)
+    seedInitialBotsIfNeeded(dbHandle)
+    const sessionRepo = new SessionRepository(dbHandle)
+    let readThreadResult: { accessible: boolean; reason?: string } = { accessible: true }
+    let closeShouldFail = true
+
+    const fakeCodexClient = {
+      id: 'codex',
+      checkAvailability: async () => ({ available: true, detail: 'ok' }),
+      getAccountSummary: async () => ({
+        accountPresent: true,
+        accountType: 'chatgpt' as const,
+        email: 'owner@example.com',
+        planType: 'plus',
+        workspaceName: 'ws-1',
+        requiresOpenaiAuth: false,
+      }),
+      listModels: async () => [],
+      getUsageSummary: async () => ({ available: true, windows: [], detail: 'ok' }),
+      createSession: async () => ({ id: 't1', externalId: 't1', runtimeId: 'codex' }),
+      resumeSession: async (threadId: string) => ({
+        id: threadId,
+        externalId: threadId,
+        runtimeId: 'codex',
+      }),
+      readThread: async () => readThreadResult,
+      run: async function* () {},
+      cancel: async () => undefined,
+      close: async () => {
+        if (closeShouldFail) {
+          throw new Error('simulated SIGKILL failure')
+        }
+      },
+    }
+
+    const registry = new RuntimeRegistry({
+      runtimeMode: 'codex',
+      codexVersionOverride: '0.172.0',
+      codexClientFactory: () => fakeCodexClient,
+    })
+    await registry.getSnapshot(true)
+
+    const orchestrator = new RunOrchestrator(dbHandle, { runtimeRegistry: registry })
+    const sess = sessionRepo.createSession({ agentId: 'chief', title: 'Security Test' })
+
+    // 1. Failed runtime termination MUST NOT clear quarantine
+    ;(orchestrator as unknown as { addQuarantine: (sid: string) => void }).addQuarantine(sess.id)
+    await assert.rejects(() => orchestrator.reconnectRuntime(), /Failed to terminate owned runtime process/)
+    assert.equal((await orchestrator.inspectSession(sess.id)).quarantined, true)
+
+    // Once termination succeeds, quarantine clears
+    closeShouldFail = false
+    await orchestrator.reconnectRuntime()
+    await registry.getSnapshot(true)
+    assert.equal((await orchestrator.inspectSession(sess.id)).quarantined, false)
+
+    // 2. Retry on an interrupted run with tool/approval activity requires explicit confirmSideEffects: true
+    const runId = 'run-tool-interrupted'
+    const now = new Date().toISOString()
+    dbHandle.sqlite
+      .prepare(
+        `INSERT INTO runs (id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, config_snapshot_json, status, started_at, created_at)
+         VALUES (?, ?, 'chief', 'k-tool-1', 'mock', 'mock-model', 'medium', 'read-only', '{}', 'interrupted', ?, ?)`,
+      )
+      .run(runId, sess.id, now, now)
+    dbHandle.sqlite
+      .prepare(
+        `INSERT INTO messages (id, session_id, run_id, role, content_json, status, seq_order, created_at, updated_at)
+         VALUES ('msg-u-1', ?, ?, 'user', '{"text":"Do risky tool"}', 'complete', 1, ?, ?)`,
+      )
+      .run(sess.id, runId, now, now)
+    dbHandle.sqlite
+      .prepare(
+        `INSERT INTO run_events (id, run_id, seq, event_key, type, payload_json, timestamp)
+         VALUES ('evt-tool-1', ?, 1, 'tool.started:1', 'tool.started', '{}', ?)`,
+      )
+      .run(runId, now)
+
+    const inspTool = await orchestrator.inspectSession(sess.id)
+    assert.equal(inspTool.hasToolActivity, true)
+    await assert.rejects(
+      () => orchestrator.retryRun({ runId, idempotencyKey: 'k-retry-no-confirm' }),
+      /Explicit confirmation is required before retrying/,
+    )
+    const retriedConfirmed = await orchestrator.retryRun({
+      runId,
+      idempotencyKey: 'k-retry-confirmed',
+      confirmSideEffects: true,
+    })
+    assert.notEqual(retriedConfirmed.run.id, runId)
+
+    // 3. inspectSession verifies provider thread accessibility & account ownership
+    dbHandle.sqlite
+      .prepare("UPDATE sessions SET runtime_id = 'codex', account_id = 'chatgpt:plus:ws-1', external_session_id = 'thr-1' WHERE id = ?")
+      .run(sess.id)
+    readThreadResult = { accessible: true }
+    const inspAccessible = await orchestrator.inspectSession(sess.id)
+    assert.equal(inspAccessible.providerThreadStatus, 'accessible')
+
+    readThreadResult = { accessible: false, reason: 'Thread archived on provider' }
+    const inspUnavailable = await orchestrator.inspectSession(sess.id)
+    assert.equal(inspUnavailable.providerThreadStatus, 'unavailable')
+    assert.equal(inspUnavailable.resumable, false)
+
+    dbHandle.sqlite
+      .prepare("UPDATE sessions SET account_id = 'acct-other-2' WHERE id = ?")
+      .run(sess.id)
+    readThreadResult = { accessible: true }
+    const inspMismatch = await orchestrator.inspectSession(sess.id)
+    assert.equal(inspMismatch.providerThreadStatus, 'unavailable')
+    assert.equal(inspMismatch.resumable, false)
+    assert.match(inspMismatch.reason, /different account/i)
+
+    await orchestrator.stop()
     await registry.stop()
     dbHandle.close()
   } finally {

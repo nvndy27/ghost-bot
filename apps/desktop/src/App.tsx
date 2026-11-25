@@ -713,7 +713,9 @@ export function App() {
     }
   }
 
-  const handleRetryRun = async (runId: string) => {
+  const [pendingRetryRunId, setPendingRetryRunId] = useState<string | null>(null)
+
+  const handleRetryRun = async (runId: string, confirmSideEffects = false) => {
     const bridge = window.ghostBot
     if (!bridge || !activeBot || !activeSessionId) return
     try {
@@ -721,7 +723,12 @@ export function App() {
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `retry-${Date.now()}`
-      const started = await bridge.retryRun({ runId, idempotencyKey })
+      const started = await bridge.retryRun({
+        runId,
+        idempotencyKey,
+        ...(confirmSideEffects ? { confirmSideEffects: true } : {}),
+      })
+      setPendingRetryRunId(null)
       runSeqCursorRef.current.set(started.run.id, 0)
       setActiveRunBySession((prev) => ({ ...prev, [activeSessionId]: started.run }))
       setInspectionBySession((prev) => ({ ...prev, [activeSessionId]: null }))
@@ -1113,7 +1120,37 @@ export function App() {
                 )}
                 {!activeSessionInspection.quarantined &&
                   activeSessionInspection.resumable &&
-                  activeSessionInspection.lastRun && (
+                  activeSessionInspection.lastRun &&
+                  (activeSessionInspection.hasToolActivity ? (
+                    pendingRetryRunId === activeSessionInspection.lastRun.id ? (
+                      <>
+                        <button
+                          type="button"
+                          className="gb-btn-outline"
+                          onClick={() =>
+                            void handleRetryRun(activeSessionInspection.lastRun!.id, true)
+                          }
+                        >
+                          Confirm retry (may repeat tools)
+                        </button>
+                        <button
+                          type="button"
+                          className="gb-btn-outline"
+                          onClick={() => setPendingRetryRunId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        onClick={() => setPendingRetryRunId(activeSessionInspection.lastRun!.id)}
+                      >
+                        Retry prompt
+                      </button>
+                    )
+                  ) : (
                     <button
                       type="button"
                       className="gb-btn-outline"
@@ -1121,7 +1158,7 @@ export function App() {
                     >
                       Retry prompt
                     </button>
-                  )}
+                  ))}
                 <button type="button" className="gb-btn-outline" onClick={() => void handleNewChat()}>
                   New chat
                 </button>
