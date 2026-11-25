@@ -16,6 +16,12 @@ contextIsolation, sandbox, nodeIntegration:false, restrictive CSP, validate IPC 
 ## Meeting assistant
 Only with participant awareness/consent and platform-supported integration; opt-in recording, transcript retention and deletion controls. No covert recording.
 
+## Phase 1D Settings & Runtime Bridge boundary
+
+- `SettingsRepository` persists only non-secret user preferences (`general`, `appearance`, `personalization`, `permissions`, `privacy`) under `app.settings.v1`; credentials, access tokens, and refresh tokens are never stored in SQLite or exposed to renderer state.
+- `RuntimeRegistry` and `RuntimePolicyBroker` expose metadata-only endpoints (`GET /runtime/snapshot`, `GET /providers`) with request deduplication, 30s TTL caching, secret redaction, and zero model inference (`turn/start` is not exposed in Phase 1D).
+- `RuntimePolicyBroker` rejects `full-access`, `mock` execution, unsupported Codex versions (`< 0.172.0`), `apiKey` accounts, and non-canonical workspaces.
+
 ## Phase 1C persistence and custom SVG boundary
 
 - SQLite persistence (`ghost-bot.sqlite`, `-wal`, `-shm`) is owned exclusively by `@ghost-bot/daemon` under a canonicalized `0700` data directory with `0600` file permissions, separate from the `0700` Unix socket runtime directory. Foreign keys and `BEGIN IMMEDIATE` transactions are enforced on every connection.

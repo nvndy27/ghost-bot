@@ -1,9 +1,10 @@
 # Next steps
 
-Phase 1C (Bot management, SQLite persistence, and Avatar Editor) is **Verified** and ready for acceptance review. Next milestone: **Phase 1D — Settings and runtime bridge**:
+Phase 1 (1A–1D) Desktop Foundation is **Verified** and ready for acceptance review. Next milestone: **Phase 2 — Functional MVP**:
 
-1. Implement the 13-section ChatGPT-inspired Settings layout (`General`, `Appearance`, `Accounts & Providers`, `Models`, `Usage`, `Personalization`, `Memory`, `Tools & MCP`, `Permissions`, `Computer Use`, `Routines`, `Data & Privacy`, `Advanced`), keeping future-phase settings clearly marked as unavailable.
-2. Wire `Accounts & Providers` and `Usage` to read real Codex App Server account status and rate-limit windows (`300m` / `10080m`, unknown values as unavailable) through the daemon without aggressive polling or modifying `~/.codex`.
-3. Place `CodexAppServerAdapter` behind the daemon and policy broker alongside the explicitly labeled `MockRuntimeAdapter`, keeping `Full Access` disabled.
+1. Wire live chat execution (`runs.start`, `runs.cancel`, `approvals.resolve`) through the daemon `RuntimePolicyBroker` and `CodexAppServerAdapter` (preserving `read-only`, `ask-approval`, and `workspace` sandboxing with `excludeSlashTmp: true`).
+2. Persist sessions, runs, run events (`RuntimeEventV1` with monotonic `seq`), and messages transactionally in SQLite (`apps/daemon/src/db/`).
+3. Surface real tool activity, approval requests, diff previews, and cancellation in the desktop workspace.
+4. Implement native OpenClaw Gateway WebSocket adapter and optional local Ollama adapter after live verification.
 
-Start with [progress](PROGRESS.md), [DB schema](DB_SCHEMA.md), and [ADR 0005](adr/0005-node-sqlite-and-drizzle.md).
+Start with [progress](PROGRESS.md), [protocol](PROTOCOL.md), and [provider matrix](PROVIDER_MATRIX.md).

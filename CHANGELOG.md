@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Phase 1D — Settings & Runtime Bridge
+- Added SQLite-backed `SettingsRepository` (`apps/daemon/src/settings/repository.ts`) with Zod schemas, atomic updates, corrupt JSON recovery, reset-to-defaults, and idempotent `localStorage` migration.
+- Completed all 13 Settings sections in `SettingsModal.tsx` with explicit persisted, runtime-managed, read-only, and deferred Phase 3/5 classifications.
+- Added daemon-owned `RuntimeRegistry` (`apps/daemon/src/runtime/registry.ts`) and `RuntimePolicyBroker` (`apps/daemon/src/runtime/policy-broker.ts`) with request deduplication, 30s cache, stale fallback, secret redaction, and version-bound Codex enforcement.
+- Wired live Codex `0.172.0` account, model/effort discovery, and rate-limit windows into Electron IPC (`ghost:runtime:snapshot`) without inference or modifying `~/.codex`.
+- Added `tests/settings-runtime.test.ts` (37/37 unit tests), `scripts/verify-phase-1d-electron.mjs`, `scripts/verify-phase-1d-ui.mjs`, and 5 review screenshots in `design/reviews/phase-1d/`.
+
 ### Phase 1C — Bot management, SQLite persistence, and Avatar Editor
 - Added SQLite persistence in `@ghost-bot/daemon` using `node:sqlite` (`DatabaseSync`) + `drizzle-orm` ([ADR 0005](docs/adr/0005-node-sqlite-and-drizzle.md)) with `0700`/`0600` permissions, `PRAGMA foreign_keys = ON`, transactional migrations (`schema_migrations`), and single-time first-launch seeding.
 - Added Bot CRUD (`list`, `create`, `update`, `duplicate`, `delete`, `setActiveBot`), audit logging, and directory picker IPC behind Zod validation (`packages/shared-types/ipc.ts`).
