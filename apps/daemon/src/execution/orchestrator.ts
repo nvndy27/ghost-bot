@@ -340,17 +340,14 @@ export class RunOrchestrator {
       })
     }
 
-    const unconfirmedGen = this.sessionsWithUnconfirmedStop.get(input.sessionId)
-    if (unconfirmedGen !== undefined) {
-      const currentGen = this.runtimeRegistry?.getGeneration() ?? 0
-      if (unconfirmedGen === currentGen) {
-        throw new DaemonError(
-          'RUN_STOP_UNCONFIRMED',
-          `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
-          { statusCode: 409, retryable: true },
-        )
-      }
-      this.sessionsWithUnconfirmedStop.delete(input.sessionId)
+    // Generation changes alone do NOT clear quarantine; only confirmed provider termination
+    // or explicit owned-runtime termination via reconnectRuntime() clears sessionsWithUnconfirmedStop.
+    if (this.sessionsWithUnconfirmedStop.has(input.sessionId)) {
+      throw new DaemonError(
+        'RUN_STOP_UNCONFIRMED',
+        `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
+        { statusCode: 409, retryable: true },
+      )
     }
 
     // Preflight read of session & bot to prepare async Codex verification before atomic transaction.
@@ -827,6 +824,138 @@ export class RunOrchestrator {
       userMessageId: txResult.userMessageId,
       assistantMessageId: txResult.assistantMessageId,
     }
+  }
+
+  async reconnectRuntime(): Promise<void> {
+    if (this.runtimeRegistry) {
+      await this.runtimeRegistry.reconnect()
+    }
+    this.sessionsWithUnconfirmedStop.clear()
+  }
+
+  inspectSession(sessionId: string): {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    externalSessionId: string | null
+    resumable: boolean
+    reason: string
+    quarantined: boolean
+    lastRun: RunRecord | null
+    approvalsCount: number
+  } {
+    const sess = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, agent_id, account_id, runtime_id, external_session_id, archived_at FROM sessions WHERE id = ?`,
+      )
+      .get(sessionId) as
+      | {
+          id: string
+          agent_id: string
+          account_id: string
+          runtime_id: string
+          external_session_id: string | null
+          archived_at: string | null
+        }
+      | undefined
+
+    if (!sess) {
+      throw new DaemonError('SESSION_NOT_FOUND', `Session "${sessionId}" was not found`, {
+        statusCode: 404,
+      })
+    }
+
+    const bot = this.dbHandle.sqlite
+      .prepare(`SELECT id, runtime_id, archived_at FROM agents WHERE id = ?`)
+      .get(sess.agent_id) as
+      | { id: string; runtime_id: string; archived_at: string | null }
+      | undefined
+
+    const lastRunRow = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, config_snapshot_json, status, error_json, started_at, ended_at, created_at
+         FROM runs
+         WHERE session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(sessionId) as RawRunRow | undefined
+
+    const appCountRow = this.dbHandle.sqlite
+      .prepare(`SELECT COUNT(*) AS cnt FROM approvals WHERE session_id = ?`)
+      .get(sessionId) as { cnt: number } | undefined
+
+    const quarantined = this.sessionsWithUnconfirmedStop.has(sessionId)
+    let resumable = true
+    let reason = 'Session is ready.'
+    if (sess.archived_at !== null) {
+      resumable = false
+      reason = 'Session is archived.'
+    } else if (!bot || bot.archived_at !== null) {
+      resumable = false
+      reason = 'Associated bot is missing or archived.'
+    } else if (quarantined) {
+      resumable = false
+      reason = 'Previous cancellation stop is unconfirmed; reconnect runtime or start a New chat.'
+    } else if (sess.runtime_id !== bot.runtime_id) {
+      resumable = false
+      reason = `Session runtime "${sess.runtime_id}" differs from bot runtime "${bot.runtime_id}"; start a New chat.`
+    }
+
+    return {
+      sessionId: sess.id,
+      agentId: sess.agent_id,
+      runtimeId: sess.runtime_id,
+      externalSessionId: sess.external_session_id,
+      resumable,
+      reason,
+      quarantined,
+      lastRun: lastRunRow ? this.rowToRun(lastRunRow) : null,
+      approvalsCount: Number(appCountRow?.cnt ?? 0),
+    }
+  }
+
+  async retryRun(input: { runId: string; idempotencyKey: string }): Promise<StartRunResult> {
+    const orig = this.getRun(input.runId)
+    if (orig.status !== 'failed' && orig.status !== 'interrupted' && orig.status !== 'cancelled') {
+      throw new DaemonError(
+        'RETRY_NOT_ALLOWED',
+        `Cannot retry run "${orig.id}" in status "${orig.status}"`,
+        { statusCode: 409 },
+      )
+    }
+    if (this.sessionsWithUnconfirmedStop.has(orig.sessionId)) {
+      throw new DaemonError(
+        'RUN_STOP_UNCONFIRMED',
+        `Cannot retry while previous cancellation in session "${orig.sessionId}" is unconfirmed.`,
+        { statusCode: 409, retryable: true },
+      )
+    }
+
+    const userMsg = this.dbHandle.sqlite
+      .prepare(`SELECT content_json FROM messages WHERE run_id = ? AND role = 'user' LIMIT 1`)
+      .get(orig.id) as { content_json: string } | undefined
+
+    let promptText = ''
+    if (userMsg) {
+      try {
+        const parsed = JSON.parse(userMsg.content_json) as { text?: unknown }
+        if (typeof parsed.text === 'string') promptText = parsed.text
+      } catch {
+        // ignore
+      }
+    }
+    if (!promptText.trim()) {
+      throw new DaemonError('ORIGINAL_PROMPT_MISSING', 'Cannot locate original user prompt to retry', {
+        statusCode: 404,
+      })
+    }
+
+    return this.startRun({
+      sessionId: orig.sessionId,
+      idempotencyKey: input.idempotencyKey,
+      text: promptText,
+    })
   }
 
   cancelRun(runId: string): { run: RunRecord; alreadyTerminal: boolean } {

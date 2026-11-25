@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
+- Added `RuntimeLifecycleState`, deduplicated `RuntimeRegistry.reconnect()`, and `closeOwnedClient()` (`apps/daemon/src/runtime/registry.ts`).
+- Hardened `RunOrchestrator` quarantine (`sessionsWithUnconfirmedStop`) and added `inspectSession()`, `retryRun()`, and `reconnectRuntime()` behind `SESSIONS_INSPECT`, `RUNS_RETRY`, and `RUNTIME_RECONNECT` IPC/daemon routes.
+- Added recovery banner (`Retry prompt`, `Reconnect runtime`, `New chat`) and usage refresh/reset timestamps in `App.tsx` and `RightPanel.tsx`.
+- Prepared Fedora/Linux packaging config (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`), `tests/phase-2d-recovery.test.ts` (55/55 unit tests), `scripts/verify-phase-2d-electron.mjs`, and opt-in `scripts/verify-phase-2d-live.mjs`.
+
 ### Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
 - Added SQLite migration `0004_durable_approvals` (`approvals` table) and durable approval lifecycle (`pending`, `resolving`, `approved`, `denied`, `expired`, `revoked`, `resolution_failed`) in `RunOrchestrator`.
 - Unlocked verified `ask-approval` and `workspace` execution modes in `RuntimePolicyBroker.authorizeLiveExecution()` (`networkAccess: false`, `excludeSlashTmp: true`, `excludeTmpdirEnvVar: true`) while keeping `full-access` disabled.

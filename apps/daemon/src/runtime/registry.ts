@@ -5,6 +5,7 @@ import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import type {
   ProviderSummary,
+  RuntimeLifecycleState,
   RuntimeSnapshot,
 } from '@ghost-bot/shared-types/ipc'
 import type {
@@ -79,6 +80,8 @@ export class RuntimeRegistry {
   private cachedAtMs = 0
   private lastRefreshRequestMs = 0
   private inFlight: Promise<RuntimeSnapshot> | null = null
+  private reconnectInFlight: Promise<RuntimeSnapshot> | null = null
+  private lifecycleState: RuntimeLifecycleState = 'disconnected'
   private stopped = false
 
   constructor(options: RuntimeRegistryOptions) {
@@ -91,6 +94,50 @@ export class RuntimeRegistry {
 
   getGeneration(): number {
     return this.generation
+  }
+
+  getLifecycleState(): RuntimeLifecycleState {
+    return this.lifecycleState
+  }
+
+  /**
+   * Explicitly closes the owned Codex client, increments runtime generation,
+   * and invalidates cached metadata so any quarantined execution context can
+   * be safely reconciled without leaving orphan provider processes.
+   */
+  async closeOwnedClient(): Promise<number> {
+    this.generation += 1
+    this.cachedSnapshot = null
+    this.cachedAtMs = 0
+    this.lastAccountKey = null
+    this.lifecycleState = 'disconnected'
+    if (this.codexClient) {
+      const client = this.codexClient
+      this.codexClient = null
+      await client.close().catch(() => undefined)
+    }
+    return this.generation
+  }
+
+  async reconnect(): Promise<RuntimeSnapshot> {
+    if (this.stopped) {
+      throw new DaemonError('RUNTIME_STOPPED', 'RuntimeRegistry is stopped', { statusCode: 503 })
+    }
+    if (this.reconnectInFlight) {
+      return this.reconnectInFlight
+    }
+
+    this.reconnectInFlight = (async () => {
+      this.lifecycleState = 'reconnecting'
+      await this.closeOwnedClient()
+      this.lifecycleState = 'connecting'
+      const snap = await this.fetchSnapshot(true)
+      return snap
+    })().finally(() => {
+      this.reconnectInFlight = null
+    })
+
+    return this.reconnectInFlight
   }
 
   async getExecutionAdapter(): Promise<{
@@ -232,6 +279,7 @@ export class RuntimeRegistry {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.lifecycleState = 'disconnected'
     this.generation += 1
     this.cachedSnapshot = null
     this.lastAccountKey = null
@@ -428,10 +476,12 @@ export class RuntimeRegistry {
         usageStatus = 'unavailable'
       }
 
+      this.lifecycleState = 'connected'
       const snap: RuntimeSnapshot = {
         runtimeMode: 'codex',
         codexVersion: this.codexVersion,
         status: 'available',
+        lifecycleState: 'connected',
         authStatus: 'connected',
         authMethod: 'chatgpt',
         planType: account.planType,
@@ -477,10 +527,12 @@ export class RuntimeRegistry {
         }
       }
 
+      this.lifecycleState = 'failed'
       return {
         runtimeMode: 'codex',
         codexVersion: this.codexVersion,
         status: 'error',
+        lifecycleState: 'failed',
         authStatus: 'error',
         authMethod: 'none',
         planType: null,

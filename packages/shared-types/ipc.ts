@@ -28,6 +28,9 @@ export const IPC_CHANNELS = {
   RUNS_CANCEL: 'ghost:runs:cancel',
   RUNS_EVENTS: 'ghost:runs:events',
   RUNS_RESOLVE_APPROVAL: 'ghost:runs:resolve-approval',
+  RUNTIME_RECONNECT: 'ghost:runtime:reconnect',
+  SESSIONS_INSPECT: 'ghost:sessions:inspect',
+  RUNS_RETRY: 'ghost:runs:retry',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -270,10 +273,24 @@ export const RuntimeModelSummarySchema = z.object({
   efforts: z.array(z.string()),
 })
 
+export const RuntimeLifecycleStateSchema = z.enum([
+  'unavailable',
+  'connecting',
+  'connected',
+  'disconnected',
+  'reconnecting',
+  'authentication_required',
+  'unsupported',
+  'failed',
+])
+
+export type RuntimeLifecycleState = z.infer<typeof RuntimeLifecycleStateSchema>
+
 export const RuntimeSnapshotSchema = z.object({
   runtimeMode: z.enum(['codex', 'mock']),
   codexVersion: z.string().nullable(),
   status: RuntimeAvailabilityStatusSchema,
+  lifecycleState: RuntimeLifecycleStateSchema.optional(),
   authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
   authMethod: z.enum(['chatgpt', 'apiKey', 'mock', 'none']),
   planType: z.string().nullable(),
@@ -529,6 +546,29 @@ export const ResolveApprovalResponseSchema = z.object({
 
 export type ResolveApprovalResponse = z.infer<typeof ResolveApprovalResponseSchema>
 
+export const SessionInspectionResponseSchema = z.object({
+  sessionId: SessionIdSchema,
+  agentId: BotIdSchema,
+  runtimeId: z.string(),
+  externalSessionId: z.string().nullable(),
+  resumable: z.boolean(),
+  reason: z.string(),
+  quarantined: z.boolean(),
+  lastRun: RunRecordSchema.nullable(),
+  approvalsCount: z.number().int().nonnegative(),
+})
+
+export type SessionInspectionResponse = z.infer<typeof SessionInspectionResponseSchema>
+
+export const RetryRunInputSchema = z
+  .object({
+    runId: RunIdSchema,
+    idempotencyKey: z.string().trim().min(1).max(128),
+  })
+  .strict()
+
+export type RetryRunInput = z.infer<typeof RetryRunInputSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -557,6 +597,9 @@ export interface GhostBotBridge {
   cancelRun(runId: string): Promise<CancelRunResponse>
   getRunEvents(params: { runId: string; afterSeq?: number; limit?: number }): Promise<RunEventsResponse>
   resolveApproval(input: ResolveApprovalInput): Promise<ResolveApprovalResponse>
+  reconnectRuntime(): Promise<RuntimeSnapshot>
+  inspectSession(sessionId: string): Promise<SessionInspectionResponse>
+  retryRun(input: RetryRunInput): Promise<StartRunResponse>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

@@ -34,6 +34,7 @@ import {
   RenameSessionInputSchema,
   ResolveApprovalInputSchema,
   ResolveApprovalResponseSchema,
+  RetryRunInputSchema,
   RunEventsResponseSchema,
   RunIdParamsSchema,
   RunRecordSchema,
@@ -41,6 +42,7 @@ import {
   RuntimeSnapshotSchema,
   SessionIdParamsSchema,
   SessionIdSchema,
+  SessionInspectionResponseSchema,
   SessionRecordSchema,
   SessionsListResponseSchema,
   SetActiveBotParamsSchema,
@@ -519,6 +521,34 @@ function registerIpcHandlers(): void {
           decision: parsed.decision,
           ...(parsed.argsHash ? { argsHash: parsed.argsHash } : {}),
         },
+      },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNTIME_RECONNECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(params)
+    return queryDaemon('/runtime/reconnect', RuntimeSnapshotSchema, { method: 'POST' })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_INSPECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { sessionId } = SessionIdParamsSchema.parse(params)
+    return queryDaemon(
+      `/sessions/${encodeURIComponent(sessionId)}/inspect`,
+      SessionInspectionResponseSchema,
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_RETRY, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = RetryRunInputSchema.parse(params)
+    return queryDaemon(
+      `/runs/${encodeURIComponent(parsed.runId)}/retry`,
+      StartRunResponseSchema,
+      {
+        method: 'POST',
+        body: { idempotencyKey: parsed.idempotencyKey },
       },
     )
   })

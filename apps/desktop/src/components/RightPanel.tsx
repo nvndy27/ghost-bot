@@ -8,6 +8,8 @@ export interface RightPanelProps {
   activeTasks: ToolStep[]
   runtimeSnapshot: RuntimeSnapshot | null
   isMockMode: boolean
+  onRefreshUsage?: () => void
+  onReconnectRuntime?: () => void
   onCollapse: () => void
 }
 
@@ -17,6 +19,8 @@ export function RightPanel({
   activeTasks,
   runtimeSnapshot,
   isMockMode,
+  onRefreshUsage,
+  onReconnectRuntime,
   onCollapse,
 }: RightPanelProps) {
   return (
@@ -127,7 +131,22 @@ export function RightPanel({
       <hr className="gb-divider" />
 
       <div>
-        <div className="gb-section-label">Account usage</div>
+        <div
+          className="gb-section-label"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <span>Account usage</span>
+          {!isMockMode && onRefreshUsage && (
+            <button
+              type="button"
+              onClick={onRefreshUsage}
+              style={{ fontSize: '11px', padding: '2px 6px' }}
+              aria-label="Refresh account usage"
+            >
+              Refresh
+            </button>
+          )}
+        </div>
         {isMockMode ? (
           <>
             <div className="gb-muted">Subscription quota · sample</div>
@@ -147,18 +166,48 @@ export function RightPanel({
                 <div className="gb-bar" aria-hidden="true">
                   <div className="gb-bar-fill" style={{ width: `${w.usedPercent ?? 0}%` }} />
                 </div>
+                {w.resetAt && (
+                  <small className="gb-muted" style={{ fontSize: '10.5px' }}>
+                    Resets {new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </small>
+                )}
               </div>
             ))}
             <small className="gb-muted" style={{ fontSize: '11px' }}>
               Status: {runtimeSnapshot.usageStatus}
+              {runtimeSnapshot.usageObservedAt
+                ? ` · ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                : ''}
             </small>
+            {runtimeSnapshot.lifecycleState && runtimeSnapshot.lifecycleState !== 'connected' && onReconnectRuntime && (
+              <button
+                type="button"
+                className="gb-btn-outline"
+                onClick={onReconnectRuntime}
+                style={{ fontSize: '11.5px', padding: '4px 8px' }}
+              >
+                Reconnect runtime
+              </button>
+            )}
           </div>
         ) : (
-          <p className="gb-muted" style={{ margin: '4px 0', fontSize: '12.5px' }}>
-            {runtimeSnapshot
-              ? `Usage ${runtimeSnapshot.usageStatus}`
-              : 'Usage unavailable.'}
-          </p>
+          <div style={{ display: 'grid', gap: '6px' }}>
+            <p className="gb-muted" style={{ margin: '4px 0', fontSize: '12.5px' }}>
+              {runtimeSnapshot
+                ? `Usage ${runtimeSnapshot.usageStatus} (${runtimeSnapshot.lifecycleState ?? runtimeSnapshot.status})`
+                : 'Usage unavailable.'}
+            </p>
+            {!isMockMode && onReconnectRuntime && (
+              <button
+                type="button"
+                className="gb-btn-outline"
+                onClick={onReconnectRuntime}
+                style={{ fontSize: '11.5px', padding: '4px 8px' }}
+              >
+                Reconnect runtime
+              </button>
+            )}
+          </div>
         )}
       </div>
     </aside>
