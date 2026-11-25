@@ -12,17 +12,19 @@
 | Implemented | Added Fedora/Linux packaging configuration (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`); `rpmbuild` is present on host, `electron-builder` is absent (no AppImage/RPM artifact built yet). |
 | Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**55/55** including `tests/phase-2d-recovery.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs` through `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` (2 screenshots in `design/reviews/phase-2d/`) all passed. |
 
-### Phase 2D continuation — 2026-11-26
+### Phase 2D final hardening, packaging & live recovery — 2026-11-26
 
-Phase 2D remains **Tested** with a **CONDITIONAL PASS**. Antigravity stopped at its quota limit. The continuation is recorded in `ea35db1` on the same feature branch.
+Phase 2D remains **Tested** (**CONDITIONAL PASS**) on `feat/phase-2d-recovery-resume` (not merged to `main` while RPM packaging via `electron-builder` bundled `fpm` is blocked by missing host `libcrypt.so.1` and `sudo` is unauthorized).
 
 | State | Evidence |
 |---|---|
-| Implemented | Persisted unconfirmed-stop quarantine and extended session inspection. An external thread ID plus a connected runtime still yields `providerThreadStatus: unknown` until provider-side thread access is checked. |
-| Tested | Lint, typecheck, build, 55 unit tests, five Playwright UI suites (1B, 1C, 1D, 2A, 2C), and four Electron suites (persistence, 1D metadata, 2A execution, 2D recovery) passed. |
-| Verified | Fedora x86_64 AppImage built and passed an isolated mock-mode smoke launch in extract-and-run mode. The packaged renderer, sandbox, preload IPC and daemon health responded. Local artifact `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` is 121049800 bytes, SHA-256 `1796cb113c080c463e8982cd134a99b2d827a51564ef5a249cf30ad53935038f`. |
-| Verified | Fedora RPM built with FPM 1.18.0 on PATH and `USE_SYSTEM_FPM=true`. Metadata query and the extracted package smoke launch passed without installation. Local artifact `apps/desktop/release/ghost-bot-0.1.0.x86_64.rpm` is 81472041 bytes, SHA-256 `08d4918a6b68408e39cff5de3e341f0b8fde1ccb68384ea41de40bab64a1be76`. |
-| Blocked | Live Phase 2D recovery lacks a complete result. The prior terminal recorded failed probe runs and a reduced turn budget. No new inference turn was submitted during this continuation. |
+| Implemented | Persisted `sessionsWithUnconfirmedStop` quarantine in SQLite `settings` (`execution.quarantinedSessions.v1`) and added `providerThreadStatus` / `hasToolActivity` to `inspectSession()` (`apps/daemon/src/execution/orchestrator.ts`, `packages/shared-types/ipc.ts`); added regression test in `tests/phase-2d-recovery.test.ts`. |
+| Implemented | Pinned `electron-builder@26.0.12` in `apps/desktop/package.json` (`pnpm-lock.yaml` updated; Track B should rebase/note lockfile update), added `apps/desktop/scripts/bundle-daemon.mjs`, packaged `main.ts`/`preload.cts`/`daemon.mjs` + `xhr-sync-worker.js`, and added `dist-daemon/` + `release/` to `eslint.config.mjs` ignores. |
+| Implemented | Fixed `queryDaemon()` timeout in `apps/desktop/electron/main.ts` (`25_000ms` for `RUNTIME_SNAPSHOT` refresh, `RUNTIME_RECONNECT`, and `SESSIONS_INSPECT`) after live `reconnectRuntime()` hit the 5s default HTTP timeout. |
+| Verified | Rebuilt `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` (SHA-256 `c1c0aa39eea832a636f6b4ca0e67c102c2805509c24647e6c9e83fdfa26df48a`) and passed isolated `APPIMAGE_EXTRACT_AND_RUN=1` smoke launch with `sandboxed: true` (`libfuse.so.2` is absent on Fedora 45, so direct FUSE AppImage launch requires `APPIMAGE_EXTRACT_AND_RUN=1`). |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm test` (**55/55**), `pnpm build`, `pnpm package:appimage`, Electron smoke (`GHOST_BOT_SMOKE_EXIT=1`), `verify-phase-1b-ui.mjs`, `verify-phase-1c-ui.mjs`, `verify-phase-1d-ui.mjs`, `verify-phase-2a-ui.mjs`, `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs` (4 launches), `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` all passed after the final edit. |
+| Blocked | `pnpm package:rpm` failed because `electron-builder`'s bundled `fpm` Ruby binary requires `libcrypt.so.1` (`libxcrypt-compat` missing on host; `sudo` not authorized). |
+| Blocked | Live Phase 2D recovery (`GHOST_BOT_RUN_LIVE_RECOVERY=1`, 2/2 authorized turns consumed): Turn 1 (`GHOST_2D_TOKEN_91`), SQLite `external_session_id` persistence, Electron restart restoration, `reconnectRuntime()` (`lifecycleState: 'connected'`), and `inspectSession()` (`providerThreadStatus: 'accessible'`) succeeded; Run 2 stopped on a script field mismatch (`inspection.canContinue` vs `inspection.resumable`, fixed in `scripts/verify-phase-2d-live.mjs` without further live turns). |
 
 ## Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
 
