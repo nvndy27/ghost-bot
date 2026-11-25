@@ -1,0 +1,12 @@
+{
+  "name": "@ghost-bot/avatar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./presets": "./presets.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

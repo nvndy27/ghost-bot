@@ -13,10 +13,10 @@ States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. 
 - **Verified** — Phase 0 exit gate **PASS** (2026-11-25). Ready for Phase 1 desktop foundation.
 
 ## Phase 1 — Desktop foundation
-- [ ] Electron + React TS + Vite + pnpm workspace, lint/typecheck/test pipeline.
-- [ ] Secure IPC, daemon lifecycle and SQLite migrations; mock adapter clearly marked.
-- [ ] Three-panel shell, settings, theming, resized/collapsed panels, keyboard accessibility.
-- [ ] Bot CRUD, SVG avatar editor, persistence and custom upload validation.
+- [x] Electron + React TS + Vite + pnpm workspace, lint/typecheck/test pipeline (Phase 1A **Verified**).
+- [x] Secure IPC, daemon lifecycle and mock adapter clearly marked (Phase 1A **Verified**); SQLite migrations pending Phase 1C.
+- [ ] Three-panel shell, settings, theming, resized/collapsed panels, keyboard accessibility (Phase 1B/1D).
+- [ ] Bot CRUD, SVG avatar editor, persistence and custom upload validation (Phase 1C).
 Gate: restart persistence, UI matches references, offline integration tests pass.
 
 ## Phase 2 — Functional MVP

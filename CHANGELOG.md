@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 1A — Desktop scaffold & Step 0 hardening
+- Hardened `CodexAppServerAdapter` (same-thread run lock, `turnId` notification correlation, pre-`turnId` cancellation, boundary auth revalidation, `realpath` workspace canonicalization, pending approval revocation) and `verify-codex-live.mjs` assertions/symlink check; merged Phase 0 into `main`.
+- Added pnpm workspace (`pnpm-workspace.yaml`, `pnpm-lock.yaml`), ESLint + TypeScript strict pipeline, and `@ghost-bot/shared-types/ipc` Zod contracts.
+- Added `@ghost-bot/daemon` with Unix socket + Bearer token auth, centralized error normalization, secret redaction, and explicit `MockRuntimeAdapter`.
+- Added `@ghost-bot/desktop` (Electron 36 + React 19 + Vite 6) with `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, restrictive CSP, validated IPC, controlled navigation, and Fedora GTK3/Wayland support.
+
 ### Phase 0B & 0C
 - Added reusable newline-delimited JSON-RPC 2.0 stdio client (`packages/runtime-adapters/json-rpc-client.ts`) with concurrent request correlation, server-initiated request handling, timeouts, `AbortSignal` cancellation, malformed payload resilience, and graceful shutdown.
 - Added `CodexAppServerAdapter` (`packages/runtime-adapters/codex/codex-app-server.ts`) using an isolated persistent profile (`~/.config/ghost-bot/codex-profile`), ChatGPT subscription auth, live rate-limit normalization, streaming, cancellation, session resume, `argsHash`-bound approvals, and `excludeSlashTmp: true` workspace containment.

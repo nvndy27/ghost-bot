@@ -1,0 +1,17 @@
+{
+  "name": "@ghost-bot/runtime-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./json-rpc-client": "./json-rpc-client.ts",
+    "./codex": "./codex/codex-app-server.ts",
+    "./mock": "./mock/mock-runtime.ts"
+  },
+  "dependencies": {
+    "@ghost-bot/shared-types": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@ghost-bot/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ghost-bot/runtime-adapters": "workspace:*",
+    "@ghost-bot/shared-types": "workspace:*",
+    "zod": "^3.25.67"
+  }
+}
