@@ -12,3 +12,11 @@
 - Use the exact roadmap states Not Started, In Progress, Implemented, Tested, Verified and Blocked. Record the evidence and handoff in docs/PROGRESS.md, docs/KNOWN_ISSUES.md and docs/NEXT_STEPS.md. Keep reference screenshots local until their distribution rights are confirmed.
 
 - After completing any task, include a short summary paragraph in the final response. State what changed, what was verified, and any remaining blocker. Keep the existing milestone handoff fields when applicable.
+
+## GitHub issues and branches
+
+- Track implementation work in GitHub Issues. Before starting, look for an existing issue and reuse it if it covers the work. An issue should describe the outcome, scope and acceptance criteria. When no issue exists, create one if authorized. For a small, directly requested change without an issue, record the scope in the PR or handoff.
+- Start each issue or independently reviewable change on its own branch from the latest `origin/main`. Use `<type>/<issue-number>-<short-slug>`, for example `fix/42-approval-expiry`. For work without an issue use `<type>/<short-slug>`. Keep unrelated changes on separate branches and preserve other contributors' work.
+- Make focused Conventional Commits. Review the diff, scan for secrets, run relevant checks, and push the working branch to the configured remote. Sync with `main` when needed. Never force-push or rewrite published history.
+- Use a pull request targeting `main`. Include the outcome, test results and known limitations. Use `Closes #42` when merging fulfills that issue's acceptance criteria, or `Refs #42` for partial work. Keep `main` releasable and merge through the PR after required checks and review. Direct changes to `main` require explicit user direction.
+- Keep the issue open while work or verification remains. Update its status when authorized and record the issue, branch, PR, commit, checks and blockers in the handoff as applicable.
