@@ -18,3 +18,7 @@ Allowlisted typed IPC channels in `packages/shared-types/ipc.ts` (validated by `
 - `ghost:avatar:import-svg`, `ghost:workspace:pick`
 - `ghost:settings:get`, `ghost:settings:update`, `ghost:settings:reset`, `ghost:settings:migrate-local`
 - `ghost:runtime:snapshot` (metadata-only: `account/read`, `model/list`, `account/rateLimits/read`; no inference)
+
+## Phase 3D.1 Memory IPC surface (implemented)
+
+- `ghost:memory:list`, `ghost:memory:search`, `ghost:memory:create`, `ghost:memory:update`, `ghost:memory:archive`, `ghost:memory:delete` (strict Zod v4 schemas in `packages/shared-types/ipc.ts`; `MemoryAuthContext` constructed exclusively in `@ghost-bot/daemon`).

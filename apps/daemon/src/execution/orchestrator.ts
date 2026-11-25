@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
+import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
 import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
 import { serializeMessageContent } from '../sessions/repository.ts'
@@ -159,6 +160,7 @@ export interface RunOrchestratorOptions {
   runtimeRegistry?: RuntimeRegistry
   settingsRepo?: SettingsRepository
   policyBroker?: RuntimePolicyBroker
+  memoryService?: MemoryService
 }
 
 const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
@@ -169,6 +171,7 @@ export class RunOrchestrator {
   private readonly runtimeRegistry?: RuntimeRegistry
   private readonly settingsRepo?: SettingsRepository
   private readonly policyBroker: RuntimePolicyBroker
+  private readonly memoryService?: MemoryService
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
@@ -178,8 +181,43 @@ export class RunOrchestrator {
     this.runtimeRegistry = options?.runtimeRegistry
     this.settingsRepo = options?.settingsRepo
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
+    this.memoryService = options?.memoryService
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
+  }
+
+  private async prepareExecutionMemorySafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+  }): Promise<PreparedExecutionMemoryContext> {
+    if (!this.memoryService) {
+      return {
+        status: 'disabled',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+    }
+    try {
+      return await this.memoryService.prepareExecutionContext(params)
+    } catch (err) {
+      if (err instanceof DaemonError && err.code === 'MEMORY_AUTHORIZATION_FAILED') {
+        throw err
+      }
+      return {
+        status: 'error_omitted',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+    }
   }
 
   private loadDurableQuarantine(): void {
@@ -1604,11 +1642,47 @@ export class RunOrchestrator {
       await sleepAbortable(plan.initialPauseMs, signal)
       if (finalizeIfCancelled()) return
 
+      const sessionOwner = this.dbHandle.sqlite
+        .prepare('SELECT agent_id FROM sessions WHERE id = ?')
+        .get(sessionId) as { agent_id: string } | undefined
+      const preparedMemory = sessionOwner
+        ? await this.prepareExecutionMemorySafely({
+            sessionId,
+            agentId: sessionOwner.agent_id,
+            runtimeId: 'mock',
+            queryText: prompt,
+            isMock: true,
+          })
+        : {
+            status: 'disabled' as const,
+            mechanism: 'none' as const,
+            envelopeJson: null,
+            selectedCount: 0,
+            totalBytes: 0,
+            truncated: false,
+          }
+
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
         type: 'run.started',
-        payload: { runtimeId: 'mock', isMock: true, scenario: plan.kind },
+        payload: {
+          runtimeId: 'mock',
+          isMock: true,
+          scenario: plan.kind,
+          memoryContext: {
+            status: preparedMemory.status,
+            mechanism: preparedMemory.mechanism,
+            count: preparedMemory.selectedCount,
+            totalBytes: preparedMemory.totalBytes,
+            truncated: preparedMemory.truncated,
+          },
+        },
       })
+
+      if (preparedMemory.status === 'attached' && preparedMemory.envelopeJson) {
+        const memoryNotice = `\n\n[Memory Context Attached: ${preparedMemory.selectedCount} item(s), ${preparedMemory.totalBytes} bytes]`
+        plan.chunks.push(memoryNotice)
+      }
 
       if (plan.emitTool) {
         this.eventStore.appendEvent(runId, {
@@ -1982,6 +2056,14 @@ export class RunOrchestrator {
         }
       }
 
+      const preparedMemory = await this.prepareExecutionMemorySafely({
+        sessionId,
+        agentId,
+        runtimeId: 'codex',
+        queryText: prompt,
+        isMock: false,
+      })
+
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
         type: 'run.started',
@@ -1990,6 +2072,13 @@ export class RunOrchestrator {
           threadId: providerSession.externalId,
           resumed: Boolean(preflight.externalSessionId),
           isMock: false,
+          memoryContext: {
+            status: preparedMemory.status,
+            mechanism: preparedMemory.mechanism,
+            count: preparedMemory.selectedCount,
+            totalBytes: preparedMemory.totalBytes,
+            truncated: preparedMemory.truncated,
+          },
         },
       })
 
@@ -1997,6 +2086,7 @@ export class RunOrchestrator {
         runId,
         session: providerSession,
         text: prompt,
+        referenceContext: preparedMemory.envelopeJson ?? undefined,
       })) {
         if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
           throw new DaemonError(

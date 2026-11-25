@@ -38,3 +38,9 @@ Create provider accounts, model profiles, agents, sessions, runs, run events, me
 - Give each client run request a unique `(session_id, idempotency_key)`. Reusing the key with different input fails. Pin message order independently of timestamps.
 - Bind approvals to run, action hash, scope and expiry. Consume an allowed approval with a conditional update in a transaction. Expire outstanding approvals on restart. Keep ambiguous execution outcomes for reconciliation.
 - Use opaque keyring references for credentials. Exclude raw provider payloads, private reasoning, and unredacted tool arguments from the durable event stream.
+
+## Phase 3D.1 migration `0005_memory_core`
+
+- Added `memories` and `memories_fts` (`USING fts5(memory_id UNINDEXED, content, tags_text, tokenize='unicode61 remove_diacritics 2')`) in `apps/daemon/src/db/migrations.ts` and `apps/daemon/src/db/schema.ts`.
+- `memories.bot_id` references `agents(id) ON DELETE RESTRICT`; `idx_memories_active_dedup` enforces unique `(scope_key, content_hash)` for active rows; `idx_memories_scope` and `idx_memories_expires` index scope queries and expiration.
+- Accessed via `MemoryService` (`apps/daemon/src/memory/service.ts`) using `createBorrowedMemoryDatabaseHandle()` so `GhostBotDaemon` retains exclusive connection and migration ownership.

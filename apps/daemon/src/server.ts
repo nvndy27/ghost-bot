@@ -9,17 +9,22 @@ import {
   AppSettingsPatchSchema,
   BotIdSchema,
   CreateBotInputSchema,
+  CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
   ImportAvatarSvgInputSchema,
+  ListMemoriesIpcInputSchema,
+  MemoryIdParamSchema,
   RenameSessionInputSchema,
   ResolveApprovalInputSchema,
   RetryRunInputSchema,
   RunIdSchema,
+  SearchMemoriesIpcInputSchema,
   SessionIdSchema,
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
   StartRunInputSchema,
   UpdateBotInputSchema,
+  UpdateMemoryIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
 import { BotRepository } from './bots/repository.ts'
@@ -28,6 +33,7 @@ import type { DatabaseHandle } from './db/client.ts'
 import { seedInitialBotsIfNeeded } from './db/seed.ts'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
 import { RunOrchestrator } from './execution/orchestrator.ts'
+import { MemoryService } from './memory/service.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
@@ -91,6 +97,7 @@ export class GhostBotDaemon {
   private botRepo: BotRepository | null = null
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
+  private memoryService: MemoryService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -182,9 +189,11 @@ export class GhostBotDaemon {
     this.botRepo = new BotRepository(dbHandle)
     this.settingsRepo = new SettingsRepository(dbHandle)
     this.sessionRepo = new SessionRepository(dbHandle)
+    this.memoryService = new MemoryService(dbHandle, this.settingsRepo)
     this.runOrchestrator = new RunOrchestrator(dbHandle, {
       runtimeRegistry: this.runtimeRegistry,
       settingsRepo: this.settingsRepo,
+      memoryService: this.memoryService,
     })
     this.runOrchestrator.reconcileOnStartup()
 
@@ -232,6 +241,10 @@ export class GhostBotDaemon {
     this.botRepo = null
     this.settingsRepo = null
     this.sessionRepo = null
+    if (this.memoryService) {
+      this.memoryService.close()
+      this.memoryService = null
+    }
     if (this.dbHandle) {
       this.dbHandle.close()
       this.dbHandle = null
@@ -367,7 +380,9 @@ export class GhostBotDaemon {
           return
         }
         if (req.method === 'DELETE') {
-          sendJson(res, 200, repo.deleteBot(idCheck.data))
+          const result = repo.deleteBot(idCheck.data)
+          this.memoryService?.archiveMemoriesForBot(idCheck.data)
+          sendJson(res, 200, result)
           return
         }
       }
@@ -610,6 +625,108 @@ export class GhostBotDaemon {
           }
           sendJson(res, 200, orchestrator.getRun(idCheck.data))
           return
+        }
+      }
+
+      if (this.memoryService) {
+        const memoryService = this.memoryService
+
+        if (req.method === 'GET' && url.pathname === '/memories') {
+          const botId = url.searchParams.get('botId') ?? undefined
+          const scopeKind = url.searchParams.get('scopeKind') ?? undefined
+          const includeUserWide = url.searchParams.get('includeUserWide') === 'true'
+          const includeArchived = url.searchParams.get('includeArchived') === 'true'
+          const category = url.searchParams.get('category') ?? undefined
+          const limitRaw = url.searchParams.get('limit')
+          const offsetRaw = url.searchParams.get('offset')
+          const parsed = ListMemoriesIpcInputSchema.safeParse({
+            ...(botId ? { botId } : {}),
+            ...(scopeKind ? { scopeKind } : {}),
+            includeUserWide,
+            includeArchived,
+            ...(category ? { category } : {}),
+            ...(limitRaw ? { limit: Number.parseInt(limitRaw, 10) } : {}),
+            ...(offsetRaw ? { offset: Number.parseInt(offsetRaw, 10) } : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid memory list query',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await memoryService.listMemories(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/memories/search') {
+          const body = await readJsonBody(req)
+          const parsed = SearchMemoriesIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid memory search payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await memoryService.searchMemories(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/memories') {
+          const body = await readJsonBody(req)
+          const parsed = CreateMemoryIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid create memory payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, await memoryService.createMemory(parsed.data))
+          return
+        }
+
+        const memoryArchiveMatch = /^\/memories\/([^/]+)\/archive$/.exec(url.pathname)
+        if (req.method === 'POST' && memoryArchiveMatch) {
+          const idCheck = MemoryIdParamSchema.safeParse({
+            id: decodeURIComponent(memoryArchiveMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid memory identifier', { statusCode: 400 })
+          }
+          sendJson(res, 200, await memoryService.archiveMemory(idCheck.data.id))
+          return
+        }
+
+        const memoryMatch = /^\/memories\/([^/]+)$/.exec(url.pathname)
+        if (memoryMatch) {
+          const idCheck = MemoryIdParamSchema.safeParse({
+            id: decodeURIComponent(memoryMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid memory identifier', { statusCode: 400 })
+          }
+          if (req.method === 'PATCH') {
+            const body = await readJsonBody(req)
+            const parsed = UpdateMemoryIpcInputSchema.safeParse({
+              id: idCheck.data.id,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError(
+                'VALIDATION_ERROR',
+                parsed.error.issues[0]?.message ?? 'Invalid update memory payload',
+                { statusCode: 400 },
+              )
+            }
+            sendJson(res, 200, await memoryService.updateMemory(parsed.data))
+            return
+          }
+          if (req.method === 'DELETE') {
+            sendJson(res, 200, await memoryService.deleteMemory(idCheck.data.id))
+            return
+          }
         }
       }
 

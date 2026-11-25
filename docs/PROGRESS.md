@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 3D.1 — Production Memory Integration
+
+2026-11-26. Branched `feat/phase-3d1-memory-integration` from `158a728`. Phase 3D.1 is **Verified** (**PASS**) with zero Knowledge/MCP production integration and zero live subscription inference turns. See [Phase 3D.1 report](extensions/phase-3d1-memory-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added production migration `0005_memory_core` (`apps/daemon/src/db/migrations.ts`, `schema.ts`) creating `memories` (`bot_id REFERENCES agents(id) ON DELETE RESTRICT`) and `memories_fts` (`unicode61 remove_diacritics 2`); added `createBorrowedMemoryDatabaseHandle()` (`packages/memory/src/storage/sqlite-client.ts`) so `MemoryService.close()` never closes the daemon's `DatabaseSync`. |
+| Verified | Implemented daemon-owned `MemoryService` (`apps/daemon/src/memory/service.ts`) constructing trusted `MemoryAuthContext` (`LOCAL_USER_ID`, `agents` ownership, `realpath` workspace hash `deriveWorkspaceId`), archiving bot-scoped memories on `DELETE /bots/:id` while preserving user-wide memories, and enforcing `MemorySettingsSchema` (`enabled: true`, `automaticRetrieval: false`, `includeUserWide: false`, `externalProviderConsent: false`). |
+| Verified | Wired 6 strict Zod v4 IPC channels (`ghost:memory:*` in `packages/shared-types/ipc.ts`, `apps/desktop/electron/preload.cts`, `main.ts`, `apps/daemon/src/server.ts`), `MemorySettingsSection` (`apps/desktop/src/components/MemorySettingsSection.tsx`, `SettingsModal.tsx`), and dispatch-boundary `RunOrchestrator` + `CodexAppServerAdapter` `turn/start.input` reference context (`baseInstructions` untouched, `run_events` metadata-only). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (0 vulns), `node scripts/verify-phase-2e-acceptance.mjs`, `node scripts/verify-phase-3d1-electron.mjs` (2 screenshots in `design/reviews/phase-3d1/`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `65/65` core = **105/105** each) all passed. |
+
 ## Phase 3D.0 — Core and Extension Integration Foundation
 
 2026-11-26. Branched `feat/phase-3d0-integration-foundation` from `main` (`07839ff`), merged accepted Track B (`d7ec6ba`, `feat/phase-3c-mcp-foundation`), and upgraded `zod` to `4.6.7` across all 6 dependent workspace packages. Phase 3D.0 is **Verified** (**PASS**) with zero `0005+` migrations or Phase 3D.1–3D.4 daemon wiring. See [Phase 3D.0 report](extensions/phase-3d0-integration-report.md).

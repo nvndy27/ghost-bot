@@ -20,15 +20,21 @@ import {
   BotsListResponseSchema,
   CancelRunResponseSchema,
   CreateBotInputSchema,
+  CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
   IPC_CHANNELS,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
+  ListMemoriesIpcInputSchema,
+  ListMemoriesResponseSchema,
   ListMessagesParamsSchema,
   ListRunEventsParamsSchema,
   ListSessionsParamsSchema,
+  MemoryIpcIdSchema,
+  MemoryIdParamSchema,
+  MemoryRecordDtoSchema,
   MessagesListResponseSchema,
   ProviderSummarySchema,
   RenameSessionInputSchema,
@@ -40,6 +46,8 @@ import {
   RunRecordSchema,
   RuntimeSnapshotParamsSchema,
   RuntimeSnapshotSchema,
+  SearchMemoriesIpcInputSchema,
+  SearchMemoriesResponseSchema,
   SessionIdParamsSchema,
   SessionIdSchema,
   SessionInspectionResponseSchema,
@@ -50,6 +58,7 @@ import {
   StartRunInputSchema,
   StartRunResponseSchema,
   UpdateBotInputSchema,
+  UpdateMemoryIpcInputSchema,
   WorkspacePickResponseSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
@@ -562,6 +571,66 @@ function registerIpcHandlers(): void {
             : {}),
         },
       },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListMemoriesIpcInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    if (parsed.scopeKind) qs.set('scopeKind', parsed.scopeKind)
+    if (parsed.includeUserWide) qs.set('includeUserWide', 'true')
+    if (parsed.includeArchived) qs.set('includeArchived', 'true')
+    if (parsed.category) qs.set('category', parsed.category)
+    qs.set('limit', String(parsed.limit))
+    qs.set('offset', String(parsed.offset))
+    return queryDaemon(`/memories?${qs.toString()}`, ListMemoriesResponseSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_SEARCH, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SearchMemoriesIpcInputSchema.parse(params)
+    return queryDaemon('/memories/search', SearchMemoriesResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_CREATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = CreateMemoryIpcInputSchema.parse(params)
+    return queryDaemon('/memories', MemoryRecordDtoSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = UpdateMemoryIpcInputSchema.parse(params)
+    const { id, ...patch } = parsed
+    return queryDaemon(`/memories/${encodeURIComponent(id)}`, MemoryRecordDtoSchema, {
+      method: 'PATCH',
+      body: patch,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_ARCHIVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = MemoryIdParamSchema.parse(params)
+    return queryDaemon(`/memories/${encodeURIComponent(id)}/archive`, MemoryRecordDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MEMORY_DELETE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = MemoryIdParamSchema.parse(params)
+    return queryDaemon(
+      `/memories/${encodeURIComponent(id)}`,
+      z.object({ deletedId: MemoryIpcIdSchema }),
+      { method: 'DELETE' },
     )
   })
 }

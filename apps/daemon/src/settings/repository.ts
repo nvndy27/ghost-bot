@@ -60,6 +60,7 @@ export class SettingsRepository {
         personalization: { ...current.personalization, ...(patch.personalization ?? {}) },
         permissions: { ...current.permissions, ...(patch.permissions ?? {}) },
         privacy: { ...current.privacy, ...(patch.privacy ?? {}) },
+        memory: { ...current.memory, ...(patch.memory ?? {}) },
       })
 
       this.handle.sqlite

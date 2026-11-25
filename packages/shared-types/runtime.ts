@@ -7,7 +7,7 @@ export interface Capabilities { streaming: boolean; cancellation: boolean; resum
 export interface UsageSnapshot { source: 'provider' | 'local' | 'estimated'; observedAt: string; windows: { label: string; usedPercent: number | null; resetAt: string | null }[]; inputTokens?: number; outputTokens?: number; costUsd?: number }
 export interface SessionConfig { agentId: string; accountId: string; modelId: string; effort?: string; permission: PermissionMode; workspace: string; instructions: string }
 export interface Session { id: string; externalId: string; runtimeId: string }
-export interface AgentRequest { runId: string; session: Session; text: string; attachments?: string[] }
+export interface AgentRequest { runId: string; session: Session; text: string; attachments?: string[]; referenceContext?: string }
 export interface ApprovalDecision { approvalId: string; runId: string; argsHash: string; decision: 'allow-once' | 'deny' }
 export type EventPayload =
   | { type: 'message.delta'; text: string }

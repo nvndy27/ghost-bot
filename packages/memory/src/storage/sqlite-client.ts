@@ -107,3 +107,58 @@ export async function openMemoryDatabase(
     },
   }
 }
+
+export interface BorrowedMemoryDatabaseOptions {
+  fts5Enabled?: boolean
+  dbLabel?: string
+}
+
+function detectMemoriesFtsTable(sqlite: DatabaseSync): boolean {
+  try {
+    const row = sqlite
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_fts'`)
+      .get() as { name?: unknown } | undefined
+    return row?.name === 'memories_fts'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Wraps an externally owned SQLite connection (e.g., daemon-owned `ghost-bot.sqlite`)
+ * after production migrations have initialized the `memories` tables.
+ * Closing this handle only detaches the memory repository; it never closes `sqlite`.
+ */
+export function createBorrowedMemoryDatabaseHandle(
+  sqlite: DatabaseSync,
+  options: BorrowedMemoryDatabaseOptions = {},
+): MemoryDatabaseHandle {
+  const fts5Enabled = options.fts5Enabled ?? detectMemoriesFtsTable(sqlite)
+  const dbPath = options.dbLabel ?? ':borrowed:'
+
+  const transaction = <T,>(fn: () => T): T => {
+    sqlite.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      sqlite.exec('COMMIT')
+      return result
+    } catch (err) {
+      try {
+        sqlite.exec('ROLLBACK')
+      } catch {
+        // Ignore rollback errors.
+      }
+      throw err
+    }
+  }
+
+  return {
+    dbPath,
+    sqlite,
+    fts5Enabled,
+    transaction,
+    close: () => {
+      // Intentionally no-op: the caller retains ownership of `sqlite`.
+    },
+  }
+}

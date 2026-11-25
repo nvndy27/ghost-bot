@@ -208,6 +208,60 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_approvals_session_created ON approvals(session_id, created_at);
     `,
   },
+  {
+    version: 5,
+    name: '0005_memory_core',
+    sql: `
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('user', 'bot', 'workspace')),
+        user_id TEXT NOT NULL,
+        bot_id TEXT REFERENCES agents(id) ON DELETE RESTRICT,
+        workspace_id TEXT,
+        scope_key TEXT NOT NULL,
+        origin TEXT NOT NULL CHECK (origin IN ('explicit', 'inferred')),
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        normalized_content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        provenance_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT,
+        expires_at TEXT,
+        CHECK (
+          (scope_kind = 'user' AND bot_id IS NULL AND workspace_id IS NULL) OR
+          (scope_kind = 'bot' AND bot_id IS NOT NULL AND workspace_id IS NULL) OR
+          (scope_kind = 'workspace' AND bot_id IS NULL AND workspace_id IS NOT NULL)
+        ),
+        CHECK (
+          (status = 'archived' AND archived_at IS NOT NULL) OR
+          (status = 'active' AND archived_at IS NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_active_dedup
+        ON memories(scope_key, content_hash)
+        WHERE status = 'active';
+
+      CREATE INDEX IF NOT EXISTS idx_memories_scope
+        ON memories(user_id, scope_kind, status, updated_at DESC, id ASC);
+
+      CREATE INDEX IF NOT EXISTS idx_memories_expires
+        ON memories(expires_at)
+        WHERE expires_at IS NOT NULL;
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        memory_id UNINDEXED,
+        content,
+        tags_text,
+        tokenize='unicode61 remove_diacritics 2'
+      );
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

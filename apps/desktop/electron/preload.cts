@@ -34,6 +34,12 @@ const bridge: GhostBotBridge = {
   reconnectRuntime: () => ipcRenderer.invoke('ghost:runtime:reconnect', {}),
   inspectSession: (sessionId) => ipcRenderer.invoke('ghost:sessions:inspect', { sessionId }),
   retryRun: (input) => ipcRenderer.invoke('ghost:runs:retry', input),
+  listMemories: (input) => ipcRenderer.invoke('ghost:memory:list', input ?? {}),
+  searchMemories: (input) => ipcRenderer.invoke('ghost:memory:search', input),
+  createMemory: (input) => ipcRenderer.invoke('ghost:memory:create', input),
+  updateMemory: (input) => ipcRenderer.invoke('ghost:memory:update', input),
+  archiveMemory: (id) => ipcRenderer.invoke('ghost:memory:archive', { id }),
+  deleteMemory: (id) => ipcRenderer.invoke('ghost:memory:delete', { id }),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

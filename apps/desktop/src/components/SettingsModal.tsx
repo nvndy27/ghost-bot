@@ -10,6 +10,7 @@ import type {
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General' },
@@ -46,6 +47,7 @@ export interface SettingsModalProps {
   runtimeSnapshot: RuntimeSnapshot | null
   daemonHealth: DaemonHealthResponse | null
   bots: WorkspaceBot[]
+  activeBotId?: string | null
   onUpdateSettings: (patch: AppSettingsPatch) => Promise<void>
   onResetSettings: () => Promise<void>
   onRefreshRuntime: () => Promise<void>
@@ -59,6 +61,7 @@ export function SettingsModal({
   runtimeSnapshot,
   daemonHealth,
   bots,
+  activeBotId,
   onUpdateSettings,
   onResetSettings,
   onRefreshRuntime,
@@ -732,15 +735,23 @@ export function SettingsModal({
               </div>
             )}
 
-            {(activeSection === 'memory' ||
-              activeSection === 'tools' ||
+            {activeSection === 'memory' && (
+              <MemorySettingsSection
+                settings={settings}
+                bots={bots}
+                activeBotId={activeBotId}
+                onUpdateSettings={onUpdateSettings}
+              />
+            )}
+
+            {(activeSection === 'tools' ||
               activeSection === 'computer-use' ||
               activeSection === 'routines') && (
               <div>
                 <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
                   {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}
                   <span className="gb-badge">
-                    {activeSection === 'memory' || activeSection === 'tools'
+                    {activeSection === 'tools'
                       ? 'Unavailable · Phase 3'
                       : 'Unavailable · Phase 5'}
                   </span>

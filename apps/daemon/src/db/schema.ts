@@ -218,3 +218,31 @@ export const approvals = sqliteTable(
     index('idx_approvals_session_created').on(t.sessionId, t.createdAt),
   ],
 )
+
+export const memories = sqliteTable(
+  'memories',
+  {
+    id: text('id').primaryKey(),
+    schemaVersion: integer('schema_version').notNull(),
+    scopeKind: text('scope_kind').notNull(),
+    userId: text('user_id').notNull(),
+    botId: text('bot_id').references(() => agents.id, { onDelete: 'restrict' }),
+    workspaceId: text('workspace_id'),
+    scopeKey: text('scope_key').notNull(),
+    origin: text('origin').notNull(),
+    category: text('category').notNull(),
+    content: text('content').notNull(),
+    normalizedContent: text('normalized_content').notNull(),
+    contentHash: text('content_hash').notNull(),
+    tagsJson: text('tags_json').notNull(),
+    provenanceJson: text('provenance_json').notNull(),
+    status: text('status').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    archivedAt: text('archived_at'),
+    expiresAt: text('expires_at'),
+  },
+  (t) => [
+    index('idx_memories_scope').on(t.userId, t.scopeKind, t.status, t.updatedAt, t.id),
+  ],
+)

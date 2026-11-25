@@ -1244,6 +1244,7 @@ export function App() {
         runtimeSnapshot={runtimeSnapshot}
         daemonHealth={health}
         bots={bots}
+        activeBotId={activeBotId}
         onUpdateSettings={handleUpdateSettings}
         onResetSettings={handleResetSettings}
         onRefreshRuntime={handleRefreshRuntime}

@@ -91,7 +91,9 @@ export {
 } from './repository/normalization.ts'
 
 export {
+  createBorrowedMemoryDatabaseHandle,
   openMemoryDatabase,
+  type BorrowedMemoryDatabaseOptions,
   type MemoryDatabaseHandle,
   type OpenMemoryDatabaseOptions,
 } from './storage/sqlite-client.ts'

@@ -583,9 +583,14 @@ export class CodexAppServerAdapter implements AgentRuntime {
     try {
       const { approvalPolicy } = mapPermissionToCodex(config.permission)
       const sandboxPolicy = buildCodexSandboxPolicy(config.permission, canonicalWorkspace)
+      const turnInput: Array<{ type: 'text'; text: string }> = []
+      if (request.referenceContext && request.referenceContext.trim().length > 0) {
+        turnInput.push({ type: 'text', text: request.referenceContext })
+      }
+      turnInput.push({ type: 'text', text: request.text })
       const turnRes = await client.request<Record<string, unknown>>('turn/start', {
         threadId: active.threadId,
-        input: [{ type: 'text', text: request.text }],
+        input: turnInput,
         cwd: canonicalWorkspace,
         model: config.modelId,
         effort: config.effort,

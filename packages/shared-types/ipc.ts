@@ -31,6 +31,12 @@ export const IPC_CHANNELS = {
   RUNTIME_RECONNECT: 'ghost:runtime:reconnect',
   SESSIONS_INSPECT: 'ghost:sessions:inspect',
   RUNS_RETRY: 'ghost:runs:retry',
+  MEMORY_LIST: 'ghost:memory:list',
+  MEMORY_SEARCH: 'ghost:memory:search',
+  MEMORY_CREATE: 'ghost:memory:create',
+  MEMORY_UPDATE: 'ghost:memory:update',
+  MEMORY_ARCHIVE: 'ghost:memory:archive',
+  MEMORY_DELETE: 'ghost:memory:delete',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -226,12 +232,20 @@ export const PrivacySettingsSchema = z.object({
   retentionDays: z.number().int().min(1).max(365).default(30),
 })
 
+export const MemorySettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  automaticRetrieval: z.boolean().default(false),
+  includeUserWide: z.boolean().default(false),
+  externalProviderConsent: z.boolean().default(false),
+})
+
 export const AppSettingsSchema = z.object({
   general: GeneralSettingsSchema.prefault({}),
   appearance: AppearanceSettingsSchema.prefault({}),
   personalization: PersonalizationSettingsSchema.prefault({}),
   permissions: PermissionsSettingsSchema.prefault({}),
   privacy: PrivacySettingsSchema.prefault({}),
+  memory: MemorySettingsSchema.prefault({}),
 })
 
 export type AppSettings = z.infer<typeof AppSettingsSchema>
@@ -243,6 +257,7 @@ export const AppSettingsPatchSchema = z
     personalization: PersonalizationSettingsSchema.partial().optional(),
     permissions: PermissionsSettingsSchema.partial().optional(),
     privacy: PrivacySettingsSchema.partial().optional(),
+    memory: MemorySettingsSchema.partial().optional(),
   })
   .strict()
 
@@ -574,6 +589,123 @@ export const RetryRunInputSchema = z
 
 export type RetryRunInput = z.infer<typeof RetryRunInputSchema>
 
+export const MemoryIpcIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Invalid memory identifier')
+
+export const MemoryCategoryIpcSchema = z.enum([
+  'preference',
+  'fact',
+  'instruction_note',
+  'project_context',
+  'glossary',
+  'other',
+])
+
+export const MemoryScopeInputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user') }).strict(),
+  z.object({ kind: z.literal('bot'), botId: BotIdSchema }).strict(),
+  z.object({ kind: z.literal('workspace'), botId: BotIdSchema }).strict(),
+])
+
+export const MemoryRecordDtoSchema = z.object({
+  id: MemoryIpcIdSchema,
+  scopeKind: z.enum(['user', 'bot', 'workspace']),
+  botId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+  origin: z.enum(['explicit', 'inferred']),
+  category: MemoryCategoryIpcSchema,
+  content: z.string(),
+  tags: z.array(z.string()),
+  status: z.enum(['active', 'archived']),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+})
+
+export type MemoryRecordDto = z.infer<typeof MemoryRecordDtoSchema>
+
+export const ListMemoriesIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    scopeKind: z.enum(['user', 'bot', 'workspace']).optional(),
+    includeUserWide: z.boolean().default(false),
+    includeArchived: z.boolean().default(false),
+    category: MemoryCategoryIpcSchema.optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+    offset: z.number().int().min(0).max(10_000).default(0),
+  })
+  .strict()
+
+export type ListMemoriesIpcInput = z.infer<typeof ListMemoriesIpcInputSchema>
+
+export const ListMemoriesResponseSchema = z.object({
+  records: z.array(MemoryRecordDtoSchema),
+  total: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+})
+
+export type ListMemoriesResponse = z.infer<typeof ListMemoriesResponseSchema>
+
+export const SearchMemoriesIpcInputSchema = z
+  .object({
+    query: z.string().trim().min(1).max(256),
+    botId: BotIdSchema.optional(),
+    scopeKind: z.enum(['user', 'bot', 'workspace']).optional(),
+    includeUserWide: z.boolean().default(false),
+    limit: z.number().int().min(1).max(50).default(20),
+  })
+  .strict()
+
+export type SearchMemoriesIpcInput = z.infer<typeof SearchMemoriesIpcInputSchema>
+
+export const SearchMemoriesResponseSchema = z.object({
+  matches: z.array(
+    z.object({
+      record: MemoryRecordDtoSchema,
+      score: z.number(),
+    }),
+  ),
+  engine: z.enum(['fts5', 'lexical_fallback']),
+  total: z.number().int().nonnegative(),
+})
+
+export type SearchMemoriesResponse = z.infer<typeof SearchMemoriesResponseSchema>
+
+export const CreateMemoryIpcInputSchema = z
+  .object({
+    scope: MemoryScopeInputSchema,
+    category: MemoryCategoryIpcSchema,
+    content: z.string().trim().min(1).max(4000),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).default([]),
+    expiresAt: z.string().datetime().nullable().optional(),
+  })
+  .strict()
+
+export type CreateMemoryIpcInput = z.infer<typeof CreateMemoryIpcInputSchema>
+
+export const UpdateMemoryIpcInputSchema = z
+  .object({
+    id: MemoryIpcIdSchema,
+    content: z.string().trim().min(1).max(4000).optional(),
+    category: MemoryCategoryIpcSchema.optional(),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
+  })
+  .strict()
+
+export type UpdateMemoryIpcInput = z.infer<typeof UpdateMemoryIpcInputSchema>
+
+export const MemoryIdParamSchema = z
+  .object({
+    id: MemoryIpcIdSchema,
+  })
+  .strict()
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -605,6 +737,12 @@ export interface GhostBotBridge {
   reconnectRuntime(): Promise<RuntimeSnapshot>
   inspectSession(sessionId: string): Promise<SessionInspectionResponse>
   retryRun(input: RetryRunInput): Promise<StartRunResponse>
+  listMemories(input?: Partial<ListMemoriesIpcInput>): Promise<ListMemoriesResponse>
+  searchMemories(input: SearchMemoriesIpcInput): Promise<SearchMemoriesResponse>
+  createMemory(input: CreateMemoryIpcInput): Promise<MemoryRecordDto>
+  updateMemory(input: UpdateMemoryIpcInput): Promise<MemoryRecordDto>
+  archiveMemory(id: string): Promise<MemoryRecordDto>
+  deleteMemory(id: string): Promise<{ deletedId: string }>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>
