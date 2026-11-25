@@ -21,7 +21,7 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'mock'
+  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
@@ -61,6 +61,24 @@ export class RuntimePolicyBroker {
       return {
         allowed: false,
         reason: 'Mock runtime is for offline UI preview only, not real execution',
+        verifiedModes: [],
+      }
+    }
+
+    if (input.runtimeMode === 'openclaw') {
+      return {
+        allowed: false,
+        reason:
+          'OpenClaw live execution is gated until Gateway sandbox and upstream billing enforcement are verified',
+        verifiedModes: [],
+      }
+    }
+
+    if (input.runtimeMode === 'ollama') {
+      return {
+        allowed: false,
+        reason:
+          'Ollama local execution requires explicit local-model opt-in and supports read-only chat without tools',
         verifiedModes: [],
       }
     }

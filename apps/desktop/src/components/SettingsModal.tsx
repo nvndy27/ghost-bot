@@ -447,7 +447,12 @@ export function SettingsModal({
                   }}
                 >
                   <h2 style={{ margin: 0, fontSize: '17px' }}>
-                    Usage <span className="gb-badge">{runtimeSnapshot?.usageStatus ?? 'unavailable'}</span>
+                    Usage{' '}
+                    <span className="gb-badge">
+                      {runtimeSnapshot?.status === 'stale'
+                        ? 'stale'
+                        : (runtimeSnapshot?.usageStatus ?? 'unavailable')}
+                    </span>
                   </h2>
                   <button
                     type="button"
@@ -461,7 +466,7 @@ export function SettingsModal({
 
                 {!runtimeSnapshot || runtimeSnapshot.runtimeMode === 'mock' ? (
                   <div className="gb-card">
-                    <div>Mock mode active</div>
+                    <div>Mock mode active (local sample)</div>
                     <small className="gb-muted">
                       Real subscription usage is unavailable in mock mode. Sample workspace bars are
                       demonstration data only.
@@ -470,16 +475,32 @@ export function SettingsModal({
                 ) : runtimeSnapshot.usageWindows.length === 0 ? (
                   <div className="gb-card">
                     <div>No rate-limit windows reported</div>
-                    <small className="gb-muted">{runtimeSnapshot.detail}</small>
+                    <small className="gb-muted">
+                      Source: {runtimeSnapshot.runtimeMode} ({runtimeSnapshot.authMethod}) ·{' '}
+                      {runtimeSnapshot.detail}
+                    </small>
                   </div>
                 ) : (
                   <div style={{ display: 'grid', gap: '12px' }}>
+                    <div className="gb-card">
+                      <div>
+                        Source: Provider subscription ({runtimeSnapshot.runtimeMode} ·{' '}
+                        {runtimeSnapshot.authMethod}
+                        {runtimeSnapshot.planType ? ` / ${runtimeSnapshot.planType}` : ''})
+                      </div>
+                      <small className="gb-muted">
+                        Last refreshed:{' '}
+                        {runtimeSnapshot.usageObservedAt ?? runtimeSnapshot.observedAt}
+                      </small>
+                    </div>
                     {runtimeSnapshot.usageWindows.map((w) => (
                       <div key={w.label} className="gb-card">
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <strong>Window ({w.label})</strong>
                           <span>
-                            {w.usedPercent !== null ? `${w.usedPercent}% used` : 'Unavailable'}
+                            {w.usedPercent !== null
+                              ? `${w.usedPercent}% used · ${Math.max(0, 100 - w.usedPercent)}% remaining`
+                              : 'Unavailable'}
                           </span>
                         </div>
                         <div className="gb-bar" aria-hidden="true">
@@ -493,9 +514,6 @@ export function SettingsModal({
                         </small>
                       </div>
                     ))}
-                    <small className="gb-muted">
-                      Observed: {runtimeSnapshot.usageObservedAt ?? runtimeSnapshot.observedAt}
-                    </small>
                   </div>
                 )}
               </div>

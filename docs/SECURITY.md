@@ -39,3 +39,9 @@ Live verification (`scripts/verify-codex-live.mjs`) confirmed:
 - `full-access`: remains disabled by default unless explicit opt-in and verified evidence are supplied.
 
 The OpenClaw probe uses existing CLI-managed credentials (`operator.read`, `read_only`) and refuses a nonmatching Gateway URL. Probes and verification scripts emit redacted summaries only and are never exposed through renderer IPC.
+
+## Phase 2E Multi-Runtime & Recovery Hardening
+- **Startup crash recovery**: `RunOrchestrator.reconcileOnStartup()` reconstructs durable `sessionsWithUnconfirmedStop` quarantine (`execution.quarantinedSessions.v1`) for all non-terminal live provider states (`starting`, `running`, `awaiting_approval`, `cancelling`) while leaving `queued` and `mock` runs unquarantined.
+- **Process termination evidence**: `JsonRpcClient.close()` waits for actual child exit (`exitInfo !== null`) and rejects with `TRANSPORT_ERROR` if `SIGKILL` fails; `RuntimeRegistry.closeOwnedClient()` throws `RUNTIME_TERMINATION_FAILED` so quarantine is preserved on termination failure.
+- **OpenClaw & Ollama boundaries**: `OpenClawGatewayAdapter` enforces loopback `ws://`/`wss://` URLs, `1 MB` CLI `maxBuffer`, credential redaction on error details, non-termination of external Gateways, and fail-closed `RuntimePolicyBroker` gating for live execution. `OllamaLocalAdapter` enforces loopback `http://`/`https://` URLs, `read-only` tool-free execution, `32 KB` / `24`-turn bounded history, and `2 MB` stream limits.
+- **Workspace containment note**: Phase 2C live verification confirmed `Approve once` / `Deny` and an unchanged outside `canary.txt`; deterministic unit tests verify `excludeSlashTmp: true`, `excludeTmpdirEnvVar: true`, `networkAccess: false`, and privilege-escalation denial. Live attempt-and-block testing of symlink escapes or post-approval network access was not separately re-run.

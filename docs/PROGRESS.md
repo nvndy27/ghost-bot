@@ -12,6 +12,20 @@
 | Implemented | Added Fedora/Linux packaging configuration (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`); `rpmbuild` is present on host, `electron-builder` is absent (no AppImage/RPM artifact built yet). |
 | Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**55/55** including `tests/phase-2d-recovery.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs` through `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` (2 screenshots in `design/reviews/phase-2d/`) all passed. |
 
+## Phase 2E — Multi-Runtime Completion, Packaging & Functional MVP Acceptance
+
+2026-11-26. Branched `feat/phase-2e-functional-mvp` from `main` (`4489f2b`). Phase 2E is **Verified** (**PASS**) and merged to `main`. All **62/62** unit/protocol tests across 3 consecutive runs, `pnpm verify:offline`, OpenClaw/Ollama security hardening, AppImage 2-launch verification, native `rpmbuild` Fedora RPM generation + extracted-package smoke launch, and total process-tree resource measurements passed with zero additional live inference turns.
+
+| State | Evidence |
+|---|---|
+| Verified | Hardened `reconcileOnStartup()` (`apps/daemon/src/execution/orchestrator.ts`) to reconstruct durable quarantine for all live non-terminal states (`starting`, `running`, `awaiting_approval`, `cancelling`) while leaving `queued` and `mock` runs unquarantined; hardened `JsonRpcClient.close()` (`packages/runtime-adapters/json-rpc-client.ts`) to confirm child exit before resolving. |
+| Verified | Hardened `OpenClawGatewayAdapter` (`maxBuffer: 1MB`, credential redaction on error strings, strict loopback validation, execution gated by `RuntimePolicyBroker`) and `OllamaLocalAdapter` (`OLLAMA_MAX_HISTORY_BYTES = 32KB`, `OLLAMA_MAX_STREAM_BYTES = 2MB`, loopback-only, `read-only` tool-free); verified live OpenClaw `2026.11.8` metadata (`health`, `status`, `models.list`) and deterministic protocol suites (`tests/openclaw-adapter.test.ts`, `tests/ollama-adapter.test.ts`, `tests/phase-2e-mvp.test.ts`). |
+| Verified | Built native Fedora RPM (`apps/desktop/scripts/build-rpm.mjs`, `ghost-bot-0.1.0-1.x86_64.rpm`, `93996141` bytes, SHA-256 `74cd2950b57e1c6b4b7926f45c7bb78a06c785b4c8d0b5b8bac2088529710cdc`) via `/usr/bin/rpmbuild` v6.1.0 without `fpm`/`libcrypt.so.1`; inspected metadata/deps/scripts and passed `rpm2cpio | cpio` extracted-package smoke launch (`sandboxed: true`). |
+| Verified | Rebuilt `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` (`121058094` bytes, SHA-256 `8bc27be83628f00fd5d697283dc3dfa55f1ffeb2f49ec5152348313daede61af`) and passed `scripts/verify-packaged-appimage.mjs` (`APPIMAGE_EXTRACT_AND_RUN=1`, 0 bundled credentials/DBs, `sandboxed: true`, strict CSP, 2-launch SQLite persistence `0700`/`0600`). |
+| Verified | Measured application-only process-tree resources & 15-step UX (`scripts/verify-phase-2e-acceptance.mjs`): cold `1695ms`, warm `1774ms`, daemon `186.2 MB` RSS / `130.1 MB` PSS, total tree `685.4 MB` RSS / `380.4 MB` PSS, renderer `118.8 MB`, GPU `139.5 MB`, idle CPU `0.66%`, streaming `189ms`, refresh `4ms`, history `6ms`, shutdown `1869ms`, `daemonExitedCleanly: true`. |
+| Tested | `pnpm lint`, `pnpm typecheck`, **3x `pnpm test` (`62/62` each)**, `pnpm verify:offline`, `pnpm package:appimage`, `pnpm package:rpm`, Electron smoke, 5 UI suites (`1B`–`2C`), 4 Electron E2E suites (`persistence`, `1D`, `2A`, `2D`), and `verify-packaged-appimage.mjs` all passed after final edits. |
+| Blocked | Host FUSE2 (`libfuse.so.2`) absent for native AppImage FUSE launch (`APPIMAGE_EXTRACT_AND_RUN=1` verified); host-installed RPM launch not run without authorization; live OpenClaw/Ollama inference not authorized. |
+
 ### Phase 2D final acceptance & merge — 2026-11-26
 
 Phase 2D is **Verified** (**PASS** with authorized RPM packaging deferral to Phase 2E) on `feat/phase-2d-recovery-resume` and merged to `main`.

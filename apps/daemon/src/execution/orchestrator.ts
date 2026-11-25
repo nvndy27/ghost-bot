@@ -261,8 +261,15 @@ export class RunOrchestrator {
 
     return this.dbHandle.transaction(() => {
       const staleRuns = this.dbHandle.sqlite
-        .prepare(`SELECT id, status FROM runs WHERE status IN (${activePlaceholders})`)
-        .all(...ACTIVE_RUN_STATUSES) as unknown as Array<{ id: string; status: string }>
+        .prepare(
+          `SELECT id, session_id, runtime_id, status FROM runs WHERE status IN (${activePlaceholders})`,
+        )
+        .all(...ACTIVE_RUN_STATUSES) as unknown as Array<{
+        id: string
+        session_id: string
+        runtime_id: string
+        status: string
+      }>
 
       if (staleRuns.length === 0) {
         return 0
@@ -335,6 +342,17 @@ export class RunOrchestrator {
           },
           timestamp: now,
         })
+
+        // Reconstruct durable quarantine for any live provider run that may still have active
+        // or uncertain execution/tool subprocesses (starting, running, awaiting_approval, cancelling).
+        // Runs still in 'queued' never dispatched to the provider, and 'mock' has no external state.
+        if (stale.runtime_id !== 'mock' && stale.status !== 'queued') {
+          this.sessionsWithUnconfirmedStop.set(
+            stale.session_id,
+            this.runtimeRegistry?.getGeneration() ?? 0,
+          )
+          this.persistDurableQuarantine()
+        }
       }
 
       // Startup reconciliation must never leave pending/resolving approvals actionable.
