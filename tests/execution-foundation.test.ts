@@ -452,6 +452,51 @@ test('Phase 2A hardening: idempotency conflict, active-run bot archival guard, s
     const runAfterRestart = await daemonRequest(addr2, token, `/runs/${runId}`)
     assert.equal(runAfterRestart.status, 200)
     assert.equal(runAfterRestart.json.status, 'cancelled')
+    await daemon2.stop()
+
+    // 4. Stale daemon.lock from a dead PID + uncommitted run_events reconstruction
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(
+      join(dir, 'daemon.lock'),
+      JSON.stringify({ pid: 999_999, startedAt: new Date().toISOString() }),
+      { mode: 0o600 },
+    )
+    const dbCheck = await openGhostBotDatabase(dir)
+    const nowIso = new Date().toISOString()
+    dbCheck.sqlite
+      .prepare(
+        `INSERT INTO runs (id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, config_snapshot_json, status, error_json, started_at, ended_at, created_at)
+         VALUES ('run-unflushed', ?, 'chief', 'idem-unflushed', 'mock', 'mock-fast', 'medium', 'ask-approval', '{}', 'running', NULL, ?, NULL, ?)`,
+      )
+      .run(sessionId, nowIso, nowIso)
+    dbCheck.sqlite
+      .prepare(
+        `INSERT INTO messages (id, session_id, role, content_json, seq_order, status, created_at, updated_at, run_id)
+         VALUES ('msg-unflushed', ?, 'assistant', '{"text":""}', 99, 'streaming', ?, ?, 'run-unflushed')`,
+      )
+      .run(sessionId, nowIso, nowIso)
+    const evtStore = new RunEventStore(dbCheck)
+    evtStore.appendEvent('run-unflushed', {
+      eventKey: 'delta:1',
+      type: 'message.delta',
+      payload: { delta: 'Committed before crash' },
+    })
+    dbCheck.close()
+
+    const daemon3 = new GhostBotDaemon({
+      authToken: token,
+      port: 0,
+      dataDir: dir,
+      runtimeMode: 'mock',
+    })
+    const { address: addr3 } = await daemon3.start()
+    const msgsAfterCrash = await daemonRequest(addr3, token, `/sessions/${sessionId}/messages`)
+    const reconstructed = (msgsAfterCrash.json.messages as Array<{ id: string; text: string; status: string }>).find(
+      (m) => m.id === 'msg-unflushed',
+    )
+    assert.equal(reconstructed?.status, 'interrupted')
+    assert.equal(reconstructed?.text, 'Committed before crash')
+    await daemon3.stop()
   } finally {
     await daemon1.stop().catch(() => undefined)
     await daemon2.stop().catch(() => undefined)

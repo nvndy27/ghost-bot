@@ -604,6 +604,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
         })
       }
     } finally {
+      active.pendingNotifications.length = 0
       this.revokePendingApprovalsForRun(request.runId)
       this.activeRunsByThread.delete(active.threadId)
       this.activeRunsById.delete(active.runId)
@@ -711,7 +712,9 @@ export class CodexAppServerAdapter implements AgentRuntime {
       if (active.turnId === null) {
         // turn/start response and notifications can arrive in the same stdout read chunk before
         // the turn/start promise continuation assigns active.turnId; buffer until turnId is known.
-        active.pendingNotifications.push(n)
+        if (active.pendingNotifications.length < 256) {
+          active.pendingNotifications.push(n)
+        }
         return
       }
       if (notifTurnId !== active.turnId) {
@@ -809,10 +812,10 @@ export class CodexAppServerAdapter implements AgentRuntime {
       req.method === 'execCommandApproval' ||
       req.method === 'applyPatchApproval'
     ) {
-      if (!active) {
+      if (!active || active.turnId === null) {
         return { decision: 'decline' }
       }
-      if (active.turnId !== null && typeof p.turnId === 'string' && p.turnId !== active.turnId) {
+      if (typeof p.turnId === 'string' && p.turnId !== active.turnId) {
         return { decision: 'decline' }
       }
       const approvalId =

@@ -196,6 +196,41 @@ export class RunOrchestrator {
           )
           .run(now, errorJson, stale.id)
 
+        // Reconstruct any committed message.delta events that were not yet flushed to messages.content_json
+        const deltaRows = this.dbHandle.sqlite
+          .prepare(
+            `SELECT payload_json FROM run_events
+             WHERE run_id = ? AND type = 'message.delta'
+             ORDER BY seq ASC`,
+          )
+          .all(stale.id) as unknown as Array<{ payload_json: string }>
+
+        if (deltaRows.length > 0) {
+          let reconstructed = ''
+          for (const d of deltaRows) {
+            try {
+              const p = JSON.parse(d.payload_json) as { delta?: unknown; text?: unknown }
+              if (typeof p.delta === 'string') reconstructed += p.delta
+              else if (typeof p.text === 'string') reconstructed += p.text
+            } catch {
+              // ignore malformed payload
+            }
+          }
+          if (reconstructed.length > 0) {
+            const msgRow = this.dbHandle.sqlite
+              .prepare(`SELECT id, content_json FROM messages WHERE run_id = ? AND status = 'streaming' LIMIT 1`)
+              .get(stale.id) as { id: string; content_json: string } | undefined
+            if (msgRow) {
+              const existingMeta = parseJsonObject(msgRow.content_json).meta as
+                | Record<string, unknown>
+                | undefined
+              this.dbHandle.sqlite
+                .prepare(`UPDATE messages SET content_json = ?, status = 'interrupted', updated_at = ? WHERE id = ?`)
+                .run(serializeMessageContent(reconstructed, existingMeta), now, msgRow.id)
+            }
+          }
+        }
+
         this.dbHandle.sqlite
           .prepare(
             `UPDATE messages
@@ -291,6 +326,28 @@ export class RunOrchestrator {
         .get(input.sessionId, idempotencyKey) as RawRunRow | undefined
 
       if (existingRun) {
+        const botRow = this.dbHandle.sqlite
+          .prepare(
+            `SELECT runtime_id, model_id, effort, permission_mode FROM agents WHERE id = ?`,
+          )
+          .get(session.agent_id) as
+          | { runtime_id: string; model_id: string; effort: string; permission_mode: string }
+          | undefined
+
+        if (
+          botRow &&
+          (existingRun.runtime_id !== botRow.runtime_id ||
+            existingRun.model_id !== botRow.model_id ||
+            existingRun.effort !== botRow.effort ||
+            existingRun.permission_mode !== botRow.permission_mode)
+        ) {
+          throw new DaemonError(
+            'IDEMPOTENCY_CONFLICT',
+            'Idempotency key was already used with a different execution configuration',
+            { statusCode: 409 },
+          )
+        }
+
         const userMsg = this.dbHandle.sqlite
           .prepare(`SELECT id, content_json FROM messages WHERE run_id = ? AND role = 'user' LIMIT 1`)
           .get(existingRun.id) as { id: string; content_json: string } | undefined
