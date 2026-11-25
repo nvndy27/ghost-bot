@@ -156,6 +156,7 @@ export class RunOrchestrator {
   private readonly settingsRepo?: SettingsRepository
   private readonly policyBroker: RuntimePolicyBroker
   private readonly activeControls = new Map<string, ActiveRunControl>()
+  private readonly sessionsWithUnconfirmedStop = new Set<string>()
   private stopping = false
 
   constructor(dbHandle: DatabaseHandle, options?: RunOrchestratorOptions) {
@@ -316,6 +317,14 @@ export class RunOrchestrator {
       throw new DaemonError('INVALID_IDEMPOTENCY_KEY', 'A valid idempotencyKey is required', {
         statusCode: 400,
       })
+    }
+
+    if (this.sessionsWithUnconfirmedStop.has(input.sessionId)) {
+      throw new DaemonError(
+        'RUN_STOP_UNCONFIRMED',
+        `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
+        { statusCode: 409, retryable: true },
+      )
     }
 
     // Preflight read of session & bot to prepare async Codex verification before atomic transaction.
@@ -768,6 +777,7 @@ export class RunOrchestrator {
           control,
         }).finally(() => {
           if (control.cancelTimeout) clearTimeout(control.cancelTimeout)
+          this.sessionsWithUnconfirmedStop.delete(input.sessionId)
           this.activeControls.delete(txResult.run.id)
         })
       } else {
@@ -856,6 +866,7 @@ export class RunOrchestrator {
             try {
               const cur = this.getRun(runId)
               if (!isTerminalStatus(cur.status)) {
+                this.sessionsWithUnconfirmedStop.add(cur.sessionId)
                 this.finalizeRun({
                   runId,
                   sessionId: cur.sessionId,

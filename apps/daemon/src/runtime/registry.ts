@@ -130,6 +130,18 @@ export class RuntimeRegistry {
       )
     }
 
+    // Execution-time live account verification: never rely solely on 30s cached snapshot metadata.
+    const liveAccount = await client.getAccountSummary(false)
+    if (!liveAccount.accountPresent || liveAccount.accountType !== 'chatgpt') {
+      throw new DaemonError(
+        'AUTH_REQUIRED',
+        liveAccount.accountType === 'apiKey'
+          ? 'API-key accounts are blocked; ChatGPT subscription authentication is required.'
+          : 'ChatGPT subscription authentication is required before live execution.',
+        { statusCode: 401 },
+      )
+    }
+
     return {
       adapter: client as CodexExecutionClient,
       generation: this.generation,

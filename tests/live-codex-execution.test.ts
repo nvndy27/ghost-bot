@@ -348,6 +348,50 @@ test('Phase 2B denies unexpected live approval requests, handles cancellation, a
     )
     await regApiKey.stop()
 
+    // 5. Execution-time account check rejects even if 30s snapshot cache is still warm
+    let dynamicAuth: 'chatgpt' | null = 'chatgpt'
+    const baseClient = createFakeCodexClient({ scenario: 'normal' }).client
+    const dynamicClient: CodexMetadataClient = {
+      ...baseClient,
+      async getAccountSummary() {
+        if (dynamicAuth === null) {
+          return {
+            accountPresent: false,
+            accountType: null,
+            email: null,
+            planType: null,
+            workspaceName: null,
+            requiresOpenaiAuth: true,
+          }
+        }
+        return {
+          accountPresent: true,
+          accountType: 'chatgpt',
+          email: 'u@example.invalid',
+          planType: 'plus',
+          workspaceName: 'TestWS',
+          requiresOpenaiAuth: true,
+        }
+      },
+    }
+    const regDynamic = new RuntimeRegistry({
+      runtimeMode: 'codex',
+      codexVersionOverride: '0.172.0',
+      codexClientFactory: () => dynamicClient,
+      cacheTtlMs: 30_000,
+    })
+    // Warm the 30s cache while connected
+    const warmSnap = await regDynamic.getSnapshot(false)
+    assert.equal(warmSnap.status, 'available')
+    // Simulate account disconnecting mid-TTL
+    dynamicAuth = null
+    const orchDynamic = new RunOrchestrator(dbHandle, { runtimeRegistry: regDynamic })
+    await assert.rejects(
+      () => orchDynamic.startRun({ sessionId: sess.id, idempotencyKey: 'k-stale-cache', text: 'hi' }),
+      /ChatGPT subscription authentication is required/,
+    )
+    await regDynamic.stop()
+
     dbHandle.close()
   } finally {
     await rm(dir, { recursive: true, force: true })
