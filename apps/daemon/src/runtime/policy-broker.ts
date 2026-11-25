@@ -108,24 +108,10 @@ export class RuntimePolicyBroker {
   }
 
   /**
-   * Phase 2B live execution gate: restricts live Codex execution to verified read-only mode
-   * until interactive approval and workspace-write enforcement are verified in Phase 2C.
+   * Phase 2C live execution gate: permits verified read-only, ask-approval, and workspace modes
+   * under exact-version Codex 0.172.0 evidence and ChatGPT auth, while rejecting full-access.
    */
   authorizeLiveExecution(input: PolicyAuthorizationInput): PolicyAuthorizationDecision {
-    const base = this.authorize(input)
-    if (!base.allowed) {
-      return base
-    }
-    if (input.requestedPermission !== 'read-only') {
-      return {
-        allowed: false,
-        reason: `Phase 2B live Codex execution is limited to read-only mode; '${input.requestedPermission}' unlocks in Phase 2C.`,
-        verifiedModes: ['read-only'],
-      }
-    }
-    return {
-      ...base,
-      verifiedModes: ['read-only'],
-    }
+    return this.authorize(input)
   }
 }

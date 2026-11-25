@@ -179,6 +179,35 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(run_id, seq);
     `,
   },
+  {
+    version: 4,
+    name: '0004_durable_approvals',
+    sql: `
+      CREATE TABLE IF NOT EXISTS approvals (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE RESTRICT,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        runtime_generation INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        thread_id TEXT,
+        turn_id TEXT,
+        provider_request_id TEXT,
+        action_type TEXT NOT NULL,
+        action_summary TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        args_hash TEXT NOT NULL,
+        permission_mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        decision_meta_json TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_approvals_run_status ON approvals(run_id, status);
+      CREATE INDEX IF NOT EXISTS idx_approvals_session_created ON approvals(session_id, created_at);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

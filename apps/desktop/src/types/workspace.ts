@@ -33,7 +33,19 @@ export interface PendingApproval {
   description: string
   diffTitle: string
   diffText: string
-  decision: 'pending' | 'approved' | 'denied'
+  actionType?: string
+  argsHash?: string
+  permissionMode?: string
+  expiresAt?: string
+  isMock?: boolean
+  decision:
+    | 'pending'
+    | 'resolving'
+    | 'approved'
+    | 'denied'
+    | 'expired'
+    | 'revoked'
+    | 'resolution_failed'
 }
 
 export type ChatMessage =

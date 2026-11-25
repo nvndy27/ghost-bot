@@ -316,19 +316,42 @@ export function App() {
                 const appId = String(evt.payload.approvalId ?? 'approval')
                 const title = String(evt.payload.title ?? 'Approval required')
                 const cmd = String(evt.payload.command ?? '')
-                const blockedInPhase2B = Boolean(evt.payload.blockedInPhase2B)
+                const blockedReadOnly = Boolean(evt.payload.blockedInReadOnly)
+                const isMockApp = evt.payload.isMock !== false
                 nextApproval = {
                   id: appId,
                   title,
                   description: cmd,
-                  diffTitle: blockedInPhase2B
-                    ? 'Blocked in Phase 2B read-only mode'
-                    : 'Simulated action preview',
+                  diffTitle: blockedReadOnly
+                    ? 'Blocked in read-only mode'
+                    : isMockApp
+                      ? 'Simulated action preview'
+                      : 'Live action preview',
                   diffText: cmd,
-                  decision: blockedInPhase2B ? 'denied' : 'pending',
+                  actionType:
+                    typeof evt.payload.tool === 'string'
+                      ? evt.payload.tool
+                      : typeof evt.payload.actionType === 'string'
+                        ? evt.payload.actionType
+                        : undefined,
+                  argsHash: typeof evt.payload.argsHash === 'string' ? evt.payload.argsHash : undefined,
+                  permissionMode:
+                    typeof evt.payload.permissionMode === 'string'
+                      ? evt.payload.permissionMode
+                      : undefined,
+                  expiresAt:
+                    typeof evt.payload.expiresAt === 'string' ? evt.payload.expiresAt : undefined,
+                  isMock: isMockApp,
+                  decision: blockedReadOnly ? 'denied' : 'pending',
                 }
               } else if (evt.type === 'approval.denied' && nextApproval) {
                 nextApproval = { ...nextApproval, decision: 'denied' }
+              } else if (evt.type === 'approval.expired' && nextApproval) {
+                nextApproval = { ...nextApproval, decision: 'expired' }
+              } else if (evt.type === 'approval.revoked' && nextApproval) {
+                nextApproval = { ...nextApproval, decision: 'revoked' }
+              } else if (evt.type === 'approval.resolution_failed' && nextApproval) {
+                nextApproval = { ...nextApproval, decision: 'resolution_failed' }
               } else if (evt.type === 'approval.resolved' && nextApproval) {
                 const decision = evt.payload.decision === 'approved' ? 'approved' : 'denied'
                 nextApproval = { ...nextApproval, decision }
@@ -884,17 +907,35 @@ export function App() {
     if (!activeBot) return
     const bridge = window.ghostBot
     if (bridge && activeSessionRun && activeSessionId) {
+      const currentMsg = (messagesBySession[activeSessionId] ?? []).find(
+        (m): m is Extract<ChatMessage, { role: 'assistant' }> =>
+          m.role === 'assistant' && m.approval?.id === approvalId,
+      )
+      if (currentMsg?.approval && currentMsg.approval.decision !== 'pending') {
+        return
+      }
+      const argsHash = currentMsg?.approval?.argsHash
+      setMessagesBySession((prev) => ({
+        ...prev,
+        [activeSessionId]: (prev[activeSessionId] ?? []).map((m) =>
+          m.role === 'assistant' && m.approval?.id === approvalId && m.approval
+            ? { ...m, approval: { ...m.approval, decision: 'resolving' } }
+            : m,
+        ),
+      }))
       void bridge
         .resolveApproval({
           runId: activeSessionRun.id,
           approvalId,
           decision,
+          ...(argsHash ? { argsHash } : {}),
         })
         .then((res) => {
           setActiveRunBySession((prev) => ({ ...prev, [activeSessionId]: res.run }))
         })
         .catch((err: unknown) => {
           setBannerError(err instanceof Error ? err.message : 'Failed to resolve approval')
+          void refreshSessionMessages(activeSessionId)
         })
       return
     }

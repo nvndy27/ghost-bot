@@ -413,11 +413,27 @@ export const MessagesListResponseSchema = z.object({
 
 export type MessagesListResponse = z.infer<typeof MessagesListResponseSchema>
 
+export const ApprovalLifecycleStatusSchema = z.enum([
+  'pending',
+  'resolving',
+  'approved',
+  'denied',
+  'expired',
+  'revoked',
+  'resolution_failed',
+])
+
 export const PendingApprovalSchema = z.object({
   approvalId: z.string(),
   title: z.string(),
   command: z.string(),
   risk: z.enum(['low', 'medium', 'high']),
+  actionType: z.string().optional(),
+  argsHash: z.string().optional(),
+  permissionMode: z.string().optional(),
+  expiresAt: z.string().optional(),
+  isMock: z.boolean().optional(),
+  status: ApprovalLifecycleStatusSchema.optional(),
 })
 
 export const RunRecordSchema = z.object({
@@ -501,6 +517,7 @@ export const ResolveApprovalInputSchema = z
     runId: RunIdSchema,
     approvalId: z.string().trim().min(1).max(128),
     decision: z.enum(['approved', 'denied']),
+    argsHash: z.string().trim().min(1).max(128).optional(),
   })
   .strict()
 

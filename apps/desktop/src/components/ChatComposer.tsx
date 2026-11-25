@@ -53,12 +53,18 @@ export function ChatComposer({
   }
 
   const isCodexBot = bot.runtimeId === 'codex'
+  const verifiedModes = runtimeSnapshot?.verifiedPermissionModes ?? []
+  const permissionVerified =
+    isMockMode ||
+    (isCodexBot &&
+      bot.permission !== 'full-access' &&
+      verifiedModes.includes(bot.permission as 'read-only' | 'ask-approval' | 'workspace'))
   const liveCodexReady =
     !isMockMode &&
     isCodexBot &&
     runtimeSnapshot?.status === 'available' &&
     runtimeSnapshot?.authStatus === 'connected' &&
-    bot.permission === 'read-only'
+    permissionVerified
   const availableModels =
     isMockMode || !isCodexBot ? [...MOCK_MODELS] : (runtimeSnapshot?.models ?? [])
   const activeModel =
@@ -140,11 +146,17 @@ export function ChatComposer({
               onChange={(e) => onPermissionChange(e.target.value as PermissionMode)}
             >
               <option value="read-only">Read Only</option>
-              <option value="ask-approval" disabled={!isMockMode && isCodexBot}>
-                {!isMockMode && isCodexBot ? 'Ask approval (Phase 2C)' : 'Ask approval'}
+              <option
+                value="ask-approval"
+                disabled={!isMockMode && isCodexBot && !verifiedModes.includes('ask-approval')}
+              >
+                Ask approval
               </option>
-              <option value="workspace" disabled={!isMockMode && isCodexBot}>
-                {!isMockMode && isCodexBot ? 'Workspace Access (Phase 2C)' : 'Workspace Access'}
+              <option
+                value="workspace"
+                disabled={!isMockMode && isCodexBot && !verifiedModes.includes('workspace')}
+              >
+                Workspace Access
               </option>
               <option value="full-access" disabled>
                 Full Access (Disabled)
@@ -157,10 +169,8 @@ export function ChatComposer({
               {isMockMode
                 ? 'Offline mock mode'
                 : liveCodexReady
-                  ? 'Codex Read-Only (Live)'
-                  : isCodexBot && bot.permission !== 'read-only'
-                    ? 'Switch to Read Only for Phase 2B'
-                    : 'Codex unavailable'}
+                  ? `Codex (${bot.permission})`
+                  : 'Codex unavailable'}
             </small>
             {isStreaming ? (
               <button

@@ -283,7 +283,7 @@ test('upgrades legacy b33f975 database with ON DELETE CASCADE sessions to ON DEL
     const versions = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version ASC')
       .all() as Array<{ version: number }>
-    assert.deepEqual(versions.map((v) => v.version), [1, 2, 3])
+    assert.deepEqual(versions.map((v) => v.version), [1, 2, 3, 4])
 
     const schemaRow = upgraded.sqlite
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
