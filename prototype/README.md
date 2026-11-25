@@ -1,0 +1,3 @@
+# Offline UI prototype
+
+Open index.html directly. No server, credentials, dependencies or internet required. Create/edit/delete bots, switch chats, filter bots, configure avatars (12 shapes, 12 colors, four eye styles, rotation, animation), select mock models/efforts/permissions, review/approve/deny sample diff, open settings and change theme/font. Local demo data persists when browser localStorage is available. All usage, routines, tools and task cards are mock; no real AI invocation or filesystem edits occur. Production UI should be implemented as React/Electron following the same visual baseline, not by extending this demo into a privileged shell.

@@ -1,0 +1,76 @@
+export const avatarPresets = [
+  {
+    "id": "ghost",
+    "name": "Ghost",
+    "color": "#292929",
+    "path": "M13 33 C13 5 67 5 67 33 L67 57 Q61 71 53 60 Q45 73 37 60 Q29 72 21 60 Q13 67 13 53 Z"
+  },
+  {
+    "id": "chief",
+    "name": "Chief",
+    "color": "#A3835D",
+    "path": "M10 34 C7 9 31 4 45 9 C72 11 75 31 67 53 C57 73 13 70 10 34 Z"
+  },
+  {
+    "id": "developer",
+    "name": "Developer",
+    "color": "#7765CF",
+    "path": "M10 24 Q10 9 25 9 L55 9 Q70 9 70 24 L70 54 Q70 69 55 69 L25 69 Q10 69 10 54 Z"
+  },
+  {
+    "id": "researcher",
+    "name": "Researcher",
+    "color": "#418D79",
+    "path": "M40 5 C60 5 70 29 70 43 C70 62 56 72 40 72 C17 72 9 60 10 43 C11 24 23 5 40 5 Z"
+  },
+  {
+    "id": "creative",
+    "name": "Creative",
+    "color": "#DD709E",
+    "path": "M40 17 C18 -5 0 22 12 43 Q22 60 40 73 Q58 60 68 43 C80 22 62 -5 40 17 Z"
+  },
+  {
+    "id": "assistant",
+    "name": "Assistant",
+    "color": "#438ECE",
+    "path": "M8 42 C8 23 27 10 40 10 C60 10 73 23 73 43 C73 62 53 67 40 67 C19 67 8 59 8 42 Z"
+  },
+  {
+    "id": "automation",
+    "name": "Automation",
+    "color": "#E89042",
+    "path": "M27 11 Q40 0 53 11 L73 53 Q80 70 59 70 L20 70 Q0 70 8 53 Z"
+  },
+  {
+    "id": "observer",
+    "name": "Observer",
+    "color": "#919490",
+    "path": "M40 7 Q72 7 72 40 Q72 72 40 72 Q8 72 8 40 Q8 7 40 7 Z"
+  },
+  {
+    "id": "writer",
+    "name": "Writer",
+    "color": "#B66486",
+    "path": "M9 27 Q9 10 28 10 L55 10 Q71 10 71 28 L71 48 Q71 63 51 63 L27 73 L29 63 Q9 63 9 48 Z"
+  },
+  {
+    "id": "security",
+    "name": "Security",
+    "color": "#536B85",
+    "path": "M40 7 L65 17 Q73 21 70 39 Q68 60 40 74 Q12 60 10 39 Q7 21 15 17 Z"
+  },
+  {
+    "id": "analyst",
+    "name": "Analyst",
+    "color": "#49ABAD",
+    "path": "M40 5 Q49 5 54 18 L69 34 Q77 44 67 54 L50 70 Q40 79 29 69 L12 52 Q3 42 13 32 L29 14 Q34 5 40 5 Z"
+  },
+  {
+    "id": "personal",
+    "name": "Personal",
+    "color": "#D1B348",
+    "path": "M40 16 C53 -3 76 14 64 31 C87 41 68 65 52 59 C47 82 19 72 23 55 C-1 55 -1 25 19 27 C14 8 35 0 40 16 Z"
+  }
+] as const;
+export type AvatarShape = typeof avatarPresets[number]["id"];
+export type AvatarConfig = { shape: AvatarShape; color: string; eyes: "classic" | "round" | "happy" | "sleepy"; rotation: number; animation: boolean };
