@@ -425,3 +425,23 @@ test('canonicalizes symlinked workspace paths and builds excludeSlashTmp sandbox
     await rm(base, { recursive: true, force: true })
   }
 })
+
+test('tightens existing 0755 Codex profile directory permissions to 0700 on initialize', async () => {
+  const { chmod, stat } = await import('node:fs/promises')
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-prof-perm-'))
+  await chmod(profileDir, 0o755)
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', mockServerScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    await adapter.getAuthStatus()
+    const st = await stat(profileDir)
+    assert.equal(st.mode & 0o777, 0o700)
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})

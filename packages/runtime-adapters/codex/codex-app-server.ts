@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, realpath } from 'node:fs/promises'
+import { chmod, lstat, mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { normalizeCodexModel } from '../../shared-types/discovery.ts'
@@ -215,6 +215,14 @@ export class CodexAppServerAdapter implements AgentRuntime {
 
     this.initPromise = (async () => {
       await mkdir(this.profileDir, { recursive: true, mode: 0o700 })
+      const st = await lstat(this.profileDir)
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        throw new JsonRpcClientError('TRANSPORT_ERROR', 'Codex profile path must be a real directory')
+      }
+      if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+        throw new JsonRpcClientError('TRANSPORT_ERROR', 'Codex profile directory must be owned by current user')
+      }
+      await chmod(this.profileDir, 0o700)
       // Build isolated environment: never inherit user ~/.codex or paid API keys.
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
