@@ -10,7 +10,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import {
+  AppearanceSettingsSchema,
   AppInfoResponseSchema,
+  AppSettingsPatchSchema,
+  AppSettingsSchema,
   BotIdParamsSchema,
   BotIdSchema,
   BotRecordSchema,
@@ -22,6 +25,8 @@ import {
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   ProviderSummarySchema,
+  RuntimeSnapshotParamsSchema,
+  RuntimeSnapshotSchema,
   SetActiveBotParamsSchema,
   UpdateBotInputSchema,
   WorkspacePickResponseSchema,
@@ -356,6 +361,40 @@ function registerIpcHandlers(): void {
       canceled: result.canceled || !chosen,
       path: chosen,
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(params)
+    return queryDaemon('/settings', AppSettingsSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const patch = AppSettingsPatchSchema.parse(params)
+    return queryDaemon('/settings', AppSettingsSchema, { method: 'PATCH', body: patch })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(params)
+    return queryDaemon('/settings/reset', AppSettingsSchema, { method: 'POST' })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_MIGRATE_LOCAL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const legacy = AppearanceSettingsSchema.partial().parse(params)
+    return queryDaemon('/settings/migrate-local', AppSettingsSchema, {
+      method: 'POST',
+      body: legacy,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNTIME_SNAPSHOT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = RuntimeSnapshotParamsSchema.parse(params)
+    const path = parsed?.refresh ? '/runtime/snapshot?refresh=1' : '/runtime/snapshot'
+    return queryDaemon(path, RuntimeSnapshotSchema)
   })
 }
 

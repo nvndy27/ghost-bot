@@ -1,8 +1,14 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { avatarPresets } from '@ghost-bot/avatar/presets'
-import type { ProviderSummary } from '@ghost-bot/shared-types/ipc'
+import type {
+  AppSettings,
+  AppSettingsPatch,
+  DaemonHealthResponse,
+  ProviderSummary,
+  RuntimeSnapshot,
+} from '@ghost-bot/shared-types/ipc'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
-import type { AvatarStatus, ThemePreference, UiPreferences } from '../types/workspace.ts'
+import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 
 const SETTINGS_SECTIONS = [
@@ -35,24 +41,64 @@ const AVATAR_STATES: AvatarStatus[] = [
 
 export interface SettingsModalProps {
   open: boolean
-  preferences: UiPreferences
+  settings: AppSettings
   providers: ProviderSummary[]
-  onUpdatePreferences: (patch: Partial<UiPreferences>) => void
+  runtimeSnapshot: RuntimeSnapshot | null
+  daemonHealth: DaemonHealthResponse | null
+  bots: WorkspaceBot[]
+  onUpdateSettings: (patch: AppSettingsPatch) => Promise<void>
+  onResetSettings: () => Promise<void>
+  onRefreshRuntime: () => Promise<void>
   onClose: () => void
 }
 
 export function SettingsModal({
   open,
-  preferences,
+  settings,
   providers,
-  onUpdatePreferences,
+  runtimeSnapshot,
+  daemonHealth,
+  bots,
+  onUpdateSettings,
+  onResetSettings,
+  onRefreshRuntime,
   onClose,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SectionId>('appearance')
+  const [refreshing, setRefreshing] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setConfirmReset(false)
+    setErrorMsg(null)
+  }, [open])
+
   useModalDialog(open, modalRef, onClose)
 
   if (!open) return null
+
+  const runUpdate = (patch: AppSettingsPatch) => {
+    setErrorMsg(null)
+    void onUpdateSettings(patch).catch((err: unknown) => {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save setting')
+    })
+  }
+
+  const handleRefresh = () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setErrorMsg(null)
+    void onRefreshRuntime()
+      .catch((err: unknown) => {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to refresh runtime')
+      })
+      .finally(() => setRefreshing(false))
+  }
+
+  const isMock = !runtimeSnapshot || runtimeSnapshot.runtimeMode === 'mock'
 
   return (
     <div className="gb-modal-backdrop" role="dialog" aria-modal="true" aria-label="Settings">
@@ -60,7 +106,7 @@ export function SettingsModal({
         <div className="gb-modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <strong>Settings</strong>
-            <span className="gb-badge">Phase 1B shell</span>
+            <span className="gb-badge">{isMock ? 'Mock mode' : 'Codex bridge'}</span>
           </div>
           <button type="button" onClick={onClose} aria-label="Close settings">
             ×
@@ -82,9 +128,73 @@ export function SettingsModal({
           </nav>
 
           <section className="gb-settings-content">
+            {errorMsg && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: '12px',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--gb-danger)',
+                  color: 'var(--gb-danger)',
+                  fontSize: '13px',
+                }}
+              >
+                {errorMsg}
+              </div>
+            )}
+
+            {activeSection === 'general' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  General <span className="gb-badge">Persisted</span>
+                </h2>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>On launch</div>
+                    <small className="gb-muted">
+                      Choose whether to restore the last active bot or start fresh.
+                    </small>
+                  </div>
+                  <select
+                    aria-label="Launch behavior"
+                    value={settings.general.launchBehavior}
+                    onChange={(e) =>
+                      runUpdate({
+                        general: {
+                          launchBehavior: e.target.value as 'restore' | 'new-session',
+                        },
+                      })
+                    }
+                  >
+                    <option value="restore">Restore last bot</option>
+                    <option value="new-session">Start fresh</option>
+                  </select>
+                </div>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Local diagnostics opt-in</div>
+                    <small className="gb-muted">
+                      Store redacted diagnostic metadata locally (never sends telemetry).
+                    </small>
+                  </div>
+                  <input
+                    type="checkbox"
+                    aria-label="Local diagnostics opt-in"
+                    checked={settings.general.diagnosticsOptIn}
+                    onChange={(e) =>
+                      runUpdate({ general: { diagnosticsOptIn: e.target.checked } })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
             {activeSection === 'appearance' && (
               <div>
-                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>Appearance</h2>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Appearance <span className="gb-badge">Persisted</span>
+                </h2>
                 <div className="gb-setting-row">
                   <div>
                     <div>Theme</div>
@@ -94,9 +204,11 @@ export function SettingsModal({
                   </div>
                   <select
                     aria-label="Theme"
-                    value={preferences.theme}
+                    value={settings.appearance.theme}
                     onChange={(e) =>
-                      onUpdatePreferences({ theme: e.target.value as ThemePreference })
+                      runUpdate({
+                        appearance: { theme: e.target.value as ThemePreference },
+                      })
                     }
                   >
                     <option value="system">System</option>
@@ -115,8 +227,10 @@ export function SettingsModal({
                   <input
                     type="checkbox"
                     aria-label="Reduced motion"
-                    checked={preferences.reducedMotion}
-                    onChange={(e) => onUpdatePreferences({ reducedMotion: e.target.checked })}
+                    checked={settings.appearance.reducedMotion}
+                    onChange={(e) =>
+                      runUpdate({ appearance: { reducedMotion: e.target.checked } })
+                    }
                   />
                 </div>
 
@@ -150,7 +264,7 @@ export function SettingsModal({
                             color: preset.color,
                             eyes: 'classic',
                             rotation: 0,
-                            animation: !preferences.reducedMotion,
+                            animation: !settings.appearance.reducedMotion,
                           }}
                           status="idle"
                           size={34}
@@ -188,7 +302,7 @@ export function SettingsModal({
                             color: '#418D79',
                             eyes: 'classic',
                             rotation: 0,
-                            animation: !preferences.reducedMotion,
+                            animation: !settings.appearance.reducedMotion,
                           }}
                           status={st}
                           size={34}
@@ -206,34 +320,401 @@ export function SettingsModal({
 
             {activeSection === 'accounts' && (
               <div>
-                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>Accounts &amp; Providers</h2>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '12px',
+                  }}
+                >
+                  <h2 style={{ margin: 0, fontSize: '17px' }}>
+                    Accounts &amp; Providers <span className="gb-badge">Runtime-managed</span>
+                  </h2>
+                  <button
+                    type="button"
+                    className="gb-btn-outline"
+                    disabled={refreshing}
+                    onClick={handleRefresh}
+                  >
+                    {refreshing ? 'Refreshing...' : 'Refresh status'}
+                  </button>
+                </div>
+
+                {runtimeSnapshot && (
+                  <div
+                    className="gb-card"
+                    style={{ marginBottom: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <strong>
+                        {runtimeSnapshot.runtimeMode === 'mock'
+                          ? 'Mock Offline Runtime'
+                          : `Codex App Server ${runtimeSnapshot.codexVersion ?? '(not detected)'}`}
+                      </strong>
+                      <span className="gb-badge">{runtimeSnapshot.status}</span>
+                    </div>
+                    <small className="gb-muted">{runtimeSnapshot.detail}</small>
+                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Auth: {runtimeSnapshot.authMethod}</span>
+                      <span>Plan: {runtimeSnapshot.planType ?? 'Unavailable'}</span>
+                      <span>Workspace: {runtimeSnapshot.workspaceName ?? 'Unavailable'}</span>
+                    </div>
+                    <small className="gb-muted" style={{ fontSize: '11px' }}>
+                      Observed: {runtimeSnapshot.observedAt}
+                      {runtimeSnapshot.cached ? ' (cached)' : ''}
+                    </small>
+                    {runtimeSnapshot.status === 'auth-required' && (
+                      <code
+                        style={{
+                          fontSize: '11.5px',
+                          padding: '6px 8px',
+                          background: 'var(--gb-surface)',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        CODEX_HOME=~/.config/ghost-bot/codex-profile codex login --device-auth
+                      </code>
+                    )}
+                  </div>
+                )}
+
+                {providers.map((p) => (
+                  <div key={p.id} className="gb-setting-row">
+                    <div>
+                      <div>{p.label}</div>
+                      <small className="gb-muted">{p.detail}</small>
+                    </div>
+                    <span className="gb-badge">{p.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeSection === 'models' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Models <span className="gb-badge">Runtime-managed</span>
+                </h2>
                 <p className="gb-muted" style={{ fontSize: '13px', marginTop: 0 }}>
-                  Read-only status from daemon IPC. Login/disconnect controls open in Phase 1D.
+                  Discovered model catalog without initiating inference.
                 </p>
-                {providers.length === 0 ? (
-                  <p className="gb-muted">No provider status reported.</p>
+                {!runtimeSnapshot || runtimeSnapshot.models.length === 0 ? (
+                  <p className="gb-muted">No models discovered for current runtime state.</p>
                 ) : (
-                  providers.map((p) => (
-                    <div key={p.id} className="gb-setting-row">
+                  runtimeSnapshot.models.map((m) => (
+                    <div key={m.id} className="gb-setting-row">
                       <div>
-                        <div>{p.label}</div>
-                        <small className="gb-muted">{p.detail}</small>
+                        <div>{m.label}</div>
+                        <small className="gb-muted">ID: {m.id}</small>
                       </div>
-                      <span className="gb-badge">{p.status}</span>
+                      <small className="gb-muted">
+                        Efforts: {m.efforts.join(', ') || 'none'}
+                      </small>
                     </div>
                   ))
+                )}
+
+                {runtimeSnapshot &&
+                  runtimeSnapshot.runtimeMode === 'codex' &&
+                  runtimeSnapshot.models.length > 0 &&
+                  bots.some((b) => !runtimeSnapshot.models.some((m) => m.id === b.modelId)) && (
+                    <div
+                      role="alert"
+                      style={{
+                        marginTop: '12px',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--gb-border)',
+                        fontSize: '12.5px',
+                      }}
+                    >
+                      Some saved bots reference models not in the discovered Codex catalog; their
+                      configured IDs are preserved without silent substitution.
+                    </div>
+                  )}
+              </div>
+            )}
+
+            {activeSection === 'usage' && (
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '12px',
+                  }}
+                >
+                  <h2 style={{ margin: 0, fontSize: '17px' }}>
+                    Usage <span className="gb-badge">{runtimeSnapshot?.usageStatus ?? 'unavailable'}</span>
+                  </h2>
+                  <button
+                    type="button"
+                    className="gb-btn-outline"
+                    disabled={refreshing}
+                    onClick={handleRefresh}
+                  >
+                    {refreshing ? 'Refreshing...' : 'Refresh usage'}
+                  </button>
+                </div>
+
+                {!runtimeSnapshot || runtimeSnapshot.runtimeMode === 'mock' ? (
+                  <div className="gb-card">
+                    <div>Mock mode active</div>
+                    <small className="gb-muted">
+                      Real subscription usage is unavailable in mock mode. Sample workspace bars are
+                      demonstration data only.
+                    </small>
+                  </div>
+                ) : runtimeSnapshot.usageWindows.length === 0 ? (
+                  <div className="gb-card">
+                    <div>No rate-limit windows reported</div>
+                    <small className="gb-muted">{runtimeSnapshot.detail}</small>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '12px' }}>
+                    {runtimeSnapshot.usageWindows.map((w) => (
+                      <div key={w.label} className="gb-card">
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <strong>Window ({w.label})</strong>
+                          <span>
+                            {w.usedPercent !== null ? `${w.usedPercent}% used` : 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="gb-bar" aria-hidden="true">
+                          <div
+                            className="gb-bar-fill"
+                            style={{ width: `${w.usedPercent ?? 0}%` }}
+                          />
+                        </div>
+                        <small className="gb-muted">
+                          Resets: {w.resetAt ?? 'Unavailable'}
+                        </small>
+                      </div>
+                    ))}
+                    <small className="gb-muted">
+                      Observed: {runtimeSnapshot.usageObservedAt ?? runtimeSnapshot.observedAt}
+                    </small>
+                  </div>
                 )}
               </div>
             )}
 
-            {activeSection !== 'appearance' && activeSection !== 'accounts' && (
+            {activeSection === 'personalization' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Personalization <span className="gb-badge">Persisted</span>
+                </h2>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Response style</div>
+                    <small className="gb-muted">Default tone preference for new bots.</small>
+                  </div>
+                  <select
+                    aria-label="Response style"
+                    value={settings.personalization.responseStyle}
+                    onChange={(e) =>
+                      runUpdate({
+                        personalization: {
+                          responseStyle: e.target.value as 'concise' | 'balanced' | 'detailed',
+                        },
+                      })
+                    }
+                  >
+                    <option value="concise">Concise</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </div>
+                <div style={{ marginTop: '12px', display: 'grid', gap: '6px' }}>
+                  <label htmlFor="gb-default-instructions">Default system instructions</label>
+                  <textarea
+                    id="gb-default-instructions"
+                    rows={3}
+                    maxLength={2000}
+                    value={settings.personalization.defaultInstructions}
+                    onChange={(e) =>
+                      runUpdate({
+                        personalization: { defaultInstructions: e.target.value },
+                      })
+                    }
+                    placeholder="Optional default instructions applied to new bots"
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'permissions' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Permissions <span className="gb-badge">Policy-enforced</span>
+                </h2>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Default permission mode</div>
+                    <small className="gb-muted">
+                      Full Access remains disabled until explicit Phase 2 boundary verification.
+                    </small>
+                  </div>
+                  <select
+                    aria-label="Default permission mode"
+                    value={settings.permissions.defaultPermissionMode}
+                    onChange={(e) =>
+                      runUpdate({
+                        permissions: {
+                          defaultPermissionMode: e.target.value as
+                            | 'read-only'
+                            | 'ask-approval'
+                            | 'workspace',
+                        },
+                      })
+                    }
+                  >
+                    <option value="read-only">Read Only</option>
+                    <option value="ask-approval">Ask approval</option>
+                    <option value="workspace">Workspace Access</option>
+                    <option value="full-access" disabled>
+                      Full Access (Disabled)
+                    </option>
+                  </select>
+                </div>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Verified runtime modes</div>
+                    <small className="gb-muted">
+                      Enforced by daemon policy broker (version-bound).
+                    </small>
+                  </div>
+                  <span className="gb-badge">
+                    {runtimeSnapshot?.verifiedPermissionModes.join(', ') || 'none (mock)'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'privacy' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Data &amp; Privacy <span className="gb-badge">Persisted</span>
+                </h2>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Redact secrets in audit logs</div>
+                    <small className="gb-muted">
+                      Strip tokens and sensitive patterns before writing audit entries.
+                    </small>
+                  </div>
+                  <input
+                    type="checkbox"
+                    aria-label="Redact secrets in audit logs"
+                    checked={settings.privacy.redactLogs}
+                    onChange={(e) =>
+                      runUpdate({ privacy: { redactLogs: e.target.checked } })
+                    }
+                  />
+                </div>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Local audit retention (days)</div>
+                    <small className="gb-muted">1 to 365 days.</small>
+                  </div>
+                  <input
+                    type="number"
+                    aria-label="Audit retention days"
+                    min={1}
+                    max={365}
+                    value={settings.privacy.retentionDays}
+                    onChange={(e) => {
+                      const val = Number(e.target.value)
+                      if (Number.isInteger(val) && val >= 1 && val <= 365) {
+                        runUpdate({ privacy: { retentionDays: val } })
+                      }
+                    }}
+                    style={{ width: '90px' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'advanced' && (
+              <div>
+                <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
+                  Advanced <span className="gb-badge">Read-only &amp; Reset</span>
+                </h2>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Daemon process</div>
+                    <small className="gb-muted">
+                      PID: {daemonHealth?.pid ?? 'N/A'} · Mode:{' '}
+                      {daemonHealth?.runtimeMode ?? 'browser-preview'}
+                    </small>
+                  </div>
+                  <span className="gb-badge">
+                    {daemonHealth?.ok ? 'Healthy' : 'Browser preview'}
+                  </span>
+                </div>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Reset application settings</div>
+                    <small className="gb-muted">
+                      Restore General, Appearance, Personalization, Permissions, and Privacy to
+                      defaults.
+                    </small>
+                  </div>
+                  {!confirmReset ? (
+                    <button
+                      type="button"
+                      className="gb-btn-outline"
+                      onClick={() => setConfirmReset(true)}
+                    >
+                      Reset to defaults
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        onClick={() => setConfirmReset(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="gb-btn-accent"
+                        onClick={() => {
+                          setConfirmReset(false)
+                          void onResetSettings().catch((err: unknown) => {
+                            setErrorMsg(
+                              err instanceof Error ? err.message : 'Failed to reset settings',
+                            )
+                          })
+                        }}
+                      >
+                        Confirm reset
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {(activeSection === 'memory' ||
+              activeSection === 'tools' ||
+              activeSection === 'computer-use' ||
+              activeSection === 'routines') && (
               <div>
                 <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
-                  {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}
+                  {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}
+                  <span className="gb-badge">
+                    {activeSection === 'memory' || activeSection === 'tools'
+                      ? 'Unavailable · Phase 3'
+                      : 'Unavailable · Phase 5'}
+                  </span>
                 </h2>
                 <p className="gb-muted">
-                  This section is scheduled for Phase 1D / later milestones and is intentionally
-                  disabled in Phase 1B.
+                  This capability is not implemented in Phase 1D and remains disabled until its
+                  scheduled vertical slice.
                 </p>
               </div>
             )}

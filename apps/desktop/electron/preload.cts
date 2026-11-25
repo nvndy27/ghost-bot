@@ -14,6 +14,12 @@ const bridge: GhostBotBridge = {
   importAvatarSvg: (rawSvg, label) =>
     ipcRenderer.invoke('ghost:avatar:import-svg', { rawSvg, label }),
   pickWorkspace: () => ipcRenderer.invoke('ghost:workspace:pick', {}),
+  getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),
+  updateSettings: (patch) => ipcRenderer.invoke('ghost:settings:update', patch),
+  resetSettings: () => ipcRenderer.invoke('ghost:settings:reset', {}),
+  migrateLocalSettings: (legacy) => ipcRenderer.invoke('ghost:settings:migrate-local', legacy),
+  getRuntimeSnapshot: (refresh) =>
+    ipcRenderer.invoke('ghost:runtime:snapshot', refresh !== undefined ? { refresh } : {}),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

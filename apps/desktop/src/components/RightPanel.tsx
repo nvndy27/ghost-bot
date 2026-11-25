@@ -1,3 +1,4 @@
+import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import { MOCK_ROUTINES, MOCK_TOOLS } from '../data/mockWorkspace.ts'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 
@@ -5,6 +6,7 @@ export interface RightPanelProps {
   width: number
   bot: WorkspaceBot | null
   activeTasks: ToolStep[]
+  runtimeSnapshot: RuntimeSnapshot | null
   isMockMode: boolean
   onCollapse: () => void
 }
@@ -13,6 +15,7 @@ export function RightPanel({
   width,
   bot,
   activeTasks,
+  runtimeSnapshot,
   isMockMode,
   onCollapse,
 }: RightPanelProps) {
@@ -133,9 +136,28 @@ export function RightPanel({
             </div>
             <small className="gb-muted">32% sample · not real quota</small>
           </>
+        ) : runtimeSnapshot && runtimeSnapshot.usageWindows.length > 0 ? (
+          <div style={{ display: 'grid', gap: '8px' }}>
+            {runtimeSnapshot.usageWindows.map((w) => (
+              <div key={w.label}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                  <span className="gb-muted">Window {w.label}</span>
+                  <span>{w.usedPercent !== null ? `${w.usedPercent}%` : 'Unavailable'}</span>
+                </div>
+                <div className="gb-bar" aria-hidden="true">
+                  <div className="gb-bar-fill" style={{ width: `${w.usedPercent ?? 0}%` }} />
+                </div>
+              </div>
+            ))}
+            <small className="gb-muted" style={{ fontSize: '11px' }}>
+              Status: {runtimeSnapshot.usageStatus}
+            </small>
+          </div>
         ) : (
           <p className="gb-muted" style={{ margin: '4px 0', fontSize: '12.5px' }}>
-            Quota display opens in Phase 1D.
+            {runtimeSnapshot
+              ? `Usage ${runtimeSnapshot.usageStatus}`
+              : 'Usage unavailable.'}
           </p>
         )}
       </div>

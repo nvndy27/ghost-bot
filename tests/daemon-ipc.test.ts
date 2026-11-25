@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { normalizeDaemonError, redactSecrets } from '../apps/daemon/src/errors.ts'
-import { GhostBotDaemon, resolveCodexVerifiedEvidence } from '../apps/daemon/src/server.ts'
+import { GhostBotDaemon } from '../apps/daemon/src/server.ts'
+import { resolveCodexVerifiedEvidence } from '../apps/daemon/src/runtime/policy-broker.ts'
 import {
   isAllowedNavigationUrl,
   isAuthorizedIpcContext,

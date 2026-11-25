@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
+import { AppSettingsSchema } from '@ghost-bot/shared-types/ipc'
 import type {
+  AppSettings,
+  AppSettingsPatch,
   BotRecord,
   CreateBotInput,
   DaemonHealthResponse,
   GhostBotBridge,
   ProviderSummary,
+  RuntimeSnapshot,
   UpdateBotInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
@@ -37,6 +41,8 @@ declare global {
   }
 }
 
+const DEFAULT_APP_SETTINGS: AppSettings = AppSettingsSchema.parse({})
+
 function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
   return {
     id: rec.id,
@@ -55,7 +61,13 @@ function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
 
 export function App() {
   const hasBridge = typeof window !== 'undefined' && Boolean(window.ghostBot)
-  const [prefs, setPrefs] = useState<UiPreferences>(() => loadUiPreferences())
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    if (hasBridge) return DEFAULT_APP_SETTINGS
+    return {
+      ...DEFAULT_APP_SETTINGS,
+      appearance: loadUiPreferences(),
+    }
+  })
   const [bots, setBots] = useState<WorkspaceBot[]>(() => (hasBridge ? [] : INITIAL_MOCK_BOTS))
   const [activeBotId, setActiveBotId] = useState<string | null>(() =>
     hasBridge ? null : 'chief',
@@ -76,9 +88,11 @@ export function App() {
   const [bannerError, setBannerError] = useState<string | null>(null)
   const [health, setHealth] = useState<DaemonHealthResponse | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeSnapshot | null>(null)
 
   const streamTimerRef = useRef<number | null>(null)
 
+  const prefs: UiPreferences = settings.appearance
   const isMockMode = health === null || health.runtimeMode === 'mock'
   const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0] ?? null
   const activeMessages = activeBot ? (messagesByBot[activeBot.id] ?? []) : []
@@ -98,12 +112,26 @@ export function App() {
   useEffect(() => {
     const bridge = window.ghostBot
     if (!bridge) return
-    void Promise.all([bridge.getDaemonHealth(), bridge.listProviders(), bridge.listBots()])
-      .then(([daemonHealth, providerList, botsRes]) => {
+
+    const legacy = loadUiPreferences()
+    void Promise.all([
+      bridge.getDaemonHealth(),
+      bridge.listProviders(),
+      bridge.listBots(),
+      bridge.migrateLocalSettings(legacy),
+      bridge.getRuntimeSnapshot(false),
+    ])
+      .then(([daemonHealth, providerList, botsRes, loadedSettings, snap]) => {
         setHealth(daemonHealth)
         setProviders(providerList)
         setBots(botsRes.bots.map(recordToWorkspaceBot))
-        setActiveBotId(botsRes.activeBotId ?? botsRes.bots[0]?.id ?? null)
+        setSettings(loadedSettings)
+        setRuntimeSnapshot(snap)
+        setActiveBotId(
+          loadedSettings.general.launchBehavior === 'restore'
+            ? (botsRes.activeBotId ?? botsRes.bots[0]?.id ?? null)
+            : (botsRes.bots[0]?.id ?? null),
+        )
         setBotsLoaded(true)
       })
       .catch((err: unknown) => {
@@ -120,11 +148,51 @@ export function App() {
     }
   }, [])
 
-  const updatePrefs = (patch: Partial<UiPreferences>) => {
-    setPrefs((prev) => {
-      const next = { ...prev, ...patch }
-      saveUiPreferences(next)
+  const handleUpdateSettings = async (patch: AppSettingsPatch): Promise<void> => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      const updated = await bridge.updateSettings(patch)
+      setSettings(updated)
+      return
+    }
+    setSettings((prev) => {
+      const next = AppSettingsSchema.parse({
+        general: { ...prev.general, ...(patch.general ?? {}) },
+        appearance: { ...prev.appearance, ...(patch.appearance ?? {}) },
+        personalization: { ...prev.personalization, ...(patch.personalization ?? {}) },
+        permissions: { ...prev.permissions, ...(patch.permissions ?? {}) },
+        privacy: { ...prev.privacy, ...(patch.privacy ?? {}) },
+      })
+      saveUiPreferences(next.appearance)
       return next
+    })
+  }
+
+  const handleResetSettings = async (): Promise<void> => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      const reset = await bridge.resetSettings()
+      setSettings(reset)
+      return
+    }
+    saveUiPreferences(DEFAULT_APP_SETTINGS.appearance)
+    setSettings(DEFAULT_APP_SETTINGS)
+  }
+
+  const handleRefreshRuntime = async (): Promise<void> => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    const [snap, providerList] = await Promise.all([
+      bridge.getRuntimeSnapshot(true),
+      bridge.listProviders(),
+    ])
+    setRuntimeSnapshot(snap)
+    setProviders(providerList)
+  }
+
+  const updateAppearance = (patch: Partial<UiPreferences>) => {
+    void handleUpdateSettings({ appearance: patch }).catch((err: unknown) => {
+      setBannerError(err instanceof Error ? err.message : 'Failed to save appearance preference')
     })
   }
 
@@ -137,9 +205,9 @@ export function App() {
       const onMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startX
         if (side === 'left') {
-          updatePrefs({ leftWidth: Math.min(360, Math.max(180, startWidth + delta)) })
+          updateAppearance({ leftWidth: Math.min(360, Math.max(180, startWidth + delta)) })
         } else {
-          updatePrefs({ rightWidth: Math.min(420, Math.max(220, startWidth - delta)) })
+          updateAppearance({ rightWidth: Math.min(420, Math.max(220, startWidth - delta)) })
         }
       }
       const onUp = () => {
@@ -156,9 +224,9 @@ export function App() {
       e.preventDefault()
       const step = e.key === 'ArrowRight' ? 16 : -16
       if (side === 'left') {
-        updatePrefs({ leftWidth: Math.min(360, Math.max(180, prefs.leftWidth + step)) })
+        updateAppearance({ leftWidth: Math.min(360, Math.max(180, prefs.leftWidth + step)) })
       } else {
-        updatePrefs({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
+        updateAppearance({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
       }
     }
 
@@ -447,7 +515,7 @@ export function App() {
             onSelectBot={handleSelectBot}
             onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
-            onCollapse={() => updatePrefs({ leftCollapsed: true })}
+            onCollapse={() => updateAppearance({ leftCollapsed: true })}
             isMockMode={isMockMode}
           />
           <div
@@ -469,8 +537,8 @@ export function App() {
           rightCollapsed={prefs.rightCollapsed}
           isMockMode={isMockMode}
           onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
-          onToggleLeft={() => updatePrefs({ leftCollapsed: !prefs.leftCollapsed })}
-          onToggleRight={() => updatePrefs({ rightCollapsed: !prefs.rightCollapsed })}
+          onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+          onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
         />
 
         {bannerError && (
@@ -513,6 +581,7 @@ export function App() {
               draft={draft}
               isStreaming={streamingBotId !== null}
               isMockMode={isMockMode}
+              runtimeSnapshot={runtimeSnapshot}
               onDraftChange={setDraft}
               onModelChange={(modelId) => updateActiveBotInline({ modelId })}
               onEffortChange={(effort) => updateActiveBotInline({ effort })}
@@ -555,8 +624,9 @@ export function App() {
             width={prefs.rightWidth}
             bot={activeBot}
             activeTasks={latestTools}
+            runtimeSnapshot={runtimeSnapshot}
             isMockMode={isMockMode}
-            onCollapse={() => updatePrefs({ rightCollapsed: true })}
+            onCollapse={() => updateAppearance({ rightCollapsed: true })}
           />
         </>
       )}
@@ -564,9 +634,14 @@ export function App() {
       <DiffPreviewModal approval={diffApproval} onClose={() => setDiffApproval(null)} />
       <SettingsModal
         open={settingsOpen}
-        preferences={prefs}
+        settings={settings}
         providers={providers}
-        onUpdatePreferences={updatePrefs}
+        runtimeSnapshot={runtimeSnapshot}
+        daemonHealth={health}
+        bots={bots}
+        onUpdateSettings={handleUpdateSettings}
+        onResetSettings={handleResetSettings}
+        onRefreshRuntime={handleRefreshRuntime}
         onClose={() => setSettingsOpen(false)}
       />
       <BotEditorModal

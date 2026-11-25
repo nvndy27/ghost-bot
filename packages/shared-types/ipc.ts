@@ -12,6 +12,11 @@ export const IPC_CHANNELS = {
   BOTS_SET_ACTIVE: 'ghost:bots:set-active',
   AVATAR_IMPORT_SVG: 'ghost:avatar:import-svg',
   WORKSPACE_PICK: 'ghost:workspace:pick',
+  SETTINGS_GET: 'ghost:settings:get',
+  SETTINGS_UPDATE: 'ghost:settings:update',
+  SETTINGS_RESET: 'ghost:settings:reset',
+  SETTINGS_MIGRATE_LOCAL: 'ghost:settings:migrate-local',
+  RUNTIME_SNAPSHOT: 'ghost:runtime:snapshot',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -179,6 +184,106 @@ export type WorkspacePickResponse = z.infer<typeof WorkspacePickResponseSchema>
 
 export const EmptyParamsSchema = z.object({}).strict().optional()
 
+export const GeneralSettingsSchema = z.object({
+  launchBehavior: z.enum(['restore', 'new-session']).default('restore'),
+  diagnosticsOptIn: z.boolean().default(false),
+})
+
+export const AppearanceSettingsSchema = z.object({
+  theme: z.enum(['system', 'dark', 'light']).default('dark'),
+  reducedMotion: z.boolean().default(false),
+  leftWidth: z.number().min(180).max(380).default(240),
+  rightWidth: z.number().min(220).max(420).default(285),
+  leftCollapsed: z.boolean().default(false),
+  rightCollapsed: z.boolean().default(false),
+})
+
+export const PersonalizationSettingsSchema = z.object({
+  defaultInstructions: z.string().max(2000).default(''),
+  responseStyle: z.enum(['concise', 'balanced', 'detailed']).default('balanced'),
+})
+
+export const PermissionsSettingsSchema = z.object({
+  defaultPermissionMode: BotPermissionSchema.default('ask-approval'),
+})
+
+export const PrivacySettingsSchema = z.object({
+  redactLogs: z.boolean().default(true),
+  retentionDays: z.number().int().min(1).max(365).default(30),
+})
+
+export const AppSettingsSchema = z.object({
+  general: GeneralSettingsSchema.default({}),
+  appearance: AppearanceSettingsSchema.default({}),
+  personalization: PersonalizationSettingsSchema.default({}),
+  permissions: PermissionsSettingsSchema.default({}),
+  privacy: PrivacySettingsSchema.default({}),
+})
+
+export type AppSettings = z.infer<typeof AppSettingsSchema>
+
+export const AppSettingsPatchSchema = z
+  .object({
+    general: GeneralSettingsSchema.partial().optional(),
+    appearance: AppearanceSettingsSchema.partial().optional(),
+    personalization: PersonalizationSettingsSchema.partial().optional(),
+    permissions: PermissionsSettingsSchema.partial().optional(),
+    privacy: PrivacySettingsSchema.partial().optional(),
+  })
+  .strict()
+
+export type AppSettingsPatch = z.infer<typeof AppSettingsPatchSchema>
+
+export const RuntimeAvailabilityStatusSchema = z.enum([
+  'available',
+  'stale',
+  'unavailable',
+  'unsupported',
+  'auth-required',
+  'disconnected',
+  'error',
+  'mock',
+])
+
+export type RuntimeAvailabilityStatus = z.infer<typeof RuntimeAvailabilityStatusSchema>
+
+export const RuntimeUsageWindowSchema = z.object({
+  label: z.string(),
+  usedPercent: z.number().min(0).max(100).nullable(),
+  resetAt: z.string().nullable(),
+})
+
+export const RuntimeModelSummarySchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  efforts: z.array(z.string()),
+})
+
+export const RuntimeSnapshotSchema = z.object({
+  runtimeMode: z.enum(['codex', 'mock']),
+  codexVersion: z.string().nullable(),
+  status: RuntimeAvailabilityStatusSchema,
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  authMethod: z.enum(['chatgpt', 'apiKey', 'mock', 'none']),
+  planType: z.string().nullable(),
+  workspaceName: z.string().nullable(),
+  detail: z.string(),
+  models: z.array(RuntimeModelSummarySchema),
+  usageStatus: RuntimeAvailabilityStatusSchema,
+  usageWindows: z.array(RuntimeUsageWindowSchema),
+  usageObservedAt: z.string().nullable(),
+  verifiedPermissionModes: z.array(BotPermissionSchema),
+  observedAt: z.string(),
+  cached: z.boolean(),
+})
+
+export type RuntimeSnapshot = z.infer<typeof RuntimeSnapshotSchema>
+
+export const RuntimeSnapshotParamsSchema = z
+  .object({ refresh: z.boolean().optional() })
+  .strict()
+  .optional()
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -191,4 +296,11 @@ export interface GhostBotBridge {
   setActiveBot(id: string | null): Promise<{ activeBotId: string | null }>
   importAvatarSvg(rawSvg: string, label?: string): Promise<ImportAvatarSvgResponse>
   pickWorkspace(): Promise<WorkspacePickResponse>
+  getSettings(): Promise<AppSettings>
+  updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
+  resetSettings(): Promise<AppSettings>
+  migrateLocalSettings(legacy: Partial<AppearanceSettingsInput>): Promise<AppSettings>
+  getRuntimeSnapshot(refresh?: boolean): Promise<RuntimeSnapshot>
 }
+
+export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>
