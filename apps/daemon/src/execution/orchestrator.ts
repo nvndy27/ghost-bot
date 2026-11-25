@@ -161,6 +161,8 @@ export interface RunOrchestratorOptions {
   policyBroker?: RuntimePolicyBroker
 }
 
+const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
+
 export class RunOrchestrator {
   readonly eventStore: RunEventStore
   private readonly dbHandle: DatabaseHandle
@@ -177,6 +179,58 @@ export class RunOrchestrator {
     this.settingsRepo = options?.settingsRepo
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
     this.eventStore = new RunEventStore(dbHandle)
+    this.loadDurableQuarantine()
+  }
+
+  private loadDurableQuarantine(): void {
+    try {
+      const row = this.dbHandle.sqlite
+        .prepare('SELECT value_json FROM settings WHERE key = ?')
+        .get(QUARANTINE_SETTINGS_KEY) as { value_json: string } | undefined
+      if (!row) return
+      const parsed = JSON.parse(row.value_json) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [sid, val] of Object.entries(parsed)) {
+          if (typeof val === 'number' && Number.isFinite(val)) {
+            this.sessionsWithUnconfirmedStop.set(sid, val)
+          }
+        }
+      }
+    } catch {
+      // ignore malformed quarantine map
+    }
+  }
+
+  private persistDurableQuarantine(): void {
+    const obj: Record<string, number> = {}
+    for (const [sid, gen] of this.sessionsWithUnconfirmedStop.entries()) {
+      obj[sid] = gen
+    }
+    this.dbHandle.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(QUARANTINE_SETTINGS_KEY, JSON.stringify(obj), new Date().toISOString())
+  }
+
+  private addQuarantine(sessionId: string): void {
+    this.sessionsWithUnconfirmedStop.set(sessionId, this.runtimeRegistry?.getGeneration() ?? 0)
+    this.persistDurableQuarantine()
+  }
+
+  private clearQuarantineForSession(sessionId: string): void {
+    if (this.sessionsWithUnconfirmedStop.delete(sessionId)) {
+      this.persistDurableQuarantine()
+    }
+  }
+
+  private clearAllQuarantine(): void {
+    if (this.sessionsWithUnconfirmedStop.size > 0) {
+      this.sessionsWithUnconfirmedStop.clear()
+      this.persistDurableQuarantine()
+    }
   }
 
   private rowToRun(row: RawRunRow): RunRecord {
@@ -340,17 +394,14 @@ export class RunOrchestrator {
       })
     }
 
-    const unconfirmedGen = this.sessionsWithUnconfirmedStop.get(input.sessionId)
-    if (unconfirmedGen !== undefined) {
-      const currentGen = this.runtimeRegistry?.getGeneration() ?? 0
-      if (unconfirmedGen === currentGen) {
-        throw new DaemonError(
-          'RUN_STOP_UNCONFIRMED',
-          `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
-          { statusCode: 409, retryable: true },
-        )
-      }
-      this.sessionsWithUnconfirmedStop.delete(input.sessionId)
+    // Generation changes alone do NOT clear quarantine; only confirmed provider termination
+    // or explicit owned-runtime termination via reconnectRuntime() clears sessionsWithUnconfirmedStop.
+    if (this.sessionsWithUnconfirmedStop.has(input.sessionId)) {
+      throw new DaemonError(
+        'RUN_STOP_UNCONFIRMED',
+        `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
+        { statusCode: 409, retryable: true },
+      )
     }
 
     // Preflight read of session & bot to prepare async Codex verification before atomic transaction.
@@ -829,6 +880,219 @@ export class RunOrchestrator {
     }
   }
 
+  async reconnectRuntime(): Promise<void> {
+    if (this.runtimeRegistry) {
+      await this.runtimeRegistry.reconnect()
+    }
+    this.clearAllQuarantine()
+  }
+
+  async inspectSession(sessionId: string): Promise<{
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    externalSessionId: string | null
+    providerThreadStatus: 'not_applicable' | 'accessible' | 'unavailable' | 'unknown'
+    hasToolActivity: boolean
+    resumable: boolean
+    reason: string
+    quarantined: boolean
+    lastRun: RunRecord | null
+    approvalsCount: number
+  }> {
+    const sess = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, agent_id, account_id, runtime_id, external_session_id, archived_at FROM sessions WHERE id = ?`,
+      )
+      .get(sessionId) as
+      | {
+          id: string
+          agent_id: string
+          account_id: string
+          runtime_id: string
+          external_session_id: string | null
+          archived_at: string | null
+        }
+      | undefined
+
+    if (!sess) {
+      throw new DaemonError('SESSION_NOT_FOUND', `Session "${sessionId}" was not found`, {
+        statusCode: 404,
+      })
+    }
+
+    const bot = this.dbHandle.sqlite
+      .prepare(`SELECT id, runtime_id, archived_at FROM agents WHERE id = ?`)
+      .get(sess.agent_id) as
+      | { id: string; runtime_id: string; archived_at: string | null }
+      | undefined
+
+    const lastRunRow = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, config_snapshot_json, status, error_json, started_at, ended_at, created_at
+         FROM runs
+         WHERE session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(sessionId) as RawRunRow | undefined
+
+    const appCountRow = this.dbHandle.sqlite
+      .prepare(`SELECT COUNT(*) AS cnt FROM approvals WHERE session_id = ?`)
+      .get(sessionId) as { cnt: number } | undefined
+
+    const quarantined = this.sessionsWithUnconfirmedStop.has(sessionId)
+    let resumable = true
+    let reason = 'Session is ready.'
+    if (sess.archived_at !== null) {
+      resumable = false
+      reason = 'Session is archived.'
+    } else if (!bot || bot.archived_at !== null) {
+      resumable = false
+      reason = 'Associated bot is missing or archived.'
+    } else if (quarantined) {
+      resumable = false
+      reason = 'Previous cancellation stop is unconfirmed; reconnect runtime or start a New chat.'
+    } else if (sess.runtime_id !== bot.runtime_id) {
+      resumable = false
+      reason = `Session runtime "${sess.runtime_id}" differs from bot runtime "${bot.runtime_id}"; start a New chat.`
+    }
+
+    const hasToolActivity = lastRunRow ? this.hasToolActivityForRun(lastRunRow.id) : false
+
+    let providerThreadStatus: 'not_applicable' | 'accessible' | 'unavailable' | 'unknown' =
+      'not_applicable'
+    if (sess.runtime_id === 'codex') {
+      if (!sess.external_session_id) {
+        providerThreadStatus = 'unavailable'
+      } else {
+        let accountMismatch = false
+        if (this.runtimeRegistry) {
+          const snap = await this.runtimeRegistry.getSnapshot(false).catch(() => null)
+          if (snap?.status === 'available' && snap.lifecycleState === 'connected') {
+            try {
+              const exec = await this.runtimeRegistry.getExecutionAdapter()
+              const currentAccountKey = `${snap.authMethod}:${snap.planType ?? ''}:${snap.workspaceName ?? ''}`
+              if (
+                sess.account_id &&
+                sess.account_id !== 'local' &&
+                sess.account_id !== 'local-default' &&
+                sess.account_id !== currentAccountKey
+              ) {
+                accountMismatch = true
+                providerThreadStatus = 'unavailable'
+                resumable = false
+                reason = 'Session belongs to a different account; start a New chat.'
+              } else if (typeof exec.adapter.readThread === 'function') {
+                const threadRead = await exec.adapter.readThread(sess.external_session_id)
+                providerThreadStatus = threadRead.accessible ? 'accessible' : 'unavailable'
+                if (!threadRead.accessible) {
+                  resumable = false
+                  reason =
+                    threadRead.reason ?? 'Provider thread is no longer accessible; start a New chat.'
+                }
+              } else {
+                providerThreadStatus = 'unknown'
+              }
+            } catch {
+              providerThreadStatus = 'unknown'
+            }
+          } else {
+            providerThreadStatus = 'unknown'
+          }
+        } else {
+          providerThreadStatus = 'unknown'
+        }
+        if (accountMismatch) {
+          providerThreadStatus = 'unavailable'
+        }
+      }
+    }
+
+    return {
+      sessionId: sess.id,
+      agentId: sess.agent_id,
+      runtimeId: sess.runtime_id,
+      externalSessionId: sess.external_session_id,
+      providerThreadStatus,
+      hasToolActivity,
+      resumable,
+      reason,
+      quarantined,
+      lastRun: lastRunRow ? this.rowToRun(lastRunRow) : null,
+      approvalsCount: Number(appCountRow?.cnt ?? 0),
+    }
+  }
+
+  private hasToolActivityForRun(runId: string): boolean {
+    const toolCountRow = this.dbHandle.sqlite
+      .prepare(
+        `SELECT COUNT(*) AS cnt
+         FROM run_events
+         WHERE run_id = ? AND type IN ('tool.started', 'tool.requested', 'tool.completed', 'approval.requested')`,
+      )
+      .get(runId) as { cnt: number } | undefined
+    if (Number(toolCountRow?.cnt ?? 0) > 0) return true
+    const appRow = this.dbHandle.sqlite
+      .prepare(`SELECT COUNT(*) AS cnt FROM approvals WHERE run_id = ?`)
+      .get(runId) as { cnt: number } | undefined
+    return Number(appRow?.cnt ?? 0) > 0
+  }
+
+  async retryRun(input: {
+    runId: string
+    idempotencyKey: string
+    confirmSideEffects?: boolean
+  }): Promise<StartRunResult> {
+    const orig = this.getRun(input.runId)
+    if (orig.status !== 'failed' && orig.status !== 'interrupted' && orig.status !== 'cancelled') {
+      throw new DaemonError(
+        'RETRY_NOT_ALLOWED',
+        `Cannot retry run "${orig.id}" in status "${orig.status}"`,
+        { statusCode: 409 },
+      )
+    }
+    if (this.sessionsWithUnconfirmedStop.has(orig.sessionId)) {
+      throw new DaemonError(
+        'RUN_STOP_UNCONFIRMED',
+        `Cannot retry while previous cancellation in session "${orig.sessionId}" is unconfirmed.`,
+        { statusCode: 409, retryable: true },
+      )
+    }
+    if (this.hasToolActivityForRun(orig.id) && input.confirmSideEffects !== true) {
+      throw new DaemonError(
+        'RETRY_CONFIRMATION_REQUIRED',
+        'Previous run had tool or approval activity that may have already applied side effects. Explicit confirmation is required before retrying.',
+        { statusCode: 409 },
+      )
+    }
+
+    const userMsg = this.dbHandle.sqlite
+      .prepare(`SELECT content_json FROM messages WHERE run_id = ? AND role = 'user' LIMIT 1`)
+      .get(orig.id) as { content_json: string } | undefined
+
+    let promptText = ''
+    if (userMsg) {
+      try {
+        const parsed = JSON.parse(userMsg.content_json) as { text?: unknown }
+        if (typeof parsed.text === 'string') promptText = parsed.text
+      } catch {
+        // ignore
+      }
+    }
+    if (!promptText.trim()) {
+      throw new DaemonError('ORIGINAL_PROMPT_MISSING', 'Cannot locate original user prompt to retry', {
+        statusCode: 404,
+      })
+    }
+
+    return this.startRun({
+      sessionId: orig.sessionId,
+      idempotencyKey: input.idempotencyKey,
+      text: promptText,
+    })
+  }
+
   cancelRun(runId: string): { run: RunRecord; alreadyTerminal: boolean } {
     const control = this.activeControls.get(runId)
 
@@ -892,10 +1156,7 @@ export class RunOrchestrator {
             try {
               const cur = this.getRun(runId)
               if (!isTerminalStatus(cur.status)) {
-                this.sessionsWithUnconfirmedStop.set(
-                  cur.sessionId,
-                  this.runtimeRegistry?.getGeneration() ?? 0,
-                )
+                this.addQuarantine(cur.sessionId)
                 this.finalizeRun({
                   runId,
                   sessionId: cur.sessionId,
@@ -1871,7 +2132,7 @@ export class RunOrchestrator {
           }
         } else if (ev.type === 'run.completed') {
           sawTerminal = true
-          this.sessionsWithUnconfirmedStop.delete(sessionId)
+          this.clearQuarantineForSession(sessionId)
           flushCodexBuffer(true)
           this.finalizeRun({
             runId,
@@ -1887,7 +2148,7 @@ export class RunOrchestrator {
           break
         } else if (ev.type === 'run.cancelled') {
           sawTerminal = true
-          this.sessionsWithUnconfirmedStop.delete(sessionId)
+          this.clearQuarantineForSession(sessionId)
           flushCodexBuffer(true)
           const cancelledText =
             accumulatedText.trim().length > 0

@@ -31,6 +31,9 @@ const bridge: GhostBotBridge = {
   cancelRun: (runId) => ipcRenderer.invoke('ghost:runs:cancel', { runId }),
   getRunEvents: (params) => ipcRenderer.invoke('ghost:runs:events', params),
   resolveApproval: (input) => ipcRenderer.invoke('ghost:runs:resolve-approval', input),
+  reconnectRuntime: () => ipcRenderer.invoke('ghost:runtime:reconnect', {}),
+  inspectSession: (sessionId) => ipcRenderer.invoke('ghost:sessions:inspect', { sessionId }),
+  retryRun: (input) => ipcRenderer.invoke('ghost:runs:retry', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

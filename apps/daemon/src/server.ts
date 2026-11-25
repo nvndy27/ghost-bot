@@ -13,6 +13,7 @@ import {
   ImportAvatarSvgInputSchema,
   RenameSessionInputSchema,
   ResolveApprovalInputSchema,
+  RetryRunInputSchema,
   RunIdSchema,
   SessionIdSchema,
   SetActiveBotParamsSchema,
@@ -276,6 +277,15 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'POST' && url.pathname === '/runtime/reconnect') {
+        const snap = await this.runtimeRegistry.reconnect()
+        if (this.runOrchestrator) {
+          await this.runOrchestrator.reconnectRuntime()
+        }
+        sendJson(res, 200, snap)
+        return
+      }
+
       const settingsRepo = this.settingsRepo
       if (settingsRepo) {
         if (req.method === 'GET' && url.pathname === '/settings') {
@@ -466,6 +476,36 @@ export class GhostBotDaemon {
             })
           }
           sendJson(res, 200, sessionRepo.archiveSession(idCheck.data))
+          return
+        }
+
+        const sessionInspectMatch = /^\/sessions\/([^/]+)\/inspect$/.exec(url.pathname)
+        if (req.method === 'GET' && sessionInspectMatch) {
+          const idCheck = SessionIdSchema.safeParse(decodeURIComponent(sessionInspectMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid session identifier', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, await orchestrator.inspectSession(idCheck.data))
+          return
+        }
+
+        const runRetryMatch = /^\/runs\/([^/]+)\/retry$/.exec(url.pathname)
+        if (req.method === 'POST' && runRetryMatch) {
+          const idCheck = RunIdSchema.safeParse(decodeURIComponent(runRetryMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid run identifier', { statusCode: 400 })
+          }
+          const body = await readJsonBody(req)
+          const parsed = RetryRunInputSchema.safeParse({
+            runId: idCheck.data,
+            ...(body && typeof body === 'object' ? body : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid retry payload', { statusCode: 400 })
+          }
+          sendJson(res, 201, await orchestrator.retryRun(parsed.data))
           return
         }
 

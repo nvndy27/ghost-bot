@@ -13,6 +13,7 @@ import type {
   ProviderSummary,
   RunRecord,
   RuntimeSnapshot,
+  SessionInspectionResponse,
   SessionRecord,
   UpdateBotInput,
 } from '@ghost-bot/shared-types/ipc'
@@ -134,6 +135,9 @@ export function App() {
   const [activeSessionByBot, setActiveSessionByBot] = useState<Record<string, string | null>>({})
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({})
   const [activeRunBySession, setActiveRunBySession] = useState<Record<string, RunRecord | null>>({})
+  const [inspectionBySession, setInspectionBySession] = useState<
+    Record<string, SessionInspectionResponse | null>
+  >({})
   const [draft, setDraft] = useState<string>('')
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
@@ -157,6 +161,9 @@ export function App() {
   const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
   const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
   const activeSessionRun = activeSessionId ? (activeRunBySession[activeSessionId] ?? null) : null
+  const activeSessionInspection = activeSessionId
+    ? (inspectionBySession[activeSessionId] ?? null)
+    : null
   const activeSessionIsStreaming = Boolean(
     activeSessionRun && !TERMINAL_RUN_STATUSES.has(activeSessionRun.status),
   )
@@ -391,8 +398,12 @@ export function App() {
         if (TERMINAL_RUN_STATUSES.has(latestRun.status)) {
           stopPollingRun(run.id)
           await refreshSessionMessages(sessionId, latestRun)
-          const sessRes = await bridge.listSessions({ agentId: botId })
+          const [sessRes, insp] = await Promise.all([
+            bridge.listSessions({ agentId: botId }),
+            bridge.inspectSession(sessionId),
+          ])
           setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
+          setInspectionBySession((prev) => ({ ...prev, [sessionId]: insp }))
           if (latestRun.runtimeId === 'codex') {
             void handleRefreshRuntime().catch(() => undefined)
           }
@@ -444,12 +455,16 @@ export function App() {
             setActiveRunBySession((prev) => ({ ...prev, [chosenSessionId]: activeRun }))
           }
 
-          const msgRes = await bridge.listMessages({ sessionId: chosenSessionId, limit: 200 })
+          const [msgRes, insp] = await Promise.all([
+            bridge.listMessages({ sessionId: chosenSessionId, limit: 200 }),
+            bridge.inspectSession(chosenSessionId),
+          ])
           if (cancelled) return
           setMessagesBySession((prev) => ({
             ...prev,
             [chosenSessionId]: msgRes.messages.map((m) => persistedToChatMessage(m, activeRun)),
           }))
+          setInspectionBySession((prev) => ({ ...prev, [chosenSessionId]: insp }))
 
           if (activeRun && !TERMINAL_RUN_STATUSES.has(activeRun.status)) {
             startPollingRun(activeBotId, chosenSessionId, activeRun)
@@ -681,6 +696,47 @@ export function App() {
     if (!bridge) return null
     const res = await bridge.pickWorkspace()
     return res.canceled ? null : res.path
+  }
+
+  const handleReconnectRuntime = async () => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    try {
+      const snap = await bridge.reconnectRuntime()
+      setRuntimeSnapshot(snap)
+      if (activeSessionId) {
+        const insp = await bridge.inspectSession(activeSessionId)
+        setInspectionBySession((prev) => ({ ...prev, [activeSessionId]: insp }))
+      }
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to reconnect runtime')
+    }
+  }
+
+  const [pendingRetryRunId, setPendingRetryRunId] = useState<string | null>(null)
+
+  const handleRetryRun = async (runId: string, confirmSideEffects = false) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeBot || !activeSessionId) return
+    try {
+      const idempotencyKey =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `retry-${Date.now()}`
+      const started = await bridge.retryRun({
+        runId,
+        idempotencyKey,
+        ...(confirmSideEffects ? { confirmSideEffects: true } : {}),
+      })
+      setPendingRetryRunId(null)
+      runSeqCursorRef.current.set(started.run.id, 0)
+      setActiveRunBySession((prev) => ({ ...prev, [activeSessionId]: started.run }))
+      setInspectionBySession((prev) => ({ ...prev, [activeSessionId]: null }))
+      await refreshSessionMessages(activeSessionId, started.run)
+      startPollingRun(activeBot.id, activeSessionId, started.run, started.assistantMessageId)
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to retry run')
+    }
   }
 
   const handleNewChat = async () => {
@@ -1024,6 +1080,92 @@ export function App() {
           </div>
         )}
 
+        {hasBridge &&
+          activeSessionInspection &&
+          (activeSessionInspection.quarantined ||
+            activeSessionInspection.lastRun?.status === 'interrupted' ||
+            activeSessionInspection.lastRun?.status === 'failed') && (
+            <div
+              role="region"
+              aria-label="Execution recovery"
+              style={{
+                margin: '10px 24px 0',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                border: '1px solid var(--gb-border)',
+                background: 'var(--gb-surface-elevated)',
+                fontSize: '12.5px',
+                display: 'flex',
+                gap: '8px',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <span>
+                {activeSessionInspection.quarantined
+                  ? 'Previous cancellation stop is unconfirmed. Reconnect runtime or start a New chat.'
+                  : activeSessionInspection.lastRun?.status === 'interrupted'
+                    ? 'Previous run was interrupted. Any tool actions may have partially completed.'
+                    : `Previous run failed${activeSessionInspection.lastRun?.error?.message ? `: ${activeSessionInspection.lastRun.error.message}` : '.'}`}
+              </span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                {activeSessionInspection.quarantined && (
+                  <button
+                    type="button"
+                    className="gb-btn-outline"
+                    onClick={() => void handleReconnectRuntime()}
+                  >
+                    Reconnect runtime
+                  </button>
+                )}
+                {!activeSessionInspection.quarantined &&
+                  activeSessionInspection.resumable &&
+                  activeSessionInspection.lastRun &&
+                  (activeSessionInspection.hasToolActivity ? (
+                    pendingRetryRunId === activeSessionInspection.lastRun.id ? (
+                      <>
+                        <button
+                          type="button"
+                          className="gb-btn-outline"
+                          onClick={() =>
+                            void handleRetryRun(activeSessionInspection.lastRun!.id, true)
+                          }
+                        >
+                          Confirm retry (may repeat tools)
+                        </button>
+                        <button
+                          type="button"
+                          className="gb-btn-outline"
+                          onClick={() => setPendingRetryRunId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        onClick={() => setPendingRetryRunId(activeSessionInspection.lastRun!.id)}
+                      >
+                        Retry prompt
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      className="gb-btn-outline"
+                      onClick={() => void handleRetryRun(activeSessionInspection.lastRun!.id)}
+                    >
+                      Retry prompt
+                    </button>
+                  ))}
+                <button type="button" className="gb-btn-outline" onClick={() => void handleNewChat()}>
+                  New chat
+                </button>
+              </div>
+            </div>
+          )}
+
         {!botsLoaded ? (
           <div style={{ margin: 'auto', color: 'var(--gb-muted)' }}>Loading bots...</div>
         ) : activeBot ? (
@@ -1087,6 +1229,8 @@ export function App() {
             activeTasks={latestTools}
             runtimeSnapshot={runtimeSnapshot}
             isMockMode={isMockMode}
+            onRefreshUsage={() => void handleRefreshRuntime()}
+            onReconnectRuntime={() => void handleReconnectRuntime()}
             onCollapse={() => updateAppearance({ rightCollapsed: true })}
           />
         </>

@@ -11,7 +11,10 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint packages apps tests",
-    "test": "node --test tests/*.test.ts"
+    "test": "node --test tests/*.test.ts",
+    "package:linux": "pnpm --filter @ghost-bot/desktop package:linux",
+    "package:appimage": "pnpm --filter @ghost-bot/desktop package:appimage",
+    "package:rpm": "pnpm --filter @ghost-bot/desktop package:rpm"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

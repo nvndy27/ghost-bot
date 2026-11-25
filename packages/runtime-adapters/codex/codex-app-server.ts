@@ -529,6 +529,27 @@ export class CodexAppServerAdapter implements AgentRuntime {
     }
   }
 
+  async readThread(threadId: string): Promise<{ accessible: boolean; reason?: string }> {
+    try {
+      await this.requireVerifiedChatGptAccount()
+      const client = await this.ensureInitialized()
+      const res = await client.request<Record<string, unknown>>('thread/read', {
+        threadId,
+        includeTurns: false,
+      })
+      const thread = res?.thread as Record<string, unknown> | undefined
+      if (thread && typeof thread.id === 'string' && thread.id === threadId) {
+        return { accessible: true }
+      }
+      return { accessible: false, reason: 'Provider thread was not returned by thread/read.' }
+    } catch (err) {
+      return {
+        accessible: false,
+        reason: err instanceof Error ? err.message : 'Provider thread read failed.',
+      }
+    }
+  }
+
   async *run(request: AgentRequest): AsyncIterable<AgentEvent> {
     const config = this.sessionConfig.get(request.session.externalId)
     if (!config) {

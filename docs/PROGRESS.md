@@ -1,5 +1,31 @@
 # Progress log
 
+## Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
+
+2026-11-26. Phase 2C merged to `main` (`c7891af`); Phase 2D **Implemented & Offline-Tested** on `feat/phase-2d-recovery-resume` (**CONDITIONAL PASS**: `55/55` unit tests and Electron recovery E2E passed; `electron-builder` not installed for AppImage/RPM artifact build and `GHOST_BOT_RUN_LIVE_RECOVERY=1` not executed without new live budget).
+
+| State | Evidence |
+|---|---|
+| Implemented | Extended `RuntimeRegistry` (`apps/daemon/src/runtime/registry.ts`) with explicit `RuntimeLifecycleState` (`unavailable`, `connecting`, `connected`, `disconnected`, `reconnecting`, `authentication_required`, `unsupported`, `failed`), deduplicated `reconnect()`, and `closeOwnedClient()`. |
+| Implemented | Hardened `RunOrchestrator` quarantine (`sessionsWithUnconfirmedStop`) so generation changes alone cannot clear quarantine without confirmed provider termination or `reconnectRuntime()` closing the owned runtime; added `inspectSession()` and explicit manual `retryRun()` (`SESSIONS_INSPECT`, `RUNS_RETRY`, `RUNTIME_RECONNECT`). |
+| Implemented | Extended `RightPanel.tsx` and `App.tsx` with recovery banners (`interrupted`, `failed`, `quarantined`), explicit `Retry prompt` / `Reconnect runtime` / `New chat` actions, and usage refresh + reset timestamp display without auto-replay. |
+| Implemented | Added Fedora/Linux packaging configuration (`apps/desktop/electron-builder.yml`, `apps/desktop/build/icon.svg`); `rpmbuild` is present on host, `electron-builder` is absent (no AppImage/RPM artifact built yet). |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**55/55** including `tests/phase-2d-recovery.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs` through `verify-phase-2c-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, and `verify-phase-2d-electron.mjs` (2 screenshots in `design/reviews/phase-2d/`) all passed. |
+
+### Phase 2D final acceptance & merge — 2026-11-26
+
+Phase 2D is **Verified** (**PASS** with authorized RPM packaging deferral to Phase 2E) on `feat/phase-2d-recovery-resume` and merged to `main`.
+
+| State | Evidence |
+|---|---|
+| Verified | Hardened `RuntimeRegistry.closeOwnedClient()` (`apps/daemon/src/runtime/registry.ts`) and `POST /runtime/reconnect` (`apps/daemon/src/server.ts`) so runtime termination failures throw `RUNTIME_TERMINATION_FAILED` and preserve durable `sessionsWithUnconfirmedStop` quarantine (`execution.quarantinedSessions.v1`) across restarts. |
+| Verified | Hardened `RunOrchestrator.retryRun()` (`apps/daemon/src/execution/orchestrator.ts`, `packages/shared-types/ipc.ts`, `apps/desktop/electron/main.ts`, `apps/desktop/src/App.tsx`) to require `confirmSideEffects: true` (`RETRY_CONFIRMATION_REQUIRED`) and explicit two-step UI confirmation when `hasToolActivityForRun()` is true. |
+| Verified | Added `CodexAppServerAdapter.readThread()` (`thread/read`, `includeTurns: false`) and updated `RunOrchestrator.inspectSession()` to validate `accountKey` ownership and live provider thread accessibility (`providerThreadStatus`: `accessible` / `unavailable` / `unknown`); added focused regression tests in `tests/phase-2d-recovery.test.ts` (**56/56** total tests). |
+| Verified | Authorized 2-turn live recovery (`GHOST_BOT_RUN_LIVE_RECOVERY=1 node scripts/verify-phase-2d-live.mjs`, **2/2 turns** consumed, `sessionId: "sess_3aa2c48c-9a91-4c92-825a-9bec3f1e2c51"`, `threadId: "01a213e8-cfce-7ab3-87f8-831c5c768078"`): Turn 1 (`GHOST_2D_TOKEN_91`), Electron restart (0 auto-inference), `reconnectRuntime()` (`lifecycleState: "connected"`), `inspectSession()` (`providerThreadStatus: "accessible"`, `resumable: true`, `quarantined: false`), Turn 2 same-thread recall (`GHOST_2D_TOKEN_91`), `run_events >= 4`, `workspaceIntact: true`; screenshots in `design/reviews/phase-2d/`. |
+| Verified | Packaged `apps/desktop/release/GhostBot-0.1.0-x86_64.AppImage` (`121054137` bytes, SHA-256 `7b02c1d49ef2af99548dd5fdaf485ebe49efa642e116950a48b4136edc0bf610`) passed `scripts/verify-packaged-appimage.mjs` (0 bundled credentials/user data, `sandboxed: true`, strict CSP `default-src 'self'`, daemon startup, mock execution, 2-launch SQLite persistence `0700`/`0600`, clean shutdown; `APPIMAGE_EXTRACT_AND_RUN=1` required on Fedora 45 without `libfuse.so.2`). |
+| Tested | `pnpm lint`, `pnpm typecheck`, 2x `pnpm test` (**56/56**), `pnpm build`, Electron smoke (`GHOST_BOT_SMOKE_EXIT=1`), 5 Playwright UI suites (`1B`, `1C`, `1D`, `2A`, `2C`), 4 Electron E2E suites (`verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, `verify-phase-2a-electron.mjs`, `verify-phase-2d-electron.mjs`), and `verify-packaged-appimage.mjs` all passed after final code edits. |
+| Blocked | `pnpm package:rpm` remains blocked by missing host `libcrypt.so.1` (`libxcrypt-compat`) for `electron-builder`'s bundled `fpm` (deferred to Phase 2E per human authorization). `full-access` and persistent `Approve Always` remain gated/disabled. |
+
 ## Phase 2C — Live Tools, Interactive Approvals & Workspace Permissions
 
 2026-11-25. Phase 2B merged to `main` (`a144aaf`); Phase 2C **Verified** (`PASS` — all offline security/approval tests and authorized 3-turn live Codex approval/workspace verification passed).

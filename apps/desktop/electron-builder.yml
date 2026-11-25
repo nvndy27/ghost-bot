@@ -1,0 +1,37 @@
+appId: dev.ghostbot.desktop
+productName: Ghost Bot
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: dist-daemon
+    to: daemon
+linux:
+  target:
+    - AppImage
+    - rpm
+  category: Utility
+  icon: build/icon.svg
+  desktop:
+    entry:
+      Name: Ghost Bot
+      Comment: Local-first AI assistant workspace
+      Categories: Utility;Development;
+      StartupWMClass: ghost-bot
+  executableArgs:
+    - --ozone-platform-hint=auto
+rpm:
+  packageName: ghost-bot
+  artifactName: ghost-bot-${version}.${arch}.rpm
+  synopsis: Ghost Bot Desktop Workspace
+  depends:
+    - gtk3
+    - libnotify
+    - nss
+    - libXScrnSaver
+appImage:
+  artifactName: GhostBot-${version}-${arch}.AppImage
