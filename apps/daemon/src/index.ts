@@ -4,9 +4,10 @@ const authToken = process.env.GHOST_BOT_DAEMON_TOKEN ?? ''
 const socketPath = process.env.GHOST_BOT_DAEMON_SOCKET || undefined
 const portEnv = process.env.GHOST_BOT_DAEMON_PORT
 const port = portEnv ? Number(portEnv) : undefined
+const dataDir = process.env.GHOST_BOT_DATA_DIR || undefined
 const runtimeMode = process.env.GHOST_BOT_RUNTIME_MODE === 'mock' ? 'mock' : 'codex'
 
-const daemon = new GhostBotDaemon({ authToken, socketPath, port, runtimeMode })
+const daemon = new GhostBotDaemon({ authToken, socketPath, port, dataDir, runtimeMode })
 
 let shuttingDown = false
 const shutdown = async () => {

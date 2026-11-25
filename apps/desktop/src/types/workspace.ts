@@ -56,6 +56,7 @@ export type ChatMessage =
 export interface WorkspaceBot {
   id: string
   name: string
+  description?: string
   statusLabel: string
   avatarStatus: AvatarStatus
   avatar: AvatarConfig

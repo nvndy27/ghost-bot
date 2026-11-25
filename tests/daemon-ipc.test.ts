@@ -51,8 +51,9 @@ test('daemon rejects weak authToken and unauthenticated requests', async () => {
 
   const dir = await mkdtemp(join(tmpdir(), 'ghost-bot-daemon-test-'))
   const socketPath = join(dir, 'daemon.sock')
+  const dataDir = join(dir, 'data')
   const token = '0123456789abcdef0123456789abcdef'
-  const daemon = new GhostBotDaemon({ authToken: token, socketPath, runtimeMode: 'mock' })
+  const daemon = new GhostBotDaemon({ authToken: token, socketPath, dataDir, runtimeMode: 'mock' })
   await daemon.start()
 
   try {
@@ -101,11 +102,13 @@ test('daemon enforces 0600 socket permissions and binds permission evidence to v
   assert.ok(ev?.verifiedModes.includes('workspace'))
   assert.equal(ev?.verifiedModes.includes('full-access'), false)
 
-  const dir = await mkdtemp(join(tmpdir(), 'ghost-bot-sock-perm-'), )
+  const dir = await mkdtemp(join(tmpdir(), 'ghost-bot-sock-perm-'))
   const socketPath = join(dir, 'daemon.sock')
+  const dataDir = join(dir, 'data')
   const daemon = new GhostBotDaemon({
     authToken: '0123456789abcdef0123456789abcdef',
     socketPath,
+    dataDir,
     runtimeMode: 'mock',
   })
   await daemon.start()

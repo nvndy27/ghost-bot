@@ -15,6 +15,43 @@ export function BotAvatar({
   size = 32,
   label,
 }: BotAvatarProps) {
+  if (config.kind === 'custom') {
+    return (
+      <span
+        className="gb-avatar gb-avatar--custom"
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          position: 'relative',
+          borderRadius: '22%',
+          overflow: 'hidden',
+          background: 'var(--gb-surface)',
+        }}
+        role={label ? 'img' : undefined}
+        aria-label={label}
+      >
+        <img
+          src={config.svgDataUrl}
+          alt={label ?? config.label ?? 'Custom bot avatar'}
+          width={size}
+          height={size}
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+        />
+        {status === 'error' && (
+          <span
+            className="gb-avatar-error-dot"
+            title="Error"
+            aria-label="Error status"
+          />
+        )}
+      </span>
+    )
+  }
+
   const preset = avatarPresets.find((p) => p.id === config.shape) ?? avatarPresets[0]
   const eyeStyle =
     status === 'sleeping'

@@ -73,4 +73,33 @@ export const avatarPresets = [
   }
 ] as const;
 export type AvatarShape = typeof avatarPresets[number]["id"];
-export type AvatarConfig = { shape: AvatarShape; color: string; eyes: "classic" | "round" | "happy" | "sleepy"; rotation: number; animation: boolean };
+export type AvatarEyeStyle = "classic" | "round" | "happy" | "sleepy";
+export type PresetAvatarConfig = {
+  kind?: "preset";
+  shape: AvatarShape;
+  color: string;
+  eyes: AvatarEyeStyle;
+  rotation: number;
+  animation: boolean;
+};
+export type CustomAvatarConfig = {
+  kind: "custom";
+  svgDataUrl: string;
+  label?: string;
+};
+export type AvatarConfig = PresetAvatarConfig | CustomAvatarConfig;
+
+export const AVATAR_COLOR_PALETTE = [
+  "#292929",
+  "#A3835D",
+  "#7765CF",
+  "#418D79",
+  "#DD709E",
+  "#438ECE",
+  "#E89042",
+  "#919490",
+  "#B66486",
+  "#536B85",
+  "#49ABAD",
+  "#D1B348",
+] as const;

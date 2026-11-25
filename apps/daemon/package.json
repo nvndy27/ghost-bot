@@ -8,8 +8,10 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
+    "@ghost-bot/avatar": "workspace:*",
     "@ghost-bot/runtime-adapters": "workspace:*",
     "@ghost-bot/shared-types": "workspace:*",
+    "drizzle-orm": "^0.45.4",
     "zod": "^3.25.67"
   }
 }

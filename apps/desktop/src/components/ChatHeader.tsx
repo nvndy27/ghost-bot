@@ -2,10 +2,11 @@ import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 
 export interface ChatHeaderProps {
-  bot: WorkspaceBot
+  bot: WorkspaceBot | null
   leftCollapsed: boolean
   rightCollapsed: boolean
   isMockMode: boolean
+  onEditBot: () => void
   onToggleLeft: () => void
   onToggleRight: () => void
 }
@@ -15,6 +16,7 @@ export function ChatHeader({
   leftCollapsed,
   rightCollapsed,
   isMockMode,
+  onEditBot,
   onToggleLeft,
   onToggleRight,
 }: ChatHeaderProps) {
@@ -30,25 +32,34 @@ export function ChatHeader({
           ☰
         </button>
       )}
-      <BotAvatar
-        config={bot.avatar}
-        status={bot.avatarStatus}
-        size={32}
-        label={`${bot.name} avatar`}
-      />
-      <strong className="gb-chat-header-title">{bot.name}</strong>
-      <span className="gb-badge">
-        {isMockMode ? 'Mock UI' : 'Codex Ready'}
-      </span>
-      <div style={{ flex: 1 }} />
-      <button
-        type="button"
-        disabled
-        title="Bot configuration (Phase 1C)"
-        aria-label="Bot options (Phase 1C)"
-      >
-        ⋯
-      </button>
+      {bot ? (
+        <>
+          <BotAvatar
+            config={bot.avatar}
+            status={bot.avatarStatus}
+            size={32}
+            label={`${bot.name} avatar`}
+          />
+          <strong className="gb-chat-header-title">{bot.name}</strong>
+          <span className="gb-badge">
+            {isMockMode ? 'Mock UI' : 'Codex Ready'}
+          </span>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={onEditBot}
+            title="Edit bot configuration"
+            aria-label="Edit bot"
+          >
+            ⋯
+          </button>
+        </>
+      ) : (
+        <>
+          <strong className="gb-chat-header-title">No bot selected</strong>
+          <div style={{ flex: 1 }} />
+        </>
+      )}
       <button
         type="button"
         onClick={onToggleRight}
