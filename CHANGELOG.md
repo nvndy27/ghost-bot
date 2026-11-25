@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Phase 2A — Session, Run, Event and Message Persistence Foundation
+- Documented [ADR 0006](docs/adr/0006-daemon-execution-foundation.md) and added SQLite migration `0003_execution_foundation` (`runs`, `run_events`, updated `sessions` and `messages` with `ON DELETE RESTRICT` and monotonic sequence/idempotency indexes).
+- Added daemon-owned `RunStateMachine`, `RunEventStore`, `SessionRepository`, deterministic `mock-scenarios`, and `RunOrchestrator` with startup crash recovery (`interrupted` reconciliation), concurrency/idempotency enforcement, bounded message batching, and Phase 2A live inference guard (`LIVE_INFERENCE_DISABLED`).
+- Added 11 Zod-validated IPC channels and daemon HTTP routes for sessions, messages, runs, cursor-based events, cancellation, and mock approval resolution.
+- Replaced React's `setInterval` mock timer in `App.tsx` with daemon-owned sessions, persisted chat history, session switcher / `+ New chat` in `ChatHeader.tsx`, and `120ms` `afterSeq` cursor polling.
+- Added `tests/execution-foundation.test.ts`, `scripts/verify-phase-2a-ui.mjs` (4 screenshots in `design/reviews/phase-2a/`), and `scripts/verify-phase-2a-electron.mjs`.
+
 ### Phase 1D — Settings & Runtime Bridge
 - Added SQLite-backed `SettingsRepository` (`apps/daemon/src/settings/repository.ts`) with Zod schemas, atomic updates, corrupt JSON recovery, reset-to-defaults, and idempotent `localStorage` migration.
 - Completed all 13 Settings sections in `SettingsModal.tsx` with explicit persisted, runtime-managed, read-only, and deferred Phase 3/5 classifications.

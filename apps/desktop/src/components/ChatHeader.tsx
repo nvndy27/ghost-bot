@@ -1,3 +1,4 @@
+import type { SessionRecord } from '@ghost-bot/shared-types/ipc'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 
@@ -6,6 +7,10 @@ export interface ChatHeaderProps {
   leftCollapsed: boolean
   rightCollapsed: boolean
   isMockMode: boolean
+  sessions?: SessionRecord[]
+  activeSessionId?: string | null
+  onSelectSession?: (sessionId: string) => void
+  onNewChat?: () => void
   onEditBot: () => void
   onToggleLeft: () => void
   onToggleRight: () => void
@@ -16,6 +21,10 @@ export function ChatHeader({
   leftCollapsed,
   rightCollapsed,
   isMockMode,
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onNewChat,
   onEditBot,
   onToggleLeft,
   onToggleRight,
@@ -45,6 +54,40 @@ export function ChatHeader({
             {isMockMode ? 'Mock UI' : 'Codex Ready'}
           </span>
           <div style={{ flex: 1 }} />
+          {sessions && sessions.length > 0 && onSelectSession && (
+            <select
+              aria-label="Conversation session"
+              value={activeSessionId ?? sessions[0]?.id ?? ''}
+              onChange={(e) => onSelectSession(e.target.value)}
+              style={{
+                maxWidth: 200,
+                height: 28,
+                fontSize: 12,
+                borderRadius: 6,
+                border: '1px solid var(--gb-border)',
+                background: 'var(--gb-surface-elevated)',
+                color: 'var(--gb-text-primary)',
+                padding: '0 8px',
+              }}
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}
+                </option>
+              ))}
+            </select>
+          )}
+          {onNewChat && (
+            <button
+              type="button"
+              onClick={onNewChat}
+              title="New conversation"
+              aria-label="New conversation"
+              style={{ fontSize: 12, padding: '4px 10px' }}
+            >
+              + New chat
+            </button>
+          )}
           <button
             type="button"
             onClick={onEditBot}

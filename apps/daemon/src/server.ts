@@ -1,15 +1,23 @@
 import { timingSafeEqual } from 'node:crypto'
-import { chmod } from 'node:fs/promises'
+import { chmod, open, readFile, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+import { dirname, join } from 'node:path'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import {
   AppearanceSettingsSchema,
   AppSettingsPatchSchema,
   BotIdSchema,
   CreateBotInputSchema,
+  CreateSessionInputSchema,
   ImportAvatarSvgInputSchema,
+  RenameSessionInputSchema,
+  ResolveApprovalInputSchema,
+  RunIdSchema,
+  SessionIdSchema,
   SetActiveBotParamsSchema,
+  SetActiveSessionInputSchema,
+  StartRunInputSchema,
   UpdateBotInputSchema,
 } from '@ghost-bot/shared-types/ipc'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
@@ -18,7 +26,9 @@ import { openGhostBotDatabase } from './db/client.ts'
 import type { DatabaseHandle } from './db/client.ts'
 import { seedInitialBotsIfNeeded } from './db/seed.ts'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
+import { RunOrchestrator } from './execution/orchestrator.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
+import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 
 export interface DaemonServerOptions {
@@ -70,6 +80,8 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+const ACTIVE_DAEMON_LOCKS = new Set<string>()
+
 export class GhostBotDaemon {
   private readonly options: DaemonServerOptions
   private readonly runtimeMode: 'codex' | 'mock'
@@ -77,6 +89,9 @@ export class GhostBotDaemon {
   private dbHandle: DatabaseHandle | null = null
   private botRepo: BotRepository | null = null
   private settingsRepo: SettingsRepository | null = null
+  private sessionRepo: SessionRepository | null = null
+  private runOrchestrator: RunOrchestrator | null = null
+  private lockFilePath: string | null = null
   private server: Server | null = null
   private readonly startedAt = Date.now()
 
@@ -92,16 +107,82 @@ export class GhostBotDaemon {
     })
   }
 
+  private async acquireDaemonLock(lockPath: string): Promise<void> {
+    if (ACTIVE_DAEMON_LOCKS.has(lockPath)) {
+      throw new DaemonError(
+        'DAEMON_ALREADY_RUNNING',
+        `Another Ghost Bot daemon (pid ${process.pid}) already owns ${dirname(lockPath)}`,
+        { statusCode: 409 },
+      )
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const handle = await open(lockPath, 'wx', 0o600)
+        try {
+          await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8')
+        } finally {
+          await handle.close()
+        }
+        ACTIVE_DAEMON_LOCKS.add(lockPath)
+        this.lockFilePath = lockPath
+        return
+      } catch (err) {
+        const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : ''
+        if (code !== 'EEXIST') throw err
+
+        let existingPid: number | null = null
+        try {
+          const raw = await readFile(lockPath, 'utf8')
+          const parsed = JSON.parse(raw) as { pid?: unknown }
+          if (typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+            existingPid = parsed.pid
+          }
+        } catch {
+          // Malformed or empty lock file -> treat as stale if unreadable
+        }
+
+        if (existingPid !== null && existingPid !== process.pid) {
+          let isAlive = false
+          try {
+            process.kill(existingPid, 0)
+            isAlive = true
+          } catch (killErr) {
+            const killCode =
+              killErr && typeof killErr === 'object' && 'code' in killErr ? String(killErr.code) : ''
+            if (killCode === 'EPERM') isAlive = true
+          }
+          if (isAlive) {
+            throw new DaemonError(
+              'DAEMON_ALREADY_RUNNING',
+              `Another Ghost Bot daemon (pid ${existingPid}) already owns ${dirname(lockPath)}`,
+              { statusCode: 409 },
+            )
+          }
+        }
+        await unlink(lockPath).catch(() => undefined)
+      }
+    }
+  }
+
   async start(): Promise<{ address: string }> {
     if (this.server) {
       throw new DaemonError('ALREADY_STARTED', 'Daemon server is already running')
     }
 
     const dbHandle = await openGhostBotDatabase(this.options.dataDir)
+    try {
+      await this.acquireDaemonLock(join(dirname(dbHandle.dbPath), 'daemon.lock'))
+    } catch (err) {
+      dbHandle.close()
+      throw err
+    }
     seedInitialBotsIfNeeded(dbHandle)
     this.dbHandle = dbHandle
     this.botRepo = new BotRepository(dbHandle)
     this.settingsRepo = new SettingsRepository(dbHandle)
+    this.sessionRepo = new SessionRepository(dbHandle)
+    this.runOrchestrator = new RunOrchestrator(dbHandle)
+    this.runOrchestrator.reconcileOnStartup()
 
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
@@ -134,6 +215,10 @@ export class GhostBotDaemon {
   }
 
   async stop(): Promise<void> {
+    if (this.runOrchestrator) {
+      await this.runOrchestrator.stop()
+      this.runOrchestrator = null
+    }
     await this.runtimeRegistry.stop()
     if (this.server) {
       const srv = this.server
@@ -142,9 +227,16 @@ export class GhostBotDaemon {
     }
     this.botRepo = null
     this.settingsRepo = null
+    this.sessionRepo = null
     if (this.dbHandle) {
       this.dbHandle.close()
       this.dbHandle = null
+    }
+    if (this.lockFilePath) {
+      const p = this.lockFilePath
+      this.lockFilePath = null
+      ACTIVE_DAEMON_LOCKS.delete(p)
+      await unlink(p).catch(() => undefined)
     }
   }
 
@@ -296,6 +388,185 @@ export class GhostBotDaemon {
           label: parsed.data.label,
         })
         return
+      }
+
+      const sessionRepo = this.sessionRepo
+      const orchestrator = this.runOrchestrator
+      if (sessionRepo && orchestrator) {
+        if (req.method === 'GET' && url.pathname === '/sessions') {
+          const agentIdCheck = BotIdSchema.safeParse(url.searchParams.get('agentId') ?? '')
+          if (!agentIdCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Valid agentId query parameter is required', {
+              statusCode: 400,
+            })
+          }
+          const limitRaw = url.searchParams.get('limit')
+          const offsetRaw = url.searchParams.get('offset')
+          const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+          const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : undefined
+          sendJson(res, 200, sessionRepo.listSessions(agentIdCheck.data, { limit, offset }))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/sessions') {
+          const body = await readJsonBody(req)
+          const parsed = CreateSessionInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid session create payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, sessionRepo.createSession(parsed.data))
+          return
+        }
+
+        if (req.method === 'PUT' && url.pathname === '/settings/active-session') {
+          const body = await readJsonBody(req)
+          const parsed = SetActiveSessionInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid active session payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(
+            res,
+            200,
+            sessionRepo.setActiveSessionId(parsed.data.agentId, parsed.data.sessionId),
+          )
+          return
+        }
+
+        const sessionMessagesMatch = /^\/sessions\/([^/]+)\/messages$/.exec(url.pathname)
+        if (req.method === 'GET' && sessionMessagesMatch) {
+          const idCheck = SessionIdSchema.safeParse(decodeURIComponent(sessionMessagesMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid session identifier', {
+              statusCode: 400,
+            })
+          }
+          const limitRaw = url.searchParams.get('limit')
+          const offsetRaw = url.searchParams.get('offset')
+          const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+          const offset = offsetRaw ? Number.parseInt(offsetRaw, 10) : undefined
+          sendJson(res, 200, sessionRepo.getSessionMessages(idCheck.data, { limit, offset }))
+          return
+        }
+
+        const sessionArchiveMatch = /^\/sessions\/([^/]+)\/archive$/.exec(url.pathname)
+        if (req.method === 'POST' && sessionArchiveMatch) {
+          const idCheck = SessionIdSchema.safeParse(decodeURIComponent(sessionArchiveMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid session identifier', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, sessionRepo.archiveSession(idCheck.data))
+          return
+        }
+
+        const sessionMatch = /^\/sessions\/([^/]+)$/.exec(url.pathname)
+        if (req.method === 'PATCH' && sessionMatch) {
+          const idCheck = SessionIdSchema.safeParse(decodeURIComponent(sessionMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid session identifier', {
+              statusCode: 400,
+            })
+          }
+          const body = await readJsonBody(req)
+          const parsed = RenameSessionInputSchema.safeParse({
+            sessionId: idCheck.data,
+            ...(body && typeof body === 'object' ? body : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid session rename payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, sessionRepo.renameSession(parsed.data.sessionId, parsed.data.title))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/runs') {
+          const body = await readJsonBody(req)
+          const parsed = StartRunInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid start run payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, orchestrator.startRun(parsed.data))
+          return
+        }
+
+        const runCancelMatch = /^\/runs\/([^/]+)\/cancel$/.exec(url.pathname)
+        if (req.method === 'POST' && runCancelMatch) {
+          const idCheck = RunIdSchema.safeParse(decodeURIComponent(runCancelMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid run identifier', { statusCode: 400 })
+          }
+          sendJson(res, 200, orchestrator.cancelRun(idCheck.data))
+          return
+        }
+
+        const runEventsMatch = /^\/runs\/([^/]+)\/events$/.exec(url.pathname)
+        if (req.method === 'GET' && runEventsMatch) {
+          const idCheck = RunIdSchema.safeParse(decodeURIComponent(runEventsMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid run identifier', { statusCode: 400 })
+          }
+          const afterSeqRaw = url.searchParams.get('afterSeq')
+          const limitRaw = url.searchParams.get('limit')
+          const afterSeq = afterSeqRaw ? Number.parseInt(afterSeqRaw, 10) : 0
+          const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 200
+          sendJson(res, 200, orchestrator.getRunEvents(idCheck.data, afterSeq, limit))
+          return
+        }
+
+        const runApprovalMatch = /^\/runs\/([^/]+)\/approval$/.exec(url.pathname)
+        if (req.method === 'POST' && runApprovalMatch) {
+          const idCheck = RunIdSchema.safeParse(decodeURIComponent(runApprovalMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid run identifier', { statusCode: 400 })
+          }
+          const body = await readJsonBody(req)
+          const parsed = ResolveApprovalInputSchema.safeParse({
+            runId: idCheck.data,
+            ...(body && typeof body === 'object' ? body : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid approval resolution payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(
+            res,
+            200,
+            orchestrator.resolveApproval(
+              parsed.data.runId,
+              parsed.data.approvalId,
+              parsed.data.decision,
+            ),
+          )
+          return
+        }
+
+        const runMatch = /^\/runs\/([^/]+)$/.exec(url.pathname)
+        if (req.method === 'GET' && runMatch) {
+          const idCheck = RunIdSchema.safeParse(decodeURIComponent(runMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid run identifier', { statusCode: 400 })
+          }
+          sendJson(res, 200, orchestrator.getRun(idCheck.data))
+          return
+        }
       }
 
       throw new DaemonError('NOT_FOUND', `Unknown daemon endpoint: ${req.method} ${url.pathname}`, {

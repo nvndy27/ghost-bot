@@ -17,6 +17,17 @@ export const IPC_CHANNELS = {
   SETTINGS_RESET: 'ghost:settings:reset',
   SETTINGS_MIGRATE_LOCAL: 'ghost:settings:migrate-local',
   RUNTIME_SNAPSHOT: 'ghost:runtime:snapshot',
+  SESSIONS_LIST: 'ghost:sessions:list',
+  SESSIONS_CREATE: 'ghost:sessions:create',
+  SESSIONS_RENAME: 'ghost:sessions:rename',
+  SESSIONS_ARCHIVE: 'ghost:sessions:archive',
+  SESSIONS_SET_ACTIVE: 'ghost:sessions:set-active',
+  MESSAGES_LIST: 'ghost:messages:list',
+  RUNS_START: 'ghost:runs:start',
+  RUNS_GET: 'ghost:runs:get',
+  RUNS_CANCEL: 'ghost:runs:cancel',
+  RUNS_EVENTS: 'ghost:runs:events',
+  RUNS_RESOLVE_APPROVAL: 'ghost:runs:resolve-approval',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -284,6 +295,223 @@ export const RuntimeSnapshotParamsSchema = z
   .strict()
   .optional()
 
+export const SessionIdSchema = z.string().trim().min(1).max(100)
+export const RunIdSchema = z.string().trim().min(1).max(100)
+
+export const RunStatusSchema = z.enum([
+  'queued',
+  'starting',
+  'running',
+  'awaiting_approval',
+  'cancelling',
+  'completed',
+  'cancelled',
+  'failed',
+  'interrupted',
+])
+
+export const SessionRecordSchema = z.object({
+  id: SessionIdSchema,
+  agentId: BotIdSchema,
+  accountId: z.string(),
+  runtimeId: z.string(),
+  externalSessionId: z.string().nullable(),
+  title: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+  lastMessagePreview: z.string().optional(),
+  activeRunId: RunIdSchema.nullable().optional(),
+  activeRunStatus: RunStatusSchema.nullable().optional(),
+})
+
+export type SessionRecord = z.infer<typeof SessionRecordSchema>
+
+export const ListSessionsParamsSchema = z
+  .object({
+    agentId: BotIdSchema,
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .strict()
+
+export const SessionsListResponseSchema = z.object({
+  sessions: z.array(SessionRecordSchema),
+  activeSessionId: SessionIdSchema.nullable(),
+  total: z.number().int().nonnegative(),
+})
+
+export type SessionsListResponse = z.infer<typeof SessionsListResponseSchema>
+
+export const CreateSessionInputSchema = z
+  .object({
+    agentId: BotIdSchema,
+    title: z.string().trim().max(120).optional(),
+  })
+  .strict()
+
+export type CreateSessionInput = z.infer<typeof CreateSessionInputSchema>
+
+export const RenameSessionInputSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    title: z.string().trim().min(1).max(120),
+  })
+  .strict()
+
+export type RenameSessionInput = z.infer<typeof RenameSessionInputSchema>
+
+export const SessionIdParamsSchema = z.object({ sessionId: SessionIdSchema }).strict()
+
+export const SetActiveSessionInputSchema = z
+  .object({
+    agentId: BotIdSchema,
+    sessionId: SessionIdSchema.nullable(),
+  })
+  .strict()
+
+export type SetActiveSessionInput = z.infer<typeof SetActiveSessionInputSchema>
+
+export const MessageRoleSchema = z.enum(['user', 'assistant', 'system'])
+export const MessageStatusSchema = z.enum([
+  'complete',
+  'streaming',
+  'interrupted',
+  'cancelled',
+  'failed',
+])
+
+export const PersistedMessageSchema = z.object({
+  id: z.string(),
+  sessionId: SessionIdSchema,
+  role: MessageRoleSchema,
+  text: z.string(),
+  meta: z.record(z.string(), z.unknown()).optional(),
+  seqOrder: z.number().int().nonnegative(),
+  status: MessageStatusSchema,
+  runId: RunIdSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type PersistedMessage = z.infer<typeof PersistedMessageSchema>
+
+export const ListMessagesParamsSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    limit: z.number().int().min(1).max(500).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .strict()
+
+export const MessagesListResponseSchema = z.object({
+  session: SessionRecordSchema,
+  messages: z.array(PersistedMessageSchema),
+  total: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+})
+
+export type MessagesListResponse = z.infer<typeof MessagesListResponseSchema>
+
+export const PendingApprovalSchema = z.object({
+  approvalId: z.string(),
+  title: z.string(),
+  command: z.string(),
+  risk: z.enum(['low', 'medium', 'high']),
+})
+
+export const RunRecordSchema = z.object({
+  id: RunIdSchema,
+  sessionId: SessionIdSchema,
+  agentId: BotIdSchema,
+  idempotencyKey: z.string(),
+  runtimeId: z.string(),
+  modelId: z.string(),
+  effort: z.string(),
+  permissionMode: z.string(),
+  configSnapshot: z.record(z.string(), z.unknown()),
+  status: RunStatusSchema,
+  error: AppErrorSchema.nullable(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  createdAt: z.string(),
+  pendingApproval: PendingApprovalSchema.nullable(),
+})
+
+export type RunRecord = z.infer<typeof RunRecordSchema>
+
+export const StartRunInputSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    idempotencyKey: z.string().trim().min(1).max(128),
+    text: z.string().trim().min(1).max(32_000),
+  })
+  .strict()
+
+export type StartRunInput = z.infer<typeof StartRunInputSchema>
+
+export const StartRunResponseSchema = z.object({
+  run: RunRecordSchema,
+  deduplicated: z.boolean(),
+  userMessageId: z.string(),
+  assistantMessageId: z.string(),
+})
+
+export type StartRunResponse = z.infer<typeof StartRunResponseSchema>
+
+export const RunIdParamsSchema = z.object({ runId: RunIdSchema }).strict()
+
+export const CancelRunResponseSchema = z.object({
+  run: RunRecordSchema,
+  alreadyTerminal: z.boolean(),
+})
+
+export type CancelRunResponse = z.infer<typeof CancelRunResponseSchema>
+
+export const PersistedRunEventSchema = z.object({
+  id: z.string(),
+  runId: RunIdSchema,
+  seq: z.number().int().positive(),
+  eventKey: z.string(),
+  type: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  timestamp: z.string(),
+})
+
+export type PersistedRunEvent = z.infer<typeof PersistedRunEventSchema>
+
+export const ListRunEventsParamsSchema = z
+  .object({
+    runId: RunIdSchema,
+    afterSeq: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  })
+  .strict()
+
+export const RunEventsResponseSchema = z.object({
+  events: z.array(PersistedRunEventSchema),
+  hasMore: z.boolean(),
+  lastSeq: z.number().int().nonnegative(),
+})
+
+export type RunEventsResponse = z.infer<typeof RunEventsResponseSchema>
+
+export const ResolveApprovalInputSchema = z
+  .object({
+    runId: RunIdSchema,
+    approvalId: z.string().trim().min(1).max(128),
+    decision: z.enum(['approved', 'denied']),
+  })
+  .strict()
+
+export type ResolveApprovalInput = z.infer<typeof ResolveApprovalInputSchema>
+
+export const ResolveApprovalResponseSchema = z.object({
+  run: RunRecordSchema,
+})
+
+export type ResolveApprovalResponse = z.infer<typeof ResolveApprovalResponseSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -301,6 +529,17 @@ export interface GhostBotBridge {
   resetSettings(): Promise<AppSettings>
   migrateLocalSettings(legacy: Partial<AppearanceSettingsInput>): Promise<AppSettings>
   getRuntimeSnapshot(refresh?: boolean): Promise<RuntimeSnapshot>
+  listSessions(params: { agentId: string; limit?: number; offset?: number }): Promise<SessionsListResponse>
+  createSession(input: CreateSessionInput): Promise<SessionRecord>
+  renameSession(input: RenameSessionInput): Promise<SessionRecord>
+  archiveSession(sessionId: string): Promise<{ archivedId: string; activeSessionId: string | null }>
+  setActiveSession(input: SetActiveSessionInput): Promise<{ agentId: string; activeSessionId: string | null }>
+  listMessages(params: { sessionId: string; limit?: number; offset?: number }): Promise<MessagesListResponse>
+  startRun(input: StartRunInput): Promise<StartRunResponse>
+  getRun(runId: string): Promise<RunRecord>
+  cancelRun(runId: string): Promise<CancelRunResponse>
+  getRunEvents(params: { runId: string; afterSeq?: number; limit?: number }): Promise<RunEventsResponse>
+  resolveApproval(input: ResolveApprovalInput): Promise<ResolveApprovalResponse>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

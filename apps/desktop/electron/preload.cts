@@ -20,6 +20,17 @@ const bridge: GhostBotBridge = {
   migrateLocalSettings: (legacy) => ipcRenderer.invoke('ghost:settings:migrate-local', legacy),
   getRuntimeSnapshot: (refresh) =>
     ipcRenderer.invoke('ghost:runtime:snapshot', refresh !== undefined ? { refresh } : {}),
+  listSessions: (params) => ipcRenderer.invoke('ghost:sessions:list', params),
+  createSession: (input) => ipcRenderer.invoke('ghost:sessions:create', input),
+  renameSession: (input) => ipcRenderer.invoke('ghost:sessions:rename', input),
+  archiveSession: (sessionId) => ipcRenderer.invoke('ghost:sessions:archive', { sessionId }),
+  setActiveSession: (input) => ipcRenderer.invoke('ghost:sessions:set-active', input),
+  listMessages: (params) => ipcRenderer.invoke('ghost:messages:list', params),
+  startRun: (input) => ipcRenderer.invoke('ghost:runs:start', input),
+  getRun: (runId) => ipcRenderer.invoke('ghost:runs:get', { runId }),
+  cancelRun: (runId) => ipcRenderer.invoke('ghost:runs:cancel', { runId }),
+  getRunEvents: (params) => ipcRenderer.invoke('ghost:runs:events', params),
+  resolveApproval: (input) => ipcRenderer.invoke('ghost:runs:resolve-approval', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

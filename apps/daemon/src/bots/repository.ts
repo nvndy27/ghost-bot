@@ -313,6 +313,19 @@ export class BotRepository {
     const now = new Date().toISOString()
 
     return this.handle.transaction(() => {
+      const activeRun = this.handle.sqlite
+        .prepare(
+          `SELECT id FROM runs WHERE agent_id = ? AND status IN ('queued', 'starting', 'running', 'awaiting_approval', 'cancelling') LIMIT 1`,
+        )
+        .get(id) as { id: string } | undefined
+      if (activeRun) {
+        throw new DaemonError(
+          'ACTIVE_RUN_EXISTS',
+          `Cannot archive bot "${id}" while run "${activeRun.id}" is still active`,
+          { statusCode: 409 },
+        )
+      }
+
       // Soft-archive agent so historical sessions, messages, usage_records, and audit_logs remain intact.
       this.handle.sqlite
         .prepare('UPDATE agents SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL')
