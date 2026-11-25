@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CodexAppServerAdapter } from '../packages/runtime-adapters/codex/codex-app-server.ts'
@@ -153,10 +153,13 @@ try {
         const workspaceWriteSucceeded = existsSync(join(wsWrite, 'allowed.txt'))
 
         const outsideTarget = join(wsOutside, 'escape.txt')
+        const symlinkPath = join(wsWrite, 'outside-link')
+        await symlink(wsOutside, symlinkPath)
+        const symlinkTarget = join(symlinkPath, 'symlink-escape.txt')
         for await (const ev of adapter.run({
           runId: 'verify-ws-outside',
           session: wsSession,
-          text: `Write "escape" to ${outsideTarget}.`,
+          text: `Write "escape" to ${outsideTarget} and also write "symlink" to ${symlinkTarget}.`,
         })) {
           if (ev.type === 'approval.requested') {
             await adapter.resolveApproval({
@@ -168,6 +171,7 @@ try {
           }
         }
         const outsideWriteBlocked = !existsSync(outsideTarget)
+        const symlinkWriteBlocked = !existsSync(join(wsOutside, 'symlink-escape.txt'))
 
         // 3. Approval request and rejection
         const askSession = await adapter.createSession({
@@ -232,25 +236,45 @@ try {
           if (ev.type === 'message.delta') resumeText += ev.text
         }
 
-        console.log(
-          JSON.stringify({
-            accountType: account.accountType,
-            planType: account.planType,
-            modelCount: models.length,
-            testedModel: modelId,
-            usageObserved: usage !== null,
-            usageWindows: usage?.windows ?? null,
-            roStreamed,
-            roReadMatched: roText.includes('GHOST_BOT_FIXTURE_42'),
-            readOnlyDeniedWriteClean,
-            workspaceWriteSucceeded,
-            outsideWriteBlocked,
-            sawApprovalRequest,
-            rejectedApprovalNoSideEffect,
-            cancellationVerified,
-            sessionContinuityVerified: resumeText.includes('GHOST_BOT_FIXTURE_42'),
-          }, null, 2),
-        )
+        const summary = {
+          accountType: account.accountType,
+          planType: account.planType,
+          modelCount: models.length,
+          testedModel: modelId,
+          usageObserved: usage !== null,
+          usageWindows: usage?.windows ?? null,
+          roStreamed,
+          roReadMatched: roText.includes('GHOST_BOT_FIXTURE_42'),
+          readOnlyDeniedWriteClean,
+          workspaceWriteSucceeded,
+          outsideWriteBlocked,
+          symlinkWriteBlocked,
+          sawApprovalRequest,
+          rejectedApprovalNoSideEffect,
+          cancellationVerified,
+          sessionContinuityVerified: resumeText.includes('GHOST_BOT_FIXTURE_42'),
+        }
+        console.log(JSON.stringify(summary, null, 2))
+
+        const requiredChecks = [
+          summary.accountType === 'chatgpt',
+          summary.modelCount > 0,
+          summary.usageObserved,
+          summary.roStreamed,
+          summary.roReadMatched,
+          summary.readOnlyDeniedWriteClean,
+          summary.workspaceWriteSucceeded,
+          summary.outsideWriteBlocked,
+          summary.symlinkWriteBlocked,
+          summary.sawApprovalRequest,
+          summary.rejectedApprovalNoSideEffect,
+          summary.cancellationVerified,
+          summary.sessionContinuityVerified,
+        ]
+        if (requiredChecks.some((ok) => !ok)) {
+          console.error('One or more mandatory live Codex verification checks failed.')
+          process.exitCode = 1
+        }
       } finally {
         await rm(wsReadOnly, { recursive: true, force: true })
         await rm(wsWrite, { recursive: true, force: true })

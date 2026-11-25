@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { normalizeCodexModel } from '../../shared-types/discovery.ts'
@@ -286,6 +286,23 @@ export class CodexAppServerAdapter implements AgentRuntime {
     }
   }
 
+  private async requireVerifiedChatGptAccount(): Promise<CodexAccountSummary> {
+    const summary = await this.getAccountSummary(false)
+    if (!summary.accountPresent || summary.accountType !== 'chatgpt') {
+      throw new JsonRpcClientError(
+        'TRANSPORT_ERROR',
+        summary.accountType === 'apiKey'
+          ? 'API key account rejected; subscription-first policy requires verified ChatGPT account'
+          : 'Verified ChatGPT account required before execution',
+      )
+    }
+    return summary
+  }
+
+  private async canonicalizeWorkspace(workspace: string): Promise<string> {
+    return realpath(resolve(workspace))
+  }
+
   async getAuthStatus(): Promise<AuthState> {
     try {
       const summary = await this.getAccountSummary(false)
@@ -347,6 +364,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
   }
 
   async disconnect(): Promise<void> {
+    this.revokeAllPendingApprovals()
     if (this.client && this.client.isRunning) {
       try {
         await this.client.request('account/logout')
@@ -357,15 +375,29 @@ export class CodexAppServerAdapter implements AgentRuntime {
   }
 
   async close(): Promise<void> {
-    for (const [id, pending] of this.pendingApprovals.entries()) {
-      clearTimeout(pending.timer)
-      this.pendingApprovals.delete(id)
-      pending.resolve('decline')
-    }
+    this.revokeAllPendingApprovals()
     if (this.client) {
       await this.client.close()
       this.client = null
       this.initialized = false
+    }
+  }
+
+  private revokePendingApprovalsForRun(runId: string): void {
+    for (const [id, pending] of this.pendingApprovals.entries()) {
+      if (pending.runId === runId) {
+        clearTimeout(pending.timer)
+        this.pendingApprovals.delete(id)
+        pending.resolve('decline')
+      }
+    }
+  }
+
+  private revokeAllPendingApprovals(): void {
+    for (const [id, pending] of this.pendingApprovals.entries()) {
+      clearTimeout(pending.timer)
+      this.pendingApprovals.delete(id)
+      pending.resolve('decline')
     }
   }
 
@@ -429,10 +461,12 @@ export class CodexAppServerAdapter implements AgentRuntime {
       )
     }
 
+    await this.requireVerifiedChatGptAccount()
+    const canonicalWorkspace = await this.canonicalizeWorkspace(config.workspace)
     const client = await this.ensureInitialized()
     const { sandbox, approvalPolicy } = mapPermissionToCodex(config.permission)
     const res = await client.request<Record<string, unknown>>('thread/start', {
-      cwd: resolve(config.workspace),
+      cwd: canonicalWorkspace,
       model: config.modelId,
       sandbox,
       approvalPolicy,
@@ -444,7 +478,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
       throw new JsonRpcClientError('MALFORMED_PAYLOAD', 'Invalid thread/start response')
     }
 
-    this.sessionConfig.set(thread.id, config)
+    this.sessionConfig.set(thread.id, { ...config, workspace: canonicalWorkspace })
     return {
       id: thread.id,
       externalId: thread.id,
@@ -462,11 +496,13 @@ export class CodexAppServerAdapter implements AgentRuntime {
       )
     }
 
+    await this.requireVerifiedChatGptAccount()
+    const canonicalWorkspace = await this.canonicalizeWorkspace(config.workspace)
     const client = await this.ensureInitialized()
     const { sandbox, approvalPolicy } = mapPermissionToCodex(config.permission)
     const res = await client.request<Record<string, unknown>>('thread/resume', {
       threadId,
-      cwd: resolve(config.workspace),
+      cwd: canonicalWorkspace,
       model: config.modelId,
       sandbox,
       approvalPolicy,
@@ -475,7 +511,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
     if (!thread || typeof thread.id !== 'string') {
       throw new JsonRpcClientError('MALFORMED_PAYLOAD', 'Invalid thread/resume response')
     }
-    this.sessionConfig.set(thread.id, config)
+    this.sessionConfig.set(thread.id, { ...config, workspace: canonicalWorkspace })
     return {
       id: thread.id,
       externalId: thread.id,
@@ -488,6 +524,15 @@ export class CodexAppServerAdapter implements AgentRuntime {
     if (!config) {
       throw new JsonRpcClientError('TRANSPORT_ERROR', 'Session not found; call createSession first')
     }
+    if (this.activeRunsByThread.has(request.session.externalId)) {
+      throw new JsonRpcClientError(
+        'TRANSPORT_ERROR',
+        `Thread ${request.session.externalId} already has an active run`,
+      )
+    }
+
+    await this.requireVerifiedChatGptAccount()
+    const canonicalWorkspace = await this.canonicalizeWorkspace(config.workspace)
     const client = await this.ensureInitialized()
 
     const active: ActiveRun = {
@@ -505,11 +550,11 @@ export class CodexAppServerAdapter implements AgentRuntime {
 
     try {
       const { approvalPolicy } = mapPermissionToCodex(config.permission)
-      const sandboxPolicy = buildCodexSandboxPolicy(config.permission, config.workspace)
+      const sandboxPolicy = buildCodexSandboxPolicy(config.permission, canonicalWorkspace)
       const turnRes = await client.request<Record<string, unknown>>('turn/start', {
         threadId: active.threadId,
         input: [{ type: 'text', text: request.text }],
-        cwd: resolve(config.workspace),
+        cwd: canonicalWorkspace,
         model: config.modelId,
         effort: config.effort,
         approvalPolicy,
@@ -521,6 +566,18 @@ export class CodexAppServerAdapter implements AgentRuntime {
       }
       active.turnId = turn.id
 
+      if (active.cancelled && !active.done) {
+        try {
+          await client.request('turn/interrupt', {
+            threadId: active.threadId,
+            turnId: active.turnId,
+          })
+        } catch {
+          this.pushEvent(active, { type: 'run.cancelled' })
+          active.done = true
+        }
+      }
+
       while (!active.done || active.queue.length > 0) {
         if (active.queue.length > 0) {
           yield active.queue.shift()!
@@ -531,6 +588,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
         })
       }
     } finally {
+      this.revokePendingApprovalsForRun(request.runId)
       this.activeRunsByThread.delete(active.threadId)
       this.activeRunsById.delete(active.runId)
     }
@@ -538,8 +596,10 @@ export class CodexAppServerAdapter implements AgentRuntime {
 
   async cancel(runId: string): Promise<void> {
     const active = this.activeRunsById.get(runId)
-    if (!active || !active.turnId) return
+    if (!active || active.done) return
     active.cancelled = true
+    this.revokePendingApprovalsForRun(runId)
+    if (!active.turnId) return
     const client = await this.ensureInitialized()
     await client.request('turn/interrupt', {
       threadId: active.threadId,
@@ -586,6 +646,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
   }
 
   private failAllActiveRuns(code: string, message: string): void {
+    this.revokeAllPendingApprovals()
     for (const active of this.activeRunsById.values()) {
       if (!active.done) {
         this.pushEvent(active, { type: 'run.failed', code, message })
@@ -622,6 +683,17 @@ export class CodexAppServerAdapter implements AgentRuntime {
     if (!threadId) return
     const active = this.activeRunsByThread.get(threadId)
     if (!active || active.done) return
+
+    const turnObj = p.turn && typeof p.turn === 'object' ? (p.turn as Record<string, unknown>) : null
+    const notifTurnId =
+      typeof p.turnId === 'string'
+        ? p.turnId
+        : typeof turnObj?.id === 'string'
+          ? turnObj.id
+          : null
+    if (active.turnId !== null && notifTurnId !== null && notifTurnId !== active.turnId) {
+      return
+    }
 
     switch (n.method) {
       case 'item/agentMessage/delta': {
@@ -661,6 +733,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
         break
       }
       case 'turn/completed': {
+        this.revokePendingApprovalsForRun(active.runId)
         const turn = p.turn as Record<string, unknown> | undefined
         const status = turn?.status
         if (status === 'interrupted' || active.cancelled) {
@@ -684,6 +757,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
         break
       }
       case 'error': {
+        this.revokePendingApprovalsForRun(active.runId)
         const msg = typeof p.message === 'string' ? p.message : 'Codex server error'
         this.pushEvent(active, { type: 'run.failed', code: 'SERVER_ERROR', message: msg })
         active.done = true

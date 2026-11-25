@@ -22,8 +22,8 @@ The Codex App Server adapter (`packages/runtime-adapters/codex/codex-app-server.
 
 Live verification (`scripts/verify-codex-live.mjs`) confirmed:
 - `read-only`: reads workspace files without modifying disk; writes are blocked and leave no side effects.
-- `workspace`: writes succeed inside the canonical workspace root while writes outside the workspace (including `/tmp` and `$TMPDIR`, explicitly blocked via `excludeSlashTmp: true` and `excludeTmpdirEnvVar: true` in `sandboxPolicy`) are prevented.
-- `ask-approval`: server-initiated approval requests (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`) are bound to `approvalId`, `runId`, canonical `argsHash`, and expiry; denied or mismatched decisions fail closed and produce no filesystem side effects.
+- `workspace`: writes succeed inside the canonical workspace root (`approvalPolicy: 'on-request'` allows in-workspace writes without prompting while prompting for external/untrusted actions); writes outside the workspace (including `/tmp`, `$TMPDIR`, and symlinks pointing outside, explicitly blocked via `excludeSlashTmp: true` and `excludeTmpdirEnvVar: true` in `sandboxPolicy`) are prevented.
+- `ask-approval`: server-initiated approval requests (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`) are bound to `approvalId`, `runId`, canonical `argsHash`, and expiry; denied, cancelled, or mismatched decisions fail closed and produce no filesystem side effects. Note that Codex's `untrusted` policy governs untrusted commands/external actions rather than guaranteeing every individual in-workspace write prompts.
 - `full-access`: remains disabled by default unless explicit opt-in and verified evidence are supplied.
 
 The OpenClaw probe uses existing CLI-managed credentials (`operator.read`, `read_only`) and refuses a nonmatching Gateway URL. Probes and verification scripts emit redacted summaries only and are never exposed through renderer IPC.

@@ -1,10 +1,11 @@
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   CodexAppServerAdapter,
+  buildCodexSandboxPolicy,
   mapPermissionToCodex,
   normalizeCodexRateLimits,
 } from '../packages/runtime-adapters/codex/codex-app-server.ts'
@@ -211,5 +212,216 @@ test('blocks silent API key fallback in subscription-first auth status', async (
     if (prev === undefined) delete process.env.MOCK_AUTH_MODE
     else process.env.MOCK_AUTH_MODE = prev
     await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('rejects simultaneous runs on the same thread without overwriting state', async () => {
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-prof-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', mockServerScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'read-only',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const iter1 = adapter.run({ runId: 'run-a', session, text: 'slow-cancel' })[Symbol.asyncIterator]()
+    const first = await iter1.next()
+    assert.equal(first.value?.type, 'message.delta')
+
+    await assert.rejects(async () => {
+      for await (const _ev of adapter.run({ runId: 'run-b', session, text: 'hello' })) {
+        // should fail before yielding
+      }
+    }, /already has an active run/i)
+
+    await adapter.cancel('run-a')
+    const end = await iter1.next()
+    assert.equal(end.value?.type, 'run.cancelled')
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('handles cancellation requested before turn/start returns turnId and revokes pending approvals', async () => {
+  const delayedTurnScript = `
+    const rl = require('node:readline').createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-1' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        setTimeout(() => {
+          process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-delayed' } } }) + '\\n');
+        }, 60);
+      } else if (msg.method === 'turn/interrupt') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');
+        process.stdout.write(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-1', turn: { id: 'turn-delayed', status: 'interrupted' } } }) + '\\n');
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-prof-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', delayedTurnScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'read-only',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    const runPromise = (async () => {
+      for await (const ev of adapter.run({ runId: 'run-early-cancel', session, text: 'hi' })) {
+        events.push(ev)
+      }
+    })()
+    await new Promise((r) => setTimeout(r, 15))
+    await adapter.cancel('run-early-cancel')
+    await runPromise
+    assert.equal(events.at(-1)?.type, 'run.cancelled')
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('ignores notifications for mismatched turnId and revokes pending approvals on cancel', async () => {
+  const mismatchScript = `
+    const rl = require('node:readline').createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-1' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-real' } } }) + '\\n');
+        process.stdout.write(JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-1', turnId: 'turn-stale', itemId: 'i0', delta: 'stale' } }) + '\\n');
+        process.stdout.write(JSON.stringify({ id: 'srv-rev', method: 'item/commandExecution/requestApproval', params: { itemId: 'i1', startedAtMs: 1, threadId: 'thr-1', turnId: 'turn-real', command: 'echo hi' } }) + '\\n');
+      } else if (msg.id === 'srv-rev') {
+        process.stdout.write(JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-1', turnId: 'turn-real', itemId: 'i2', delta: msg.result.decision } }) + '\\n');
+        process.stdout.write(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-1', turn: { id: 'turn-real', status: 'interrupted' } } }) + '\\n');
+      } else if (msg.method === 'turn/interrupt') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-prof-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', mismatchScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'ask-approval',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    for await (const ev of adapter.run({ runId: 'run-rev', session, text: 'hi' })) {
+      events.push(ev)
+      if (ev.type === 'approval.requested') {
+        await adapter.cancel('run-rev')
+      }
+    }
+    assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'stale'), false)
+    assert.ok(events.some((e) => e.type === 'message.delta' && e.text === 'decline'))
+    assert.equal(events.at(-1)?.type, 'run.cancelled')
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('rejects signed-out or API-key accounts at createSession execution boundary', async () => {
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-prof-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', `process.env.MOCK_AUTH_MODE='signedout';\n${mockServerScript}`],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    await assert.rejects(
+      () =>
+        adapter.createSession({
+          agentId: 'a1',
+          accountId: 'acc1',
+          modelId: 'gpt-5-codex',
+          permission: 'read-only',
+          workspace: profileDir,
+          instructions: '',
+        }),
+      /Verified ChatGPT account required/i,
+    )
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('canonicalizes symlinked workspace paths and builds excludeSlashTmp sandbox policy', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'ghost-bot-sym-'))
+  const realWs = join(base, 'real-ws')
+  const linkWs = join(base, 'link-ws')
+  const { mkdir } = await import('node:fs/promises')
+  await mkdir(realWs, { recursive: true })
+  await symlink(realWs, linkWs)
+
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-prof-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', mockServerScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'workspace',
+      workspace: linkWs,
+      instructions: '',
+    })
+    assert.ok(session.externalId)
+    const policy = buildCodexSandboxPolicy('workspace', await realpath(linkWs))
+    assert.deepEqual(policy, {
+      type: 'workspaceWrite',
+      writableRoots: [await realpath(realWs)],
+      excludeSlashTmp: true,
+      excludeTmpdirEnvVar: true,
+      networkAccess: false,
+    })
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+    await rm(base, { recursive: true, force: true })
   }
 })
