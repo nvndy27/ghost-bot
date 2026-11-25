@@ -214,7 +214,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
     }
 
     this.initPromise = (async () => {
-      await mkdir(this.profileDir, { recursive: true })
+      await mkdir(this.profileDir, { recursive: true, mode: 0o700 })
       // Build isolated environment: never inherit user ~/.codex or paid API keys.
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,

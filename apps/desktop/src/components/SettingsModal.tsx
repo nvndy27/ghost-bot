@@ -504,8 +504,12 @@ export function SettingsModal({
             {activeSection === 'personalization' && (
               <div>
                 <h2 style={{ margin: '0 0 12px', fontSize: '17px' }}>
-                  Personalization <span className="gb-badge">Persisted</span>
+                  Personalization <span className="gb-badge">Persisted · Phase 2+</span>
                 </h2>
+                <p className="gb-muted" style={{ fontSize: '12.5px', marginTop: 0 }}>
+                  Saved locally for Phase 2+ runs; does not initiate or alter model inference in
+                  Phase 1D.
+                </p>
                 <div className="gb-setting-row">
                   <div>
                     <div>Response style</div>
@@ -600,14 +604,25 @@ export function SettingsModal({
                 </h2>
                 <div className="gb-setting-row">
                   <div>
-                    <div>Redact secrets in audit logs</div>
+                    <div>Credential &amp; token redaction</div>
                     <small className="gb-muted">
-                      Strip tokens and sensitive patterns before writing audit entries.
+                      Tokens, API keys, and Authorization headers are always redacted across IPC,
+                      logs, and errors.
+                    </small>
+                  </div>
+                  <span className="gb-badge">Always enforced</span>
+                </div>
+                <div className="gb-setting-row">
+                  <div>
+                    <div>Redact extra diagnostic details in local logs</div>
+                    <small className="gb-muted">
+                      Optional extra masking for non-secret diagnostic metadata. Mandatory secret
+                      redaction cannot be disabled.
                     </small>
                   </div>
                   <input
                     type="checkbox"
-                    aria-label="Redact secrets in audit logs"
+                    aria-label="Redact extra diagnostic details in local logs"
                     checked={settings.privacy.redactLogs}
                     onChange={(e) =>
                       runUpdate({ privacy: { redactLogs: e.target.checked } })

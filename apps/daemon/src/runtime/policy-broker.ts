@@ -2,23 +2,22 @@ import { canEnablePermission } from '@ghost-bot/shared-types/permissions'
 import type { RuntimePermissionEvidence } from '@ghost-bot/shared-types/permissions'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 
+const VERIFIED_CODEX_VERSIONS = new Set(['0.172.0'])
+
 export function resolveCodexVerifiedEvidence(
   codexVersion: string | null,
 ): RuntimePermissionEvidence | null {
   if (!codexVersion) return null
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(codexVersion.trim())
-  if (!match) return null
-  const major = Number(match[1])
-  const minor = Number(match[2])
-  if (major > 0 || (major === 0 && minor >= 172)) {
-    return {
-      sandboxEnforced: true,
-      approvalEnforced: true,
-      sensitiveActionsEnforced: true,
-      verifiedModes: ['read-only', 'ask-approval', 'workspace'],
-    }
+  const normalized = codexVersion.trim()
+  if (!VERIFIED_CODEX_VERSIONS.has(normalized)) {
+    return null
   }
-  return null
+  return {
+    sandboxEnforced: true,
+    approvalEnforced: true,
+    sensitiveActionsEnforced: true,
+    verifiedModes: ['read-only', 'ask-approval', 'workspace'],
+  }
 }
 
 export interface PolicyAuthorizationInput {

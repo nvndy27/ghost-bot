@@ -53,6 +53,8 @@ export class RuntimeRegistry {
   private readonly mock = new MockRuntimeAdapter()
   private codexClient: CodexMetadataClient | null = null
   private codexVersion: string | null | undefined = undefined
+  private generation = 0
+  private lastAccountKey: string | null = null
   private cachedSnapshot: RuntimeSnapshot | null = null
   private cachedAtMs = 0
   private lastRefreshRequestMs = 0
@@ -93,7 +95,7 @@ export class RuntimeRegistry {
       this.lastRefreshRequestMs = now
     }
 
-    this.inFlight = this.fetchSnapshot().finally(() => {
+    this.inFlight = this.fetchSnapshot(refresh).finally(() => {
       this.inFlight = null
     })
     return this.inFlight
@@ -145,6 +147,9 @@ export class RuntimeRegistry {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.generation += 1
+    this.cachedSnapshot = null
+    this.lastAccountKey = null
     await this.mock.disconnect()
     if (this.codexClient) {
       const client = this.codexClient
@@ -153,7 +158,8 @@ export class RuntimeRegistry {
     }
   }
 
-  private async fetchSnapshot(): Promise<RuntimeSnapshot> {
+  private async fetchSnapshot(forceVersionCheck = false): Promise<RuntimeSnapshot> {
+    const gen = this.generation
     const observedAt = new Date().toISOString()
 
     if (this.options.runtimeMode === 'mock') {
@@ -175,17 +181,32 @@ export class RuntimeRegistry {
         observedAt,
         cached: false,
       }
-      this.cachedSnapshot = snap
-      this.cachedAtMs = Date.now()
+      if (gen === this.generation && !this.stopped) {
+        this.cachedSnapshot = snap
+        this.cachedAtMs = Date.now()
+      }
       return snap
     }
 
-    if (this.codexVersion === undefined) {
-      this.codexVersion =
+    if (this.codexVersion === undefined || (forceVersionCheck && this.options.codexVersionOverride === undefined)) {
+      const detected =
         this.options.codexVersionOverride !== undefined
           ? this.options.codexVersionOverride
           : await detectCodexVersion(this.options.codexCommand ?? 'codex')
+      if (this.codexVersion !== undefined && detected !== this.codexVersion) {
+        // Runtime version changed: invalidate old client and cached permission evidence.
+        this.generation += 1
+        this.cachedSnapshot = null
+        this.lastAccountKey = null
+        if (this.codexClient) {
+          const old = this.codexClient
+          this.codexClient = null
+          await old.close().catch(() => undefined)
+        }
+      }
+      this.codexVersion = detected
     }
+    const activeGen = this.generation
 
     if (!this.codexVersion) {
       const snap: RuntimeSnapshot = {
@@ -253,6 +274,7 @@ export class RuntimeRegistry {
       const models = await this.codexClient.listModels()
 
       if (!account.accountPresent) {
+        this.lastAccountKey = null
         const snap: RuntimeSnapshot = {
           runtimeMode: 'codex',
           codexVersion: this.codexVersion,
@@ -271,12 +293,15 @@ export class RuntimeRegistry {
           observedAt,
           cached: false,
         }
-        this.cachedSnapshot = snap
-        this.cachedAtMs = Date.now()
+        if (activeGen === this.generation && !this.stopped) {
+          this.cachedSnapshot = snap
+          this.cachedAtMs = Date.now()
+        }
         return snap
       }
 
       if (account.accountType === 'apiKey') {
+        this.lastAccountKey = 'apiKey'
         const snap: RuntimeSnapshot = {
           runtimeMode: 'codex',
           codexVersion: this.codexVersion,
@@ -295,10 +320,19 @@ export class RuntimeRegistry {
           observedAt,
           cached: false,
         }
-        this.cachedSnapshot = snap
-        this.cachedAtMs = Date.now()
+        if (activeGen === this.generation && !this.stopped) {
+          this.cachedSnapshot = snap
+          this.cachedAtMs = Date.now()
+        }
         return snap
       }
+
+      const accountKey = `${account.accountType ?? 'unknown'}:${account.planType ?? ''}:${account.workspaceName ?? ''}`
+      if (this.lastAccountKey !== null && this.lastAccountKey !== accountKey) {
+        // Account changed: clear prior account's cached snapshot.
+        this.cachedSnapshot = null
+      }
+      this.lastAccountKey = accountKey
 
       let usage: UsageSnapshot | null = null
       let usageStatus: RuntimeSnapshot['usageStatus'] = 'unavailable'
@@ -326,8 +360,10 @@ export class RuntimeRegistry {
         observedAt,
         cached: false,
       }
-      this.cachedSnapshot = snap
-      this.cachedAtMs = Date.now()
+      if (activeGen === this.generation && !this.stopped) {
+        this.cachedSnapshot = snap
+        this.cachedAtMs = Date.now()
+      }
       return snap
     } catch (err) {
       // Close potentially broken adapter process so next refresh spawns cleanly.
@@ -341,7 +377,12 @@ export class RuntimeRegistry {
         err instanceof Error ? err.message : 'Codex runtime query failed',
       )
 
-      if (this.cachedSnapshot && this.cachedSnapshot.status === 'available') {
+      if (
+        activeGen === this.generation &&
+        !this.stopped &&
+        this.cachedSnapshot &&
+        this.cachedSnapshot.status === 'available'
+      ) {
         return {
           ...this.cachedSnapshot,
           status: 'stale',

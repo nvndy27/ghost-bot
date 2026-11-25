@@ -16,7 +16,7 @@ Opt-in integration: Codex dedicated ChatGPT profile (`node scripts/verify-codex-
 
 - `pnpm lint` — **pass** (0 errors).
 - `pnpm typecheck` — **pass** across all 5 TypeScript workspace packages.
-- `pnpm test` — **37/37 offline tests pass** (Phase 0–1D including `SettingsRepository`, `RuntimePolicyBroker`, `RuntimeRegistry`, SQLite `b33f975` → `0002` upgrade, symlink DB/dir checks, adversarial SVG).
+- `pnpm test` — **40/40 offline tests pass** (Phase 0–1D including `SettingsRepository`, `RuntimePolicyBroker` exact-version `0.172.0` enforcement, `RuntimeRegistry` generation/account-switch cache invalidation, mandatory structured secret redaction, SQLite `b33f975` → `0002` upgrade, symlink DB/dir checks, adversarial SVG).
 - `pnpm build` — **pass**.
 - `node scripts/verify-electron-persistence.mjs` — **pass** (4-launch real Electron + daemon + SQLite persistence E2E).
 - `node scripts/verify-phase-1d-electron.mjs` — **pass** (Path A: Electron mock Settings persistence & reset; Path B: Electron → IPC → Daemon → Policy Broker → Codex 0.172.0 metadata bridge with 0 inference).

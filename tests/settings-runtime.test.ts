@@ -202,3 +202,93 @@ test('RuntimeRegistry handles unavailable, unsupported, auth-required, deduplica
   await reg.stop()
   await reg2.stop()
 })
+
+test('RuntimePolicyBroker and RuntimeRegistry fail closed on unverified newer Codex versions (0.173.0, 1.0.0)', async () => {
+  const broker = new RuntimePolicyBroker()
+  for (const unverified of ['0.173.0', '1.0.0', 'dev']) {
+    assert.equal(
+      broker.authorize({
+        runtimeMode: 'codex',
+        codexVersion: unverified,
+        authMethod: 'chatgpt',
+        requestedPermission: 'read-only',
+        canonicalWorkspace: '/home/user/ws',
+      }).allowed,
+      false,
+    )
+    const reg = new RuntimeRegistry({ runtimeMode: 'codex', codexVersionOverride: unverified })
+    assert.equal((await reg.getSnapshot()).status, 'unsupported')
+    await reg.stop()
+  }
+})
+
+test('RuntimeRegistry invalidates cache on account change and stop() generation bump', async () => {
+  let plan: string | null = 'plus'
+  let signedIn = true
+  const client: CodexMetadataClient = {
+    async getAccountSummary() {
+      return {
+        accountPresent: signedIn,
+        accountType: signedIn ? 'chatgpt' : null,
+        email: null,
+        planType: plan,
+        workspaceName: null,
+        requiresOpenaiAuth: true,
+      }
+    },
+    async listModels() {
+      return []
+    },
+    async getUsage() {
+      return {
+        source: 'provider',
+        observedAt: '2026-11-25T00:00:00.000Z',
+        windows: [{ label: '300m', usedPercent: plan === 'plus' ? 10 : 55, resetAt: null }],
+      }
+    },
+    async close() {},
+  }
+
+  const reg = new RuntimeRegistry({
+    runtimeMode: 'codex',
+    codexVersionOverride: '0.172.0',
+    codexClientFactory: () => client,
+    cacheTtlMs: 30_000,
+  })
+  const first = await reg.getSnapshot(true)
+  assert.equal(first.planType, 'plus')
+  assert.equal(first.usageWindows[0]?.usedPercent, 10)
+
+  await new Promise((r) => setTimeout(r, 2100))
+  plan = 'pro'
+  const switched = await reg.getSnapshot(true)
+  assert.equal(switched.planType, 'pro')
+  assert.equal(switched.usageWindows[0]?.usedPercent, 55)
+
+  await new Promise((r) => setTimeout(r, 2100))
+  signedIn = false
+  const loggedOut = await reg.getSnapshot(true)
+  assert.equal(loggedOut.status, 'auth-required')
+  assert.equal(loggedOut.usageWindows.length, 0)
+
+  await reg.stop()
+})
+
+test('mandatory secret redaction masks structured tokens, env keys, and Bearer headers', async () => {
+  const { redactSecrets, redactStructuredValue } = await import('../apps/daemon/src/errors.ts')
+  const raw = 'OPENAI_API_KEY=sk-proj-1234567890abcdefg {"refresh_token":"rt_abcdef1234567890"}'
+  const masked = redactSecrets(raw)
+  assert.equal(masked.includes('sk-proj-1234567890'), false)
+  assert.equal(masked.includes('rt_abcdef1234567890'), false)
+
+  const obj = redactStructuredValue({
+    nested: {
+      access_token: 'tok-secret-value',
+      authorization: 'Bearer header_secret_1234567890',
+      safeField: 'visible',
+    },
+  }) as { nested: Record<string, string> }
+  assert.equal(obj.nested.access_token, '[REDACTED]')
+  assert.equal(obj.nested.authorization, '[REDACTED]')
+  assert.equal(obj.nested.safeField, 'visible')
+})
