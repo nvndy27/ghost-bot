@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 1B — Main workspace UI
+
+2026-11-25. Phase 1A hardened and merged to `main` (`da5c07a`); Phase 1B **Verified**.
+
+| State | Evidence |
+|---|---|
+| Verified | Phase 1A hardening: private `0700` runtime dir with `0600` Unix socket, exact URL/origin navigation checks, loopback-only `GHOST_BOT_DEV_URL`, WebContents + mainFrame IPC sender validation, parent-exit daemon shutdown, version-bound Codex permission evidence (`resolveCodexVerifiedEvidence`), and enhanced Electron smoke verification asserting React render + preload IPC + zero console errors. Merged to `main` (`da5c07a`). |
+| Verified | Built modular three-panel React workspace in `apps/desktop/src/` (`LeftSidebar`, `ChatHeader`, `MessageList`, `ChatComposer`, `RightPanel`, `DiffPreviewModal`, `SettingsModal`, `BotAvatar`) matching `design/references/workspace-dark.png` and `design/tokens.json`. |
+| Verified | Implemented 12-preset `BotAvatar` with 7 states (`idle`, `thinking`, `working`, `approval`, `sleeping`, `completed`, `error`), `prefers-reduced-motion` + manual toggle, Light/Dark/System themes, draggable + keyboard sidebar resize/collapse, and Zod-validated `localStorage` UI preferences. |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm test` (25/25 tests), `pnpm build`, Electron smoke test, and Playwright UI verification (`scripts/verify-phase-1b-ui.mjs`: 0 console errors, 960x640 no-overflow, 12 presets, 7 states, themes, composer, resize/collapse) all passed. Captured 6 review screenshots under `design/reviews/phase-1b/`. |
+
 ## Phase 1A — Desktop scaffold & Step 0 review hardening
 
 2026-11-25. Step 0 merged to `main` (`87665ed`); Phase 1A **Verified**.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 1B — Main workspace UI & Phase 1A hardening
+- Hardened Phase 1A daemon runtime dir (`0700`) and Unix socket (`0600`), exact URL/origin navigation checks, loopback-only dev URLs, WebContents + mainFrame IPC sender validation, version-bound Codex permission evidence, and enhanced Electron smoke verification; merged Phase 1A into `main`.
+- Implemented the three-panel React workspace (`LeftSidebar`, `ChatHeader`, `MessageList`, `ChatComposer`, `RightPanel`, `DiffPreviewModal`, `SettingsModal`, `BotAvatar`) using `design/tokens.json` and all 12 `avatarPresets`.
+- Added Light/Dark/System themes, `prefers-reduced-motion` support, draggable + keyboard sidebar resize/collapse, and Zod-validated UI preferences.
+- Added `scripts/verify-phase-1b-ui.mjs` Playwright UI verification and captured 6 review screenshots in `design/reviews/phase-1b/`.
+
 ### Phase 1A — Desktop scaffold & Step 0 hardening
 - Hardened `CodexAppServerAdapter` (same-thread run lock, `turnId` notification correlation, pre-`turnId` cancellation, boundary auth revalidation, `realpath` workspace canonicalization, pending approval revocation) and `verify-codex-live.mjs` assertions/symlink check; merged Phase 0 into `main`.
 - Added pnpm workspace (`pnpm-workspace.yaml`, `pnpm-lock.yaml`), ESLint + TypeScript strict pipeline, and `@ghost-bot/shared-types/ipc` Zod contracts.

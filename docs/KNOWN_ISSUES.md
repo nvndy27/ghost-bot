@@ -1,6 +1,6 @@
 # Known issues
 
-- Phase 1A provides the desktop/daemon scaffold only; three-panel workspace UI (Phase 1B), SQLite migrations/Bot CRUD/avatar editor (Phase 1C), and 13-section Settings (Phase 1D) are not yet implemented in `apps/desktop`.
+- Phase 1B implements the three-panel workspace UI and Appearance settings shell in mock/preview mode; persistent SQLite Bot CRUD & full avatar editor (Phase 1C) and full 13-section Settings & live runtime wiring (Phase 1D) are intentionally gated/disabled.
 - Ollama discovery requires an Ollama service at `127.0.0.1:11434` (currently not installed locally).
 - Kimi Code CLI (`kimi`) is not installed locally; live `kimi acp` negotiation is unverified.
 - OpenClaw Gateway probe verified `ws://127.0.0.1:18789` reachability with `operator.read` (`read_only`); a native WebSocket adapter with scoped device pairing and execution controls is not yet implemented.

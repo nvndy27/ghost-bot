@@ -15,7 +15,7 @@ States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. 
 ## Phase 1 — Desktop foundation
 - [x] Electron + React TS + Vite + pnpm workspace, lint/typecheck/test pipeline (Phase 1A **Verified**).
 - [x] Secure IPC, daemon lifecycle and mock adapter clearly marked (Phase 1A **Verified**); SQLite migrations pending Phase 1C.
-- [ ] Three-panel shell, settings, theming, resized/collapsed panels, keyboard accessibility (Phase 1B/1D).
+- [x] Three-panel shell, basic settings shell, theming, resized/collapsed panels, keyboard accessibility (Phase 1B **Verified**; full 13-section Settings in Phase 1D).
 - [ ] Bot CRUD, SVG avatar editor, persistence and custom upload validation (Phase 1C).
 Gate: restart persistence, UI matches references, offline integration tests pass.
 
