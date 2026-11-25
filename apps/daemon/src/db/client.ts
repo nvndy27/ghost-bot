@@ -1,4 +1,4 @@
-import { chmod, mkdir, realpath } from 'node:fs/promises'
+import { chmod, lstat, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -25,13 +25,50 @@ export function defaultDataDir(): string {
   return join(base, 'ghost-bot')
 }
 
+async function assertSafeDirectory(dirPath: string): Promise<void> {
+  const st = await lstat(dirPath).catch(() => null)
+  if (!st) {
+    await mkdir(dirPath, { recursive: true, mode: 0o700 })
+  }
+  const verified = await lstat(dirPath)
+  if (verified.isSymbolicLink() || !verified.isDirectory()) {
+    throw new DaemonError('UNSAFE_DATA_DIR', 'Data directory must be a real directory, not a symlink', {
+      statusCode: 500,
+    })
+  }
+  if (typeof process.getuid === 'function' && verified.uid !== process.getuid()) {
+    throw new DaemonError('UNSAFE_DATA_DIR', 'Data directory is not owned by the current user', {
+      statusCode: 500,
+    })
+  }
+  await chmod(dirPath, 0o700)
+}
+
+async function assertSafeRegularFileIfExists(filePath: string): Promise<void> {
+  const st = await lstat(filePath).catch(() => null)
+  if (!st) return
+  if (st.isSymbolicLink() || !st.isFile()) {
+    throw new DaemonError('UNSAFE_DB_FILE', `Unsafe database artifact at ${filePath}`, {
+      statusCode: 500,
+    })
+  }
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new DaemonError('UNSAFE_DB_FILE', `Database artifact not owned by current user: ${filePath}`, {
+      statusCode: 500,
+    })
+  }
+  await chmod(filePath, 0o600)
+}
+
 export async function openGhostBotDatabase(dataDir?: string): Promise<DatabaseHandle> {
-  const requestedDir = resolve(dataDir ?? process.env.GHOST_BOT_DATA_DIR ?? defaultDataDir())
-  await mkdir(requestedDir, { recursive: true, mode: 0o700 })
-  const dir = await realpath(requestedDir)
-  await chmod(dir, 0o700)
+  const dir = resolve(dataDir ?? process.env.GHOST_BOT_DATA_DIR ?? defaultDataDir())
+  await assertSafeDirectory(dir)
 
   const dbPath = join(dir, 'ghost-bot.sqlite')
+  await assertSafeRegularFileIfExists(dbPath)
+  await assertSafeRegularFileIfExists(`${dbPath}-wal`)
+  await assertSafeRegularFileIfExists(`${dbPath}-shm`)
+
   let sqlite: DatabaseSync
   try {
     sqlite = new DatabaseSync(dbPath)
@@ -39,10 +76,11 @@ export async function openGhostBotDatabase(dataDir?: string): Promise<DatabaseHa
     sqlite.exec('PRAGMA journal_mode = WAL;')
     sqlite.exec('PRAGMA busy_timeout = 5000;')
     runMigrations(sqlite)
-    await chmod(dbPath, 0o600).catch(() => undefined)
-    await chmod(`${dbPath}-wal`, 0o600).catch(() => undefined)
-    await chmod(`${dbPath}-shm`, 0o600).catch(() => undefined)
+    await assertSafeRegularFileIfExists(dbPath)
+    await assertSafeRegularFileIfExists(`${dbPath}-wal`)
+    await assertSafeRegularFileIfExists(`${dbPath}-shm`)
   } catch (err) {
+    if (err instanceof DaemonError) throw err
     throw new DaemonError(
       'DB_INIT_FAILED',
       `Failed to initialize SQLite database: ${err instanceof Error ? err.message : String(err)}`,

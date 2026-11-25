@@ -110,6 +110,26 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: '0002_sessions_restrict_agent_delete',
+    sql: `
+      CREATE TABLE sessions_new (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        account_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        external_session_id TEXT,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO sessions_new (id, agent_id, account_id, runtime_id, external_session_id, title, created_at)
+      SELECT id, agent_id, account_id, runtime_id, external_session_id, title, created_at FROM sessions;
+      DROP TABLE sessions;
+      ALTER TABLE sessions_new RENAME TO sessions;
+      CREATE INDEX IF NOT EXISTS idx_sessions_agent_created ON sessions(agent_id, created_at);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {
@@ -137,6 +157,10 @@ export function runMigrations(sqlite: DatabaseSync): number {
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.version)) continue
+    if (migration.version === 2) {
+      // Rebuild sessions with ON DELETE RESTRICT without triggering CASCADE on messages during DROP TABLE sessions.
+      sqlite.exec('PRAGMA foreign_keys = OFF;')
+    }
     sqlite.exec('BEGIN IMMEDIATE')
     try {
       sqlite.exec(migration.sql)
@@ -144,12 +168,22 @@ export function runMigrations(sqlite: DatabaseSync): number {
         .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
         .run(migration.version, migration.name, new Date().toISOString())
       sqlite.exec('COMMIT')
+      if (migration.version === 2) {
+        sqlite.exec('PRAGMA foreign_keys = ON;')
+        const fkViolations = sqlite.prepare('PRAGMA foreign_key_check').all()
+        if (fkViolations.length > 0) {
+          throw new Error('Foreign key check failed after migration 0002')
+        }
+      }
       count += 1
     } catch (err) {
       try {
         sqlite.exec('ROLLBACK')
       } catch {
         // Ignore rollback failure.
+      }
+      if (migration.version === 2) {
+        sqlite.exec('PRAGMA foreign_keys = ON;')
       }
       throw err
     }

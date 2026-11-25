@@ -249,3 +249,84 @@ test('daemon persists bots across restart and rejects malicious SVG or full-acce
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('upgrades legacy b33f975 database with ON DELETE CASCADE sessions to ON DELETE RESTRICT without data loss', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { mkdir } = await import('node:fs/promises')
+  const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-upgrade-'))
+  try {
+    await mkdir(dataDir, { recursive: true, mode: 0o700 })
+    const dbPath = join(dataDir, 'ghost-bot.sqlite')
+    const legacy = new DatabaseSync(dbPath)
+    const now = new Date().toISOString()
+    legacy.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations VALUES (1, '0001_initial_schema', '${now}');
+      CREATE TABLE provider_accounts (id TEXT PRIMARY KEY, provider TEXT NOT NULL, auth_kind TEXT NOT NULL, credential_ref TEXT NOT NULL, status TEXT NOT NULL, capabilities_json TEXT NOT NULL, checked_at TEXT NOT NULL);
+      CREATE TABLE model_profiles (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, runtime_id TEXT NOT NULL, model_id TEXT NOT NULL, effort TEXT NOT NULL, options_json TEXT NOT NULL);
+      CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, instructions TEXT NOT NULL, avatar_json TEXT NOT NULL, runtime_id TEXT NOT NULL, model_profile_id TEXT, model_id TEXT NOT NULL, effort TEXT NOT NULL, workspace_path TEXT NOT NULL, permission_mode TEXT NOT NULL, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE teams (id TEXT PRIMARY KEY, name TEXT NOT NULL, leader_agent_id TEXT);
+      CREATE TABLE team_members (team_id TEXT NOT NULL, agent_id TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (team_id, agent_id));
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, account_id TEXT NOT NULL, runtime_id TEXT NOT NULL, external_session_id TEXT, title TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, role TEXT NOT NULL, content_json TEXT NOT NULL, created_at TEXT NOT NULL, run_id TEXT);
+      CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE usage_records (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, run_id TEXT, kind TEXT NOT NULL, value_json TEXT NOT NULL, source TEXT NOT NULL, observed_at TEXT NOT NULL, reset_at TEXT);
+      CREATE TABLE audit_logs (id TEXT PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, outcome TEXT NOT NULL, redacted_json TEXT NOT NULL, timestamp TEXT NOT NULL);
+      INSERT INTO agents VALUES ('a1', 'Legacy Bot', '', '', '{}', 'mock-offline', NULL, 'gpt-6.2-mock', 'medium', '~', 'read-only', NULL, '${now}', '${now}');
+      INSERT INTO sessions VALUES ('s1', 'a1', 'acc1', 'mock-offline', NULL, 'Legacy chat', '${now}');
+      INSERT INTO messages VALUES ('m1', 's1', 'user', '{"text":"keep me"}', '${now}', NULL);
+    `)
+    legacy.close()
+
+    const upgraded = await openGhostBotDatabase(dataDir)
+    const versions = upgraded.sqlite
+      .prepare('SELECT version FROM schema_migrations ORDER BY version ASC')
+      .all() as Array<{ version: number }>
+    assert.deepEqual(versions.map((v) => v.version), [1, 2])
+
+    const schemaRow = upgraded.sqlite
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+      .get() as { sql: string }
+    assert.match(schemaRow.sql, /ON DELETE RESTRICT/i)
+
+    assert.throws(() => upgraded.sqlite.prepare('DELETE FROM agents WHERE id = ?').run('a1'))
+    const repo = new BotRepository(upgraded)
+    repo.deleteBot('a1')
+    const msg = upgraded.sqlite.prepare('SELECT id FROM messages WHERE id = ?').get('m1') as { id: string } | undefined
+    assert.equal(msg?.id, 'm1')
+    upgraded.close()
+
+    // Re-opening after upgrade is idempotent
+    const reopened = await openGhostBotDatabase(dataDir)
+    assert.equal(runMigrations(reopened.sqlite), 0)
+    reopened.close()
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('rejects symlinked data directory and symlinked database file', async () => {
+  const { mkdir, symlink, writeFile } = await import('node:fs/promises')
+  const base = await mkdtemp(join(tmpdir(), 'ghost-bot-symlink-db-'))
+  try {
+    const realDir = join(base, 'real-dir')
+    const linkDir = join(base, 'link-dir')
+    await mkdir(realDir, { recursive: true })
+    await symlink(realDir, linkDir)
+
+    await assert.rejects(() => openGhostBotDatabase(linkDir), { code: 'UNSAFE_DATA_DIR' })
+
+    const safeDir = join(base, 'safe-dir')
+    await mkdir(safeDir, { recursive: true, mode: 0o700 })
+    const targetFile = join(base, 'outside.txt')
+    await writeFile(targetFile, 'untouched', { mode: 0o644 })
+    await symlink(targetFile, join(safeDir, 'ghost-bot.sqlite'))
+
+    await assert.rejects(() => openGhostBotDatabase(safeDir), { code: 'UNSAFE_DB_FILE' })
+    const targetStat = await stat(targetFile)
+    assert.equal(targetStat.mode & 0o777, 0o644)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
