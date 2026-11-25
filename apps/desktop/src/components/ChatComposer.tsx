@@ -46,20 +46,26 @@ export function ChatComposer({
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (!isStreaming && draft.trim() && isMockMode) {
+      if (canSend) {
         onSend()
       }
     }
   }
 
-  const availableModels = isMockMode
-    ? [...MOCK_MODELS]
-    : (runtimeSnapshot?.models ?? [])
+  const isCodexBot = bot.runtimeId === 'codex'
+  const liveCodexReady =
+    !isMockMode &&
+    isCodexBot &&
+    runtimeSnapshot?.status === 'available' &&
+    runtimeSnapshot?.authStatus === 'connected' &&
+    bot.permission === 'read-only'
+  const availableModels =
+    isMockMode || !isCodexBot ? [...MOCK_MODELS] : (runtimeSnapshot?.models ?? [])
   const activeModel =
     availableModels.find((m) => m.id === bot.modelId) ??
     availableModels[0] ??
     { id: bot.modelId, label: bot.modelId, efforts: ['low', 'medium', 'high'] }
-  const canSend = isMockMode && !isStreaming && draft.trim().length > 0
+  const canSend = (isMockMode || liveCodexReady) && !isStreaming && draft.trim().length > 0
 
   return (
     <div className="gb-composer-wrap">
@@ -134,8 +140,12 @@ export function ChatComposer({
               onChange={(e) => onPermissionChange(e.target.value as PermissionMode)}
             >
               <option value="read-only">Read Only</option>
-              <option value="ask-approval">Ask approval</option>
-              <option value="workspace">Workspace Access</option>
+              <option value="ask-approval" disabled={!isMockMode && isCodexBot}>
+                {!isMockMode && isCodexBot ? 'Ask approval (Phase 2C)' : 'Ask approval'}
+              </option>
+              <option value="workspace" disabled={!isMockMode && isCodexBot}>
+                {!isMockMode && isCodexBot ? 'Workspace Access (Phase 2C)' : 'Workspace Access'}
+              </option>
               <option value="full-access" disabled>
                 Full Access (Disabled)
               </option>
@@ -144,7 +154,13 @@ export function ChatComposer({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <small className="gb-muted" style={{ fontSize: '11.5px' }}>
-              {isMockMode ? 'Offline mock mode' : 'Chat execution opens in Phase 2'}
+              {isMockMode
+                ? 'Offline mock mode'
+                : liveCodexReady
+                  ? 'Codex Read-Only (Live)'
+                  : isCodexBot && bot.permission !== 'read-only'
+                    ? 'Switch to Read Only for Phase 2B'
+                    : 'Codex unavailable'}
             </small>
             {isStreaming ? (
               <button
@@ -161,7 +177,7 @@ export function ChatComposer({
                 type="submit"
                 className="gb-send-btn"
                 disabled={!canSend}
-                title={isMockMode ? 'Send message' : 'Available in Phase 2'}
+                title={canSend ? 'Send message' : 'Unavailable for current mode/runtime'}
                 aria-label="Send message"
               >
                 ↑

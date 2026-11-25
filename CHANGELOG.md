@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 2B — Live Codex Execution & Streaming
+- Connected `CodexAppServerAdapter` to `RunOrchestrator` via `RuntimeRegistry.getExecutionAdapter()` and `RuntimePolicyBroker.authorizeLiveExecution()`, enforcing verified `0.172.0` Codex version, ChatGPT subscription auth, canonical workspace, and `read-only` mode for Phase 2B.
+- Persisted `sessions.external_session_id` and `account_id` before `turn/start`, supporting same-thread `thread/resume` continuation, instruction composition (`bot.instructions` + `settings.personalization`), end-to-end `turn/interrupt` cancellation, and automatic denial of unexpected live approval requests (`approval.denied`).
+- Updated `ChatComposer.tsx` and `App.tsx` for live read-only Codex execution while keeping `ask-approval` and `workspace` gated for Phase 2C.
+- Added `tests/live-codex-execution.test.ts` (50/50 total unit tests) and opt-in `scripts/verify-phase-2b-live.mjs`.
+
 ### Phase 2A — Session, Run, Event and Message Persistence Foundation
 - Documented [ADR 0006](docs/adr/0006-daemon-execution-foundation.md) and added SQLite migration `0003_execution_foundation` (`runs`, `run_events`, updated `sessions` and `messages` with `ON DELETE RESTRICT` and monotonic sequence/idempotency indexes).
 - Added daemon-owned `RunStateMachine`, `RunEventStore`, `SessionRepository`, deterministic `mock-scenarios`, and `RunOrchestrator` with startup crash recovery (`interrupted` reconciliation), concurrency/idempotency enforcement, bounded message batching, and Phase 2A live inference guard (`LIVE_INFERENCE_DISABLED`).

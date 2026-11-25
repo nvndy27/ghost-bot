@@ -216,13 +216,13 @@ test('RunOrchestrator enforces concurrency, idempotency, approval, cancel, failu
 
     // 1. Complete normal mock run + idempotency deduplication
     const s1 = sessionRepo.createSession({ agentId: 'chief', title: 'Normal' })
-    const start1 = orchestrator.startRun({
+    const start1 = await orchestrator.startRun({
       sessionId: s1.id,
       idempotencyKey: 'idem-1',
       text: 'Hello mock runtime',
     })
     assert.equal(start1.deduplicated, false)
-    const dup1 = orchestrator.startRun({
+    const dup1 = await orchestrator.startRun({
       sessionId: s1.id,
       idempotencyKey: 'idem-1',
       text: 'Hello mock runtime',
@@ -239,12 +239,12 @@ test('RunOrchestrator enforces concurrency, idempotency, approval, cancel, failu
 
     // 2. Concurrent run on same session rejected; different session allowed
     const s2 = sessionRepo.createSession({ agentId: 'chief', title: 'Slow' })
-    const slowStart = orchestrator.startRun({
+    const slowStart = await orchestrator.startRun({
       sessionId: s2.id,
       idempotencyKey: 'idem-slow',
       text: 'Please run slow-cancel test',
     })
-    assert.throws(
+    await assert.rejects(
       () =>
         orchestrator.startRun({
           sessionId: s2.id,
@@ -259,7 +259,7 @@ test('RunOrchestrator enforces concurrency, idempotency, approval, cancel, failu
 
     // 3. Approval flow
     const s3 = sessionRepo.createSession({ agentId: 'chief', title: 'Approval' })
-    const appStart = orchestrator.startRun({
+    const appStart = await orchestrator.startRun({
       sessionId: s3.id,
       idempotencyKey: 'idem-app',
       text: 'Test approval flow',
@@ -279,7 +279,7 @@ test('RunOrchestrator enforces concurrency, idempotency, approval, cancel, failu
 
     // 4. Failure flow
     const s4 = sessionRepo.createSession({ agentId: 'chief', title: 'Fail' })
-    const failStart = orchestrator.startRun({
+    const failStart = await orchestrator.startRun({
       sessionId: s4.id,
       idempotencyKey: 'idem-fail',
       text: 'Trigger fail scenario',
@@ -288,9 +288,9 @@ test('RunOrchestrator enforces concurrency, idempotency, approval, cancel, failu
     assert.equal(failDone.status, 'failed')
     assert.equal(failDone.error?.code, 'MOCK_EXECUTION_FAILED')
 
-    // 5. Codex runtime blocked in Phase 2A (no live inference)
+    // 5. Codex runtime blocked when orchestrator has no live runtimeRegistry
     dbHandle.sqlite.prepare(`UPDATE agents SET runtime_id = 'codex' WHERE id = 'chief'`).run()
-    assert.throws(
+    await assert.rejects(
       () =>
         orchestrator.startRun({
           sessionId: s1.id,

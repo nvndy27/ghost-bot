@@ -7,8 +7,16 @@ import type {
   ProviderSummary,
   RuntimeSnapshot,
 } from '@ghost-bot/shared-types/ipc'
-import type { ModelInfo, UsageSnapshot } from '@ghost-bot/shared-types/runtime'
-import { redactSecrets } from '../errors.ts'
+import type {
+  AgentEvent,
+  AgentRequest,
+  ApprovalDecision,
+  ModelInfo,
+  Session,
+  SessionConfig,
+  UsageSnapshot,
+} from '@ghost-bot/shared-types/runtime'
+import { DaemonError, redactSecrets } from '../errors.ts'
 import { resolveCodexVerifiedEvidence } from './policy-broker.ts'
 
 const execFileAsync = promisify(execFile)
@@ -20,6 +28,18 @@ export interface CodexMetadataClient {
   listModels(): Promise<ModelInfo[]>
   getUsage(): Promise<UsageSnapshot | null>
   close(): Promise<void>
+  createSession?(config: SessionConfig): Promise<Session>
+  resumeSession?(threadId: string, config: SessionConfig): Promise<Session>
+  run?(request: AgentRequest): AsyncIterable<AgentEvent>
+  cancel?(runId: string): Promise<void>
+  resolveApproval?(decision: ApprovalDecision): Promise<void>
+}
+
+export interface CodexExecutionClient extends CodexMetadataClient {
+  createSession(config: SessionConfig): Promise<Session>
+  resumeSession(threadId: string, config: SessionConfig): Promise<Session>
+  run(request: AgentRequest): AsyncIterable<AgentEvent>
+  cancel(runId: string): Promise<void>
 }
 
 export interface RuntimeRegistryOptions {
@@ -63,6 +83,59 @@ export class RuntimeRegistry {
 
   constructor(options: RuntimeRegistryOptions) {
     this.options = options
+  }
+
+  getRuntimeMode(): 'codex' | 'mock' {
+    return this.options.runtimeMode
+  }
+
+  getGeneration(): number {
+    return this.generation
+  }
+
+  async getExecutionAdapter(): Promise<{
+    adapter: CodexExecutionClient
+    generation: number
+    codexVersion: string | null
+    snapshot: RuntimeSnapshot
+  }> {
+    if (this.stopped) {
+      throw new DaemonError('RUNTIME_STOPPED', 'RuntimeRegistry is stopped', { statusCode: 503 })
+    }
+    if (this.options.runtimeMode !== 'codex') {
+      throw new DaemonError(
+        'LIVE_INFERENCE_DISABLED',
+        'Live Codex execution is unavailable when daemon is running in mock mode.',
+        { statusCode: 501 },
+      )
+    }
+
+    const snapshot = await this.getSnapshot(false)
+    if (snapshot.status !== 'available' || snapshot.authStatus !== 'connected') {
+      throw new DaemonError('RUNTIME_UNAVAILABLE', snapshot.detail, { statusCode: 503 })
+    }
+
+    const client = this.codexClient
+    if (
+      !client ||
+      typeof client.createSession !== 'function' ||
+      typeof client.resumeSession !== 'function' ||
+      typeof client.run !== 'function' ||
+      typeof client.cancel !== 'function'
+    ) {
+      throw new DaemonError(
+        'RUNTIME_ADAPTER_UNAVAILABLE',
+        'Codex execution adapter is not initialized',
+        { statusCode: 503 },
+      )
+    }
+
+    return {
+      adapter: client as CodexExecutionClient,
+      generation: this.generation,
+      codexVersion: this.codexVersion ?? null,
+      snapshot,
+    }
   }
 
   async getSnapshot(refresh = false): Promise<RuntimeSnapshot> {

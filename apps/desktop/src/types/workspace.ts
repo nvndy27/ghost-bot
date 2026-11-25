@@ -57,6 +57,7 @@ export interface WorkspaceBot {
   id: string
   name: string
   description?: string
+  runtimeId?: string
   statusLabel: string
   avatarStatus: AvatarStatus
   avatar: AvatarConfig

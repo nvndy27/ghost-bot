@@ -106,4 +106,26 @@ export class RuntimePolicyBroker {
       verifiedModes,
     }
   }
+
+  /**
+   * Phase 2B live execution gate: restricts live Codex execution to verified read-only mode
+   * until interactive approval and workspace-write enforcement are verified in Phase 2C.
+   */
+  authorizeLiveExecution(input: PolicyAuthorizationInput): PolicyAuthorizationDecision {
+    const base = this.authorize(input)
+    if (!base.allowed) {
+      return base
+    }
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Phase 2B live Codex execution is limited to read-only mode; '${input.requestedPermission}' unlocks in Phase 2C.`,
+        verifiedModes: ['read-only'],
+      }
+    }
+    return {
+      ...base,
+      verifiedModes: ['read-only'],
+    }
+  }
 }

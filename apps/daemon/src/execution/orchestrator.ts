@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
+import { realpath, stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
+import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
+import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
 import { serializeMessageContent } from '../sessions/repository.ts'
+import type { SettingsRepository } from '../settings/repository.ts'
 import { RunEventStore } from './event-store.ts'
 import { buildMockScenarioPlan } from './mock-scenarios.ts'
 import {
@@ -80,6 +86,8 @@ interface ActiveRunControl {
     spec: PendingApprovalRecord
     resolve: (decision: 'approved' | 'denied' | 'cancelled') => void
   } | null
+  liveCancel?: (runId: string) => Promise<void>
+  cancelTimeout?: ReturnType<typeof setTimeout>
   donePromise: Promise<void>
 }
 
@@ -135,14 +143,26 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
+export interface RunOrchestratorOptions {
+  runtimeRegistry?: RuntimeRegistry
+  settingsRepo?: SettingsRepository
+  policyBroker?: RuntimePolicyBroker
+}
+
 export class RunOrchestrator {
   readonly eventStore: RunEventStore
   private readonly dbHandle: DatabaseHandle
+  private readonly runtimeRegistry?: RuntimeRegistry
+  private readonly settingsRepo?: SettingsRepository
+  private readonly policyBroker: RuntimePolicyBroker
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private stopping = false
 
-  constructor(dbHandle: DatabaseHandle) {
+  constructor(dbHandle: DatabaseHandle, options?: RunOrchestratorOptions) {
     this.dbHandle = dbHandle
+    this.runtimeRegistry = options?.runtimeRegistry
+    this.settingsRepo = options?.settingsRepo
+    this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
     this.eventStore = new RunEventStore(dbHandle)
   }
 
@@ -276,7 +296,7 @@ export class RunOrchestrator {
     return this.eventStore.listEventsAfter(runId, afterSeq, limit)
   }
 
-  startRun(input: StartRunInput): StartRunResult {
+  async startRun(input: StartRunInput): Promise<StartRunResult> {
     if (this.stopping) {
       throw new DaemonError('DAEMON_STOPPING', 'Daemon is shutting down', {
         statusCode: 503,
@@ -296,6 +316,185 @@ export class RunOrchestrator {
       throw new DaemonError('INVALID_IDEMPOTENCY_KEY', 'A valid idempotencyKey is required', {
         statusCode: 400,
       })
+    }
+
+    // Preflight read of session & bot to prepare async Codex verification before atomic transaction.
+    const preSession = this.dbHandle.sqlite
+      .prepare('SELECT id, agent_id, runtime_id, account_id, external_session_id, archived_at FROM sessions WHERE id = ?')
+      .get(input.sessionId) as
+      | {
+          id: string
+          agent_id: string
+          runtime_id: string
+          account_id: string
+          external_session_id: string | null
+          archived_at: string | null
+        }
+      | undefined
+
+    if (!preSession) {
+      throw new DaemonError('SESSION_NOT_FOUND', `Session "${input.sessionId}" was not found`, {
+        statusCode: 404,
+      })
+    }
+    if (preSession.archived_at !== null) {
+      throw new DaemonError('SESSION_ARCHIVED', 'Cannot start a run in an archived session', {
+        statusCode: 409,
+      })
+    }
+
+    const preBot = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, name, instructions, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
+         FROM agents
+         WHERE id = ?`,
+      )
+      .get(preSession.agent_id) as
+      | {
+          id: string
+          name: string
+          instructions: string
+          runtime_id: string
+          model_id: string
+          effort: string
+          workspace_path: string
+          permission_mode: string
+          archived_at: string | null
+        }
+      | undefined
+
+    if (!preBot || preBot.archived_at !== null) {
+      throw new DaemonError('BOT_NOT_FOUND', `Bot "${preSession.agent_id}" was not found or is archived`, {
+        statusCode: 404,
+      })
+    }
+
+    if (preBot.permission_mode === 'full-access') {
+      throw new DaemonError(
+        'PERMISSION_MODE_DISABLED',
+        'Full Access permission mode is disabled in this release.',
+        { statusCode: 403 },
+      )
+    }
+
+    const isMockRuntime = preBot.runtime_id === 'mock' || preBot.runtime_id === 'mock-offline'
+    const isCodexRuntime = preBot.runtime_id === 'codex'
+
+    let codexPreflight: {
+      adapter: CodexExecutionClient
+      generation: number
+      codexVersion: string | null
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    } | null = null
+
+    if (isCodexRuntime) {
+      if (!this.runtimeRegistry || this.runtimeRegistry.getRuntimeMode() !== 'codex') {
+        throw new DaemonError(
+          'LIVE_INFERENCE_DISABLED',
+          'Live AI inference for Codex is disabled when the daemon is running in mock mode.',
+          { statusCode: 501 },
+        )
+      }
+      if (preSession.runtime_id !== 'codex') {
+        throw new DaemonError(
+          'SESSION_RUNTIME_MISMATCH',
+          'Cannot run live Codex inference in a historical mock session; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+
+      let canonicalWorkspace = ''
+      try {
+        canonicalWorkspace = await realpath(resolve(preBot.workspace_path))
+        const st = await stat(canonicalWorkspace)
+        if (!st.isDirectory()) {
+          throw new Error('Not a directory')
+        }
+      } catch {
+        throw new DaemonError(
+          'INVALID_WORKSPACE',
+          `Bot workspace path "${preBot.workspace_path}" is missing or not a directory`,
+          { statusCode: 400 },
+        )
+      }
+
+      const execInfo = await this.runtimeRegistry.getExecutionAdapter()
+      const { adapter, generation, codexVersion, snapshot } = execInfo
+
+      const modelMeta = snapshot.models.find((m) => m.id === preBot.model_id)
+      if (!modelMeta) {
+        throw new DaemonError(
+          'MODEL_UNAVAILABLE',
+          `Model "${preBot.model_id}" is not available in the discovered Codex catalog. Select an available model.`,
+          { statusCode: 400 },
+        )
+      }
+      if (modelMeta.efforts.length > 0 && !modelMeta.efforts.includes(preBot.effort)) {
+        throw new DaemonError(
+          'EFFORT_UNSUPPORTED',
+          `Reasoning effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
+          { statusCode: 400 },
+        )
+      }
+
+      const policyDecision = this.policyBroker.authorizeLiveExecution({
+        runtimeMode: 'codex',
+        codexVersion,
+        authMethod: snapshot.authMethod,
+        requestedPermission: preBot.permission_mode as PermissionMode,
+        canonicalWorkspace,
+      })
+      if (!policyDecision.allowed) {
+        throw new DaemonError('PERMISSION_DENIED', policyDecision.reason, { statusCode: 403 })
+      }
+
+      const accountKey = `${snapshot.authMethod}:${snapshot.planType ?? ''}:${snapshot.workspaceName ?? ''}`
+      if (preSession.external_session_id && preSession.account_id !== accountKey) {
+        throw new DaemonError(
+          'ACCOUNT_MISMATCH',
+          'This conversation belongs to a different account; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+
+      const instructionParts: string[] = []
+      if (preBot.instructions.trim()) instructionParts.push(preBot.instructions.trim())
+      const personalization = this.settingsRepo?.getSettings().personalization
+      if (personalization) {
+        if (personalization.defaultInstructions.trim()) {
+          instructionParts.push(personalization.defaultInstructions.trim())
+        }
+        if (personalization.responseStyle && personalization.responseStyle !== 'balanced') {
+          instructionParts.push(`Response style: ${personalization.responseStyle}`)
+        }
+      }
+
+      codexPreflight = {
+        adapter,
+        generation,
+        codexVersion,
+        accountKey,
+        canonicalWorkspace,
+        effectiveInstructions: instructionParts.join('\n\n'),
+        externalSessionId: preSession.external_session_id,
+      }
+    } else if (isMockRuntime) {
+      if (preSession.runtime_id === 'codex') {
+        throw new DaemonError(
+          'SESSION_RUNTIME_MISMATCH',
+          'Cannot run mock simulation in a live Codex conversation; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+    } else {
+      throw new DaemonError(
+        'LIVE_INFERENCE_DISABLED',
+        `Runtime "${preBot.runtime_id}" is not supported for execution in Phase 2B.`,
+        { statusCode: 501 },
+      )
     }
 
     const activePlaceholders = ACTIVE_RUN_STATUSES.map(() => '?').join(', ')
@@ -429,10 +628,10 @@ export class RunOrchestrator {
       }
 
       const isMockRuntime = bot.runtime_id === 'mock' || bot.runtime_id === 'mock-offline'
-      if (!isMockRuntime) {
+      if (!isMockRuntime && bot.runtime_id !== 'codex') {
         throw new DaemonError(
           'LIVE_INFERENCE_DISABLED',
-          `Live AI inference for runtime "${bot.runtime_id}" is disabled in Phase 2A. Switch the bot runtime to "mock" for persisted local simulation.`,
+          `Live AI inference for runtime "${bot.runtime_id}" is disabled in Phase 2B.`,
           { statusCode: 501 },
         )
       }
@@ -453,8 +652,9 @@ export class RunOrchestrator {
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode,
-        workspacePath: bot.workspace_path,
-        isMock: true,
+        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        codexVersion: codexPreflight?.codexVersion ?? null,
+        isMock: isMockRuntime,
       }
       const configSnapshotJson = JSON.stringify(configSnapshot)
 
@@ -500,7 +700,7 @@ export class RunOrchestrator {
         .run(
           assistantMessageId,
           input.sessionId,
-          serializeMessageContent('', { isMock: true, runtimeId: 'mock' }),
+          serializeMessageContent('', { isMock: isMockRuntime, runtimeId: bot.runtime_id }),
           baseOrder + 2,
           now,
           now,
@@ -518,7 +718,7 @@ export class RunOrchestrator {
           sessionId: input.sessionId,
           agentId: bot.id,
           runtimeId: bot.runtime_id,
-          isMock: true,
+          isMock: isMockRuntime,
         },
         timestamp: now,
       })
@@ -537,7 +737,11 @@ export class RunOrchestrator {
         userMessageId,
         assistantMessageId,
         botName: bot.name,
-        workspacePath: bot.workspace_path,
+        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        modelId: bot.model_id,
+        effort: bot.effort,
+        permissionMode: bot.permission_mode as PermissionMode,
+        isMock: isMockRuntime,
       }
     })
 
@@ -548,17 +752,37 @@ export class RunOrchestrator {
         pendingApproval: null,
         donePromise: Promise.resolve(),
       }
-      control.donePromise = this.executeMockRun({
-        runId: txResult.run.id,
-        sessionId: input.sessionId,
-        assistantMessageId: txResult.assistantMessageId,
-        prompt: trimmedText,
-        botName: txResult.botName,
-        workspacePath: txResult.workspacePath,
-        control,
-      }).finally(() => {
-        this.activeControls.delete(txResult.run.id)
-      })
+      if (!txResult.isMock && codexPreflight) {
+        const preflight = codexPreflight
+        control.liveCancel = (rId) => preflight.adapter.cancel(rId)
+        control.donePromise = this.executeCodexRun({
+          runId: txResult.run.id,
+          sessionId: input.sessionId,
+          agentId: txResult.run.agentId,
+          assistantMessageId: txResult.assistantMessageId,
+          prompt: trimmedText,
+          modelId: txResult.modelId,
+          effort: txResult.effort,
+          permission: txResult.permissionMode,
+          preflight,
+          control,
+        }).finally(() => {
+          if (control.cancelTimeout) clearTimeout(control.cancelTimeout)
+          this.activeControls.delete(txResult.run.id)
+        })
+      } else {
+        control.donePromise = this.executeMockRun({
+          runId: txResult.run.id,
+          sessionId: input.sessionId,
+          assistantMessageId: txResult.assistantMessageId,
+          prompt: trimmedText,
+          botName: txResult.botName,
+          workspacePath: txResult.workspacePath,
+          control,
+        }).finally(() => {
+          this.activeControls.delete(txResult.run.id)
+        })
+      }
       this.activeControls.set(txResult.run.id, control)
     }
 
@@ -625,6 +849,36 @@ export class RunOrchestrator {
         pending.resolve('cancelled')
       }
       control.abortController.abort()
+      if (control.liveCancel) {
+        void control.liveCancel(runId).catch(() => undefined)
+        if (!control.cancelTimeout) {
+          control.cancelTimeout = setTimeout(() => {
+            try {
+              const cur = this.getRun(runId)
+              if (!isTerminalStatus(cur.status)) {
+                this.finalizeRun({
+                  runId,
+                  sessionId: cur.sessionId,
+                  assistantMessageId: '',
+                  terminalStatus: 'interrupted',
+                  messageStatus: 'interrupted',
+                  accumulatedText: '[Cancellation acknowledgement timed out]',
+                  error: {
+                    code: 'CANCEL_ACK_TIMEOUT',
+                    message: 'Runtime did not acknowledge cancellation within timeout.',
+                    retryable: true,
+                  },
+                  eventKey: 'run.interrupted:cancel_timeout',
+                  eventType: 'run.interrupted',
+                  eventPayload: { reason: 'cancel_ack_timeout' },
+                })
+              }
+            } catch {
+              // ignore if already cleaned up
+            }
+          }, 8_000)
+        }
+      }
     }
 
     return result
@@ -718,8 +972,8 @@ export class RunOrchestrator {
     const now = new Date().toISOString()
     this.dbHandle.transaction(() => {
       const row = this.dbHandle.sqlite
-        .prepare('SELECT status FROM runs WHERE id = ?')
-        .get(params.runId) as { status: string } | undefined
+        .prepare('SELECT status, runtime_id FROM runs WHERE id = ?')
+        .get(params.runId) as { status: string; runtime_id: string } | undefined
       if (!row || !isRunStatus(row.status)) return
 
       const race = resolveTerminalRace(row.status, params.terminalStatus)
@@ -732,18 +986,28 @@ export class RunOrchestrator {
         .prepare('UPDATE runs SET status = ?, ended_at = ?, error_json = ? WHERE id = ?')
         .run(params.terminalStatus, now, errorJson, params.runId)
 
-      this.dbHandle.sqlite
-        .prepare(
-          `UPDATE messages
-           SET content_json = ?, status = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(
-          serializeMessageContent(params.accumulatedText, { isMock: true, runtimeId: 'mock' }),
-          params.messageStatus,
-          now,
-          params.assistantMessageId,
-        )
+      const isMockMeta = row.runtime_id !== 'codex'
+      const contentJson = serializeMessageContent(params.accumulatedText, {
+        isMock: isMockMeta,
+        runtimeId: row.runtime_id,
+      })
+      if (params.assistantMessageId) {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE messages
+             SET content_json = ?, status = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(contentJson, params.messageStatus, now, params.assistantMessageId)
+      } else {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE messages
+             SET content_json = ?, status = ?, updated_at = ?
+             WHERE run_id = ? AND role = 'assistant'`,
+          )
+          .run(contentJson, params.messageStatus, now, params.runId)
+      }
 
       this.dbHandle.sqlite
         .prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
@@ -1024,21 +1288,371 @@ export class RunOrchestrator {
     }
   }
 
+  private async executeCodexRun(params: {
+    runId: string
+    sessionId: string
+    agentId: string
+    assistantMessageId: string
+    prompt: string
+    modelId: string
+    effort: string
+    permission: PermissionMode
+    preflight: {
+      adapter: CodexExecutionClient
+      generation: number
+      codexVersion: string | null
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    }
+    control: ActiveRunControl
+  }): Promise<void> {
+    const {
+      runId,
+      sessionId,
+      agentId,
+      assistantMessageId,
+      prompt,
+      modelId,
+      effort,
+      permission,
+      preflight,
+      control,
+    } = params
+    const signal = control.abortController.signal
+    const { adapter, generation, accountKey, canonicalWorkspace, effectiveInstructions } = preflight
+
+    let accumulatedText = ''
+    let pendingChunks = 0
+    let lastFlushAt = Date.now()
+    let sawTerminal = false
+
+    const flushCodexBuffer = (force = false) => {
+      const nowMs = Date.now()
+      if (force || pendingChunks >= FLUSH_CHUNK_THRESHOLD || nowMs - lastFlushAt >= FLUSH_INTERVAL_MS) {
+        if (pendingChunks > 0) {
+          const now = new Date().toISOString()
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE messages SET content_json = ?, updated_at = ? WHERE id = ? AND status = 'streaming'`,
+            )
+            .run(
+              serializeMessageContent(accumulatedText, { isMock: false, runtimeId: 'codex' }),
+              now,
+              assistantMessageId,
+            )
+          pendingChunks = 0
+          lastFlushAt = nowMs
+        }
+      }
+    }
+
+    try {
+      this.transitionRun(runId, 'starting', {
+        eventKey: 'run.starting',
+        type: 'run.starting',
+        payload: {
+          runtimeId: 'codex',
+          codexVersion: preflight.codexVersion,
+          isMock: false,
+        },
+      })
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
+      if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
+        throw new DaemonError(
+          'RUNTIME_GENERATION_CHANGED',
+          'Codex runtime generation changed before thread setup; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
+      const sessionConfig: SessionConfig = {
+        agentId,
+        accountId: accountKey,
+        modelId,
+        effort,
+        permission,
+        workspace: canonicalWorkspace,
+        instructions: effectiveInstructions,
+      }
+
+      let providerSession
+      if (preflight.externalSessionId) {
+        providerSession = await adapter.resumeSession(preflight.externalSessionId, sessionConfig)
+      } else {
+        providerSession = await adapter.createSession(sessionConfig)
+        try {
+          const now = new Date().toISOString()
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE sessions SET external_session_id = ?, account_id = ?, updated_at = ? WHERE id = ?`,
+            )
+            .run(providerSession.externalId, accountKey, now, sessionId)
+        } catch (persistErr) {
+          const msg = redactSecrets(
+            persistErr instanceof Error ? persistErr.message : String(persistErr),
+          )
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'failed',
+            messageStatus: 'failed',
+            accumulatedText: '',
+            error: {
+              code: 'THREAD_PERSIST_FAILED',
+              message: `Failed to persist provider thread identity: ${msg}`,
+              retryable: false,
+            },
+            eventKey: 'run.failed:thread_persist',
+            eventType: 'run.failed',
+            eventPayload: {
+              code: 'THREAD_PERSIST_FAILED',
+              orphanThreadId: providerSession.externalId,
+            },
+          })
+          return
+        }
+      }
+
+      this.transitionRun(runId, 'running', {
+        eventKey: 'run.started',
+        type: 'run.started',
+        payload: {
+          runtimeId: 'codex',
+          threadId: providerSession.externalId,
+          resumed: Boolean(preflight.externalSessionId),
+          isMock: false,
+        },
+      })
+
+      for await (const ev of adapter.run({
+        runId,
+        session: providerSession,
+        text: prompt,
+      })) {
+        if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
+          throw new DaemonError(
+            'RUNTIME_GENERATION_CHANGED',
+            'Codex runtime generation changed during execution',
+            { statusCode: 409, retryable: true },
+          )
+        }
+
+        if (ev.type === 'message.delta') {
+          accumulatedText += ev.text
+          pendingChunks += 1
+          this.eventStore.appendEvent(runId, {
+            eventKey: `codex.evt:${ev.seq}`,
+            type: 'message.delta',
+            payload: { delta: ev.text },
+            timestamp: ev.timestamp,
+          })
+          flushCodexBuffer(false)
+        } else if (ev.type === 'tool.started') {
+          this.eventStore.appendEvent(runId, {
+            eventKey: `codex.evt:${ev.seq}`,
+            type: 'tool.started',
+            payload: {
+              toolCallId: ev.callId,
+              toolName: ev.tool,
+            },
+            timestamp: ev.timestamp,
+          })
+        } else if (ev.type === 'tool.completed') {
+          this.eventStore.appendEvent(runId, {
+            eventKey: `codex.evt:${ev.seq}`,
+            type: 'tool.completed',
+            payload: {
+              toolCallId: ev.callId,
+              toolName: ev.tool,
+              summary: ev.summary,
+            },
+            timestamp: ev.timestamp,
+          })
+        } else if (ev.type === 'usage.updated') {
+          this.eventStore.appendEvent(runId, {
+            eventKey: `codex.evt:${ev.seq}`,
+            type: 'usage.updated',
+            payload: {
+              inputTokens: ev.usage.inputTokens ?? null,
+              outputTokens: ev.usage.outputTokens ?? null,
+              isMock: false,
+            },
+            timestamp: ev.timestamp,
+          })
+        } else if (ev.type === 'approval.requested') {
+          this.eventStore.appendEvent(runId, {
+            eventKey: `codex.evt:${ev.seq}`,
+            type: 'approval.requested',
+            payload: {
+              approvalId: ev.approvalId,
+              title: ev.summary,
+              tool: ev.tool,
+              argsHash: ev.argsHash,
+              blockedInPhase2B: true,
+            },
+            timestamp: ev.timestamp,
+          })
+          if (typeof adapter.resolveApproval === 'function') {
+            await adapter
+              .resolveApproval({
+                approvalId: ev.approvalId,
+                runId,
+                argsHash: ev.argsHash,
+                decision: 'deny',
+              })
+              .catch(() => undefined)
+          }
+          this.eventStore.appendEvent(runId, {
+            eventKey: `approval.denied:${ev.approvalId}`,
+            type: 'approval.denied',
+            payload: {
+              approvalId: ev.approvalId,
+              reason: 'Phase 2B read-only mode denies privileged approval requests by policy.',
+            },
+          })
+        } else if (ev.type === 'run.completed') {
+          sawTerminal = true
+          flushCodexBuffer(true)
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'completed',
+            messageStatus: 'complete',
+            accumulatedText,
+            eventKey: 'run.completed',
+            eventType: 'run.completed',
+            eventPayload: { assistantMessageId, isMock: false },
+          })
+          break
+        } else if (ev.type === 'run.cancelled') {
+          sawTerminal = true
+          flushCodexBuffer(true)
+          const cancelledText =
+            accumulatedText.trim().length > 0
+              ? `${accumulatedText}\n\n[Cancelled]`
+              : '[Run cancelled]'
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'cancelled',
+            messageStatus: 'cancelled',
+            accumulatedText: cancelledText,
+            eventKey: 'run.cancelled',
+            eventType: 'run.cancelled',
+            eventPayload: { reason: 'user_cancelled' },
+          })
+          break
+        } else if (ev.type === 'run.failed') {
+          sawTerminal = true
+          flushCodexBuffer(true)
+          const safeMsg = redactSecrets(ev.message)
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'failed',
+            messageStatus: 'failed',
+            accumulatedText,
+            error: {
+              code: ev.code,
+              message: safeMsg,
+              retryable: true,
+            },
+            eventKey: 'run.failed',
+            eventType: 'run.failed',
+            eventPayload: { code: ev.code, message: safeMsg },
+          })
+          break
+        }
+      }
+
+      if (!sawTerminal) {
+        flushCodexBuffer(true)
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'failed',
+          messageStatus: this.stopping ? 'interrupted' : 'failed',
+          accumulatedText,
+          error: {
+            code: 'RUNTIME_DISCONNECTED',
+            message: 'Codex runtime stream ended before reporting a terminal event.',
+            retryable: true,
+          },
+          eventKey: 'run.failed:stream_eof',
+          eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+          eventPayload: { reason: 'stream_ended_without_terminal_event' },
+        })
+      }
+    } catch (err) {
+      flushCodexBuffer(true)
+      const safeMsg = redactSecrets(err instanceof Error ? err.message : String(err))
+      const errCode = err instanceof DaemonError ? err.code : 'CODEX_EXECUTION_ERROR'
+      this.finalizeRun({
+        runId,
+        sessionId,
+        assistantMessageId,
+        terminalStatus: this.stopping ? 'interrupted' : 'failed',
+        messageStatus: this.stopping ? 'interrupted' : 'failed',
+        accumulatedText,
+        error: {
+          code: errCode,
+          message: safeMsg,
+          retryable: true,
+        },
+        eventKey: 'run.failed:codex_error',
+        eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+        eventPayload: { code: errCode, message: safeMsg },
+      })
+    } finally {
+      if (this.runtimeRegistry && !this.stopping) {
+        void this.runtimeRegistry.getSnapshot(true).catch(() => undefined)
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     this.stopping = true
-    const controls = Array.from(this.activeControls.values())
-    for (const control of controls) {
+    const entries = Array.from(this.activeControls.entries())
+    for (const [runId, control] of entries) {
+      if (control.cancelTimeout) {
+        clearTimeout(control.cancelTimeout)
+      }
       if (control.pendingApproval) {
         const pending = control.pendingApproval
         control.pendingApproval = null
         pending.resolve('cancelled')
       }
       control.abortController.abort()
+      if (control.liveCancel) {
+        void control.liveCancel(runId).catch(() => undefined)
+      }
     }
 
-    if (controls.length > 0) {
+    if (entries.length > 0) {
       await Promise.race([
-        Promise.allSettled(controls.map((c) => c.donePromise)),
+        Promise.allSettled(entries.map(([, c]) => c.donePromise)),
         new Promise((resolve) => setTimeout(resolve, 2000)),
       ])
     }

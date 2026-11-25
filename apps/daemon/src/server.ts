@@ -181,7 +181,10 @@ export class GhostBotDaemon {
     this.botRepo = new BotRepository(dbHandle)
     this.settingsRepo = new SettingsRepository(dbHandle)
     this.sessionRepo = new SessionRepository(dbHandle)
-    this.runOrchestrator = new RunOrchestrator(dbHandle)
+    this.runOrchestrator = new RunOrchestrator(dbHandle, {
+      runtimeRegistry: this.runtimeRegistry,
+      settingsRepo: this.settingsRepo,
+    })
     this.runOrchestrator.reconcileOnStartup()
 
     const server = createServer((req, res) => {
@@ -500,7 +503,7 @@ export class GhostBotDaemon {
               { statusCode: 400 },
             )
           }
-          sendJson(res, 201, orchestrator.startRun(parsed.data))
+          sendJson(res, 201, await orchestrator.startRun(parsed.data))
           return
         }
 

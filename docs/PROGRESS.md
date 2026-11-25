@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 2B — Live Codex Execution & Streaming
+
+2026-11-25. Phase 2A hardened (`6d132e1`) and merged to `main` (`2ffc521`); Phase 2B **Implemented & Offline-Tested** on `feat/phase-2b-live-codex` (**CONDITIONAL PASS**: zero live inference turns executed pending explicit human authorization of `GHOST_BOT_RUN_LIVE_CODEX=1`).
+
+| State | Evidence |
+|---|---|
+| Implemented | Connected `CodexAppServerAdapter` into daemon-owned `RunOrchestrator` (`apps/daemon/src/execution/orchestrator.ts`) via `RuntimeRegistry.getExecutionAdapter()` and `RuntimePolicyBroker.authorizeLiveExecution()` (`apps/daemon/src/runtime/policy-broker.ts`), restricting Phase 2B live execution to verified `0.172.0`, ChatGPT subscription auth, canonical workspace, and `read-only` permission mode (`ask-approval`/`workspace`/`full-access` rejected). |
+| Implemented | Added Codex thread identity binding & continuation (`sessions.external_session_id` + `account_id` verified before `thread/start` and `thread/resume`), effective prompt composition (`bot.instructions` + `settings.personalization.defaultInstructions`/`responseStyle` on `thread/start` only), runtime generation checks, end-to-end cancellation (`turn/interrupt` + 8s ack timeout), and Phase 2B live approval auto-denial (`approval.denied`). |
+| Implemented | Updated `ChatComposer.tsx` and `App.tsx` to support verified read-only Codex prompts, live model/effort selection, disabled Phase 2C permission options, and `approval.denied` rendering while preserving mock mode separation. |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `pnpm test` (**50/50** including `tests/live-codex-execution.test.ts`), Electron smoke, `verify-phase-1b-ui.mjs`, `verify-phase-1c-ui.mjs`, `verify-phase-1d-ui.mjs`, `verify-phase-2a-ui.mjs`, `verify-electron-persistence.mjs`, `verify-phase-1d-electron.mjs`, and `verify-phase-2a-electron.mjs` all passed. Added opt-in `scripts/verify-phase-2b-live.mjs` (`GHOST_BOT_RUN_LIVE_CODEX=1`, <=3 turns) — not yet executed. |
+
 ## Phase 2A — Session, Run, Event and Message Persistence Foundation
 
 2026-11-25. Phase 1D hardened (`chmod 0700` on existing Codex profile dir) and merged to `main` (`20c236a`); Phase 2A **Verified** on `feat/phase-2a-execution-foundation` after independent review and hardening (live AI inference intentionally disabled until Phase 2B).
