@@ -1,4 +1,4 @@
-import { index, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 export const providerAccounts = sqliteTable('provider_accounts', {
   id: text('id').primaryKey(),
@@ -78,20 +78,80 @@ export const sessions = sqliteTable(
     externalSessionId: text('external_session_id'),
     title: text('title').notNull(),
     createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    archivedAt: text('archived_at'),
   },
-  (t) => [index('idx_sessions_agent_created').on(t.agentId, t.createdAt)],
+  (t) => [
+    index('idx_sessions_agent_created').on(t.agentId, t.createdAt),
+    index('idx_sessions_agent_updated').on(t.agentId, t.archivedAt, t.updatedAt),
+  ],
 )
 
-export const messages = sqliteTable('messages', {
-  id: text('id').primaryKey(),
-  sessionId: text('session_id')
-    .notNull()
-    .references(() => sessions.id, { onDelete: 'cascade' }),
-  role: text('role').notNull(),
-  contentJson: text('content_json').notNull(),
-  createdAt: text('created_at').notNull(),
-  runId: text('run_id'),
-})
+export const runs = sqliteTable(
+  'runs',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'restrict' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'restrict' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    runtimeId: text('runtime_id').notNull(),
+    modelId: text('model_id').notNull(),
+    effort: text('effort').notNull(),
+    permissionMode: text('permission_mode').notNull(),
+    configSnapshotJson: text('config_snapshot_json').notNull(),
+    status: text('status').notNull(),
+    errorJson: text('error_json'),
+    startedAt: text('started_at').notNull(),
+    endedAt: text('ended_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('idx_runs_session_idempotency').on(t.sessionId, t.idempotencyKey),
+    index('idx_runs_session_created').on(t.sessionId, t.createdAt),
+    index('idx_runs_status').on(t.status),
+  ],
+)
+
+export const runEvents = sqliteTable(
+  'run_events',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'restrict' }),
+    seq: integer('seq').notNull(),
+    eventKey: text('event_key').notNull(),
+    type: text('type').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    timestamp: text('timestamp').notNull(),
+  },
+  (t) => [
+    uniqueIndex('idx_run_events_run_seq').on(t.runId, t.seq),
+    uniqueIndex('idx_run_events_run_key').on(t.runId, t.eventKey),
+  ],
+)
+
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'restrict' }),
+    role: text('role').notNull(),
+    contentJson: text('content_json').notNull(),
+    seqOrder: integer('seq_order').notNull(),
+    status: text('status').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    runId: text('run_id'),
+  },
+  (t) => [index('idx_messages_session_order').on(t.sessionId, t.seqOrder, t.createdAt)],
+)
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),

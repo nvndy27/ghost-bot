@@ -18,16 +18,35 @@ import {
   BotIdSchema,
   BotRecordSchema,
   BotsListResponseSchema,
+  CancelRunResponseSchema,
   CreateBotInputSchema,
+  CreateSessionInputSchema,
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
   IPC_CHANNELS,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
+  ListMessagesParamsSchema,
+  ListRunEventsParamsSchema,
+  ListSessionsParamsSchema,
+  MessagesListResponseSchema,
   ProviderSummarySchema,
+  RenameSessionInputSchema,
+  ResolveApprovalInputSchema,
+  ResolveApprovalResponseSchema,
+  RunEventsResponseSchema,
+  RunIdParamsSchema,
+  RunRecordSchema,
   RuntimeSnapshotParamsSchema,
   RuntimeSnapshotSchema,
+  SessionIdParamsSchema,
+  SessionIdSchema,
+  SessionRecordSchema,
+  SessionsListResponseSchema,
   SetActiveBotParamsSchema,
+  SetActiveSessionInputSchema,
+  StartRunInputSchema,
+  StartRunResponseSchema,
   UpdateBotInputSchema,
   WorkspacePickResponseSchema,
 } from '@ghost-bot/shared-types/ipc'
@@ -395,6 +414,109 @@ function registerIpcHandlers(): void {
     const parsed = RuntimeSnapshotParamsSchema.parse(params)
     const path = parsed?.refresh ? '/runtime/snapshot?refresh=1' : '/runtime/snapshot'
     return queryDaemon(path, RuntimeSnapshotSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListSessionsParamsSchema.parse(params)
+    const qs = new URLSearchParams({ agentId: parsed.agentId })
+    if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
+    if (parsed.offset !== undefined) qs.set('offset', String(parsed.offset))
+    return queryDaemon(`/sessions?${qs.toString()}`, SessionsListResponseSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_CREATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = CreateSessionInputSchema.parse(params)
+    return queryDaemon('/sessions', SessionRecordSchema, { method: 'POST', body: parsed })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_RENAME, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = RenameSessionInputSchema.parse(params)
+    return queryDaemon(`/sessions/${encodeURIComponent(parsed.sessionId)}`, SessionRecordSchema, {
+      method: 'PATCH',
+      body: { title: parsed.title },
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_ARCHIVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { sessionId } = SessionIdParamsSchema.parse(params)
+    return queryDaemon(
+      `/sessions/${encodeURIComponent(sessionId)}/archive`,
+      z.object({ archivedId: SessionIdSchema, activeSessionId: SessionIdSchema.nullable() }),
+      { method: 'POST' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_SET_ACTIVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetActiveSessionInputSchema.parse(params)
+    return queryDaemon(
+      '/settings/active-session',
+      z.object({ agentId: BotIdSchema, activeSessionId: SessionIdSchema.nullable() }),
+      { method: 'PUT', body: parsed },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MESSAGES_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListMessagesParamsSchema.parse(params)
+    const qs = new URLSearchParams()
+    if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
+    if (parsed.offset !== undefined) qs.set('offset', String(parsed.offset))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return queryDaemon(
+      `/sessions/${encodeURIComponent(parsed.sessionId)}/messages${suffix}`,
+      MessagesListResponseSchema,
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_START, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = StartRunInputSchema.parse(params)
+    return queryDaemon('/runs', StartRunResponseSchema, { method: 'POST', body: parsed })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_GET, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { runId } = RunIdParamsSchema.parse(params)
+    return queryDaemon(`/runs/${encodeURIComponent(runId)}`, RunRecordSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_CANCEL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { runId } = RunIdParamsSchema.parse(params)
+    return queryDaemon(`/runs/${encodeURIComponent(runId)}/cancel`, CancelRunResponseSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_EVENTS, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListRunEventsParamsSchema.parse(params)
+    const qs = new URLSearchParams()
+    if (parsed.afterSeq !== undefined) qs.set('afterSeq', String(parsed.afterSeq))
+    if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return queryDaemon(
+      `/runs/${encodeURIComponent(parsed.runId)}/events${suffix}`,
+      RunEventsResponseSchema,
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNS_RESOLVE_APPROVAL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ResolveApprovalInputSchema.parse(params)
+    return queryDaemon(
+      `/runs/${encodeURIComponent(parsed.runId)}/approval`,
+      ResolveApprovalResponseSchema,
+      {
+        method: 'POST',
+        body: { approvalId: parsed.approvalId, decision: parsed.decision },
+      },
+    )
   })
 }
 

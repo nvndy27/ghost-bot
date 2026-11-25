@@ -21,6 +21,7 @@ States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. 
 Gate: restart persistence, UI matches references, offline integration tests pass — **Phase 1 Gate PASS**.
 
 ## Phase 2 — Functional MVP
+- [ ] Phase 2A — Daemon-owned session, run, event, and message persistence foundation (**Implemented & Tested** on `feat/phase-2a-execution-foundation`; live AI inference disabled).
 - [ ] Real verified Codex integration; connect/disconnect/stream/cancel/resume.
 - [ ] OpenClaw adapter if verified; optional local Ollama.
 - [ ] Dynamic model/effort, actual permission enforcement, approval/diff display.

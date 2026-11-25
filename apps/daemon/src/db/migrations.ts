@@ -130,6 +130,55 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_sessions_agent_created ON sessions(agent_id, created_at);
     `,
   },
+  {
+    version: 3,
+    name: '0003_execution_foundation',
+    sql: `
+      ALTER TABLE sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE sessions ADD COLUMN archived_at TEXT;
+      UPDATE sessions SET updated_at = created_at WHERE updated_at = '';
+      CREATE INDEX IF NOT EXISTS idx_sessions_agent_updated ON sessions(agent_id, archived_at, updated_at);
+
+      ALTER TABLE messages ADD COLUMN seq_order INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
+      ALTER TABLE messages ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+      UPDATE messages SET updated_at = created_at WHERE updated_at = '';
+      CREATE INDEX IF NOT EXISTS idx_messages_session_order ON messages(session_id, seq_order, created_at);
+
+      CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        idempotency_key TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        permission_mode TEXT NOT NULL,
+        config_snapshot_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_json TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(session_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_runs_session_created ON runs(session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+
+      CREATE TABLE IF NOT EXISTS run_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE RESTRICT,
+        seq INTEGER NOT NULL,
+        event_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        UNIQUE(run_id, seq),
+        UNIQUE(run_id, event_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(run_id, seq);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

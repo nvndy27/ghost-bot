@@ -9,8 +9,11 @@ import type {
   CreateBotInput,
   DaemonHealthResponse,
   GhostBotBridge,
+  PersistedMessage,
   ProviderSummary,
+  RunRecord,
   RuntimeSnapshot,
+  SessionRecord,
   UpdateBotInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
@@ -59,6 +62,55 @@ function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
   }
 }
 
+const TERMINAL_RUN_STATUSES = new Set([
+  'completed',
+  'cancelled',
+  'failed',
+  'interrupted',
+])
+
+function formatMessageTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'Just now'
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function persistedToChatMessage(msg: PersistedMessage, activeRun?: RunRecord | null): ChatMessage {
+  const timestamp = formatMessageTime(msg.createdAt)
+  if (msg.role === 'user') {
+    return {
+      id: msg.id,
+      role: 'user',
+      text: msg.text,
+      timestamp,
+    }
+  }
+  const isThisRun = Boolean(activeRun && msg.runId === activeRun.id)
+  const pendingApproval = isThisRun ? activeRun?.pendingApproval : null
+  const displayText =
+    msg.status === 'interrupted' && !msg.text.includes('[Interrupted')
+      ? `${msg.text}${msg.text ? '\n\n' : ''}[Interrupted — daemon restarted]`
+      : msg.text
+
+  return {
+    id: msg.id,
+    role: 'assistant',
+    text: displayText,
+    streaming: msg.status === 'streaming',
+    timestamp,
+    approval: pendingApproval
+      ? {
+          id: pendingApproval.approvalId,
+          title: pendingApproval.title,
+          description: pendingApproval.command,
+          diffTitle: 'Simulated action preview',
+          diffText: pendingApproval.command,
+          decision: 'pending',
+        }
+      : undefined,
+  }
+}
+
 export function App() {
   const hasBridge = typeof window !== 'undefined' && Boolean(window.ghostBot)
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -75,8 +127,12 @@ export function App() {
   const [botsLoaded, setBotsLoaded] = useState<boolean>(() => !hasBridge)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>(
-    () => INITIAL_MOCK_MESSAGES,
+    () => (hasBridge ? {} : INITIAL_MOCK_MESSAGES),
   )
+  const [sessionsByBot, setSessionsByBot] = useState<Record<string, SessionRecord[]>>({})
+  const [activeSessionByBot, setActiveSessionByBot] = useState<Record<string, string | null>>({})
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({})
+  const [activeRunBySession, setActiveRunBySession] = useState<Record<string, RunRecord | null>>({})
   const [draft, setDraft] = useState<string>('')
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
@@ -91,11 +147,21 @@ export function App() {
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeSnapshot | null>(null)
 
   const streamTimerRef = useRef<number | null>(null)
+  const runPollTimersRef = useRef<Map<string, number>>(new Map())
+  const runSeqCursorRef = useRef<Map<string, number>>(new Map())
 
   const prefs: UiPreferences = settings.appearance
   const isMockMode = health === null || health.runtimeMode === 'mock'
   const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0] ?? null
-  const activeMessages = activeBot ? (messagesByBot[activeBot.id] ?? []) : []
+  const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
+  const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
+  const activeSessionRun = activeSessionId ? (activeRunBySession[activeSessionId] ?? null) : null
+  const activeSessionIsStreaming = Boolean(
+    activeSessionRun && !TERMINAL_RUN_STATUSES.has(activeSessionRun.status),
+  )
+  const activeMessages = hasBridge
+    ? (activeSessionId ? (messagesBySession[activeSessionId] ?? []) : [])
+    : (activeBot ? (messagesByBot[activeBot.id] ?? []) : [])
 
   useEffect(() => {
     const apply = () => {
@@ -145,8 +211,209 @@ export function App() {
       if (streamTimerRef.current !== null) {
         window.clearInterval(streamTimerRef.current)
       }
+      for (const timer of runPollTimersRef.current.values()) {
+        window.clearInterval(timer)
+      }
+      runPollTimersRef.current.clear()
     }
   }, [])
+
+  const stopPollingRun = (runId: string) => {
+    const existing = runPollTimersRef.current.get(runId)
+    if (existing !== undefined) {
+      window.clearInterval(existing)
+      runPollTimersRef.current.delete(runId)
+    }
+  }
+
+  const refreshSessionMessages = async (sessionId: string, runOverride?: RunRecord | null) => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    const res = await bridge.listMessages({ sessionId, limit: 200 })
+    const currentRun = runOverride ?? activeRunBySession[sessionId] ?? null
+    setMessagesBySession((prev) => ({
+      ...prev,
+      [sessionId]: res.messages.map((m) => persistedToChatMessage(m, currentRun)),
+    }))
+  }
+
+  const startPollingRun = (
+    botId: string,
+    sessionId: string,
+    run: RunRecord,
+    assistantMessageId?: string,
+  ) => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      stopPollingRun(run.id)
+      return
+    }
+    if (runPollTimersRef.current.has(run.id)) return
+
+    const pollOnce = async () => {
+      try {
+        const afterSeq = runSeqCursorRef.current.get(run.id) ?? 0
+        const [eventsRes, latestRun] = await Promise.all([
+          bridge.getRunEvents({ runId: run.id, afterSeq, limit: 200 }),
+          bridge.getRun(run.id),
+        ])
+
+        if (eventsRes.events.length > 0) {
+          runSeqCursorRef.current.set(run.id, eventsRes.lastSeq)
+          setMessagesBySession((prev) => {
+            const list = prev[sessionId] ?? []
+            const targetIdx = assistantMessageId
+              ? list.findIndex((m) => m.id === assistantMessageId)
+              : list.map((m) => m.role).lastIndexOf('assistant')
+            if (targetIdx < 0) return prev
+            const target = list[targetIdx]
+            if (!target || target.role !== 'assistant') return prev
+
+            let nextText = target.text
+            let nextTools = target.tools ? [...target.tools] : []
+            let nextApproval = target.approval
+
+            for (const evt of eventsRes.events) {
+              if (evt.type === 'message.delta' && typeof evt.payload.delta === 'string') {
+                nextText += evt.payload.delta
+              } else if (evt.type === 'tool.started') {
+                const toolId = String(evt.payload.toolCallId ?? `tool-${evt.seq}`)
+                const label = String(evt.payload.toolName ?? 'Simulated tool')
+                if (!nextTools.some((t) => t.id === toolId)) {
+                  nextTools.push({ id: toolId, label, status: 'running' })
+                }
+              } else if (evt.type === 'tool.completed') {
+                const toolId = String(evt.payload.toolCallId ?? '')
+                nextTools = nextTools.map((t) =>
+                  t.id === toolId ? { ...t, status: 'done' as const } : t,
+                )
+              } else if (evt.type === 'approval.requested') {
+                const appId = String(evt.payload.approvalId ?? 'approval')
+                const title = String(evt.payload.title ?? 'Approval required')
+                const cmd = String(evt.payload.command ?? '')
+                nextApproval = {
+                  id: appId,
+                  title,
+                  description: cmd,
+                  diffTitle: 'Simulated action preview',
+                  diffText: cmd,
+                  decision: 'pending',
+                }
+              } else if (evt.type === 'approval.resolved' && nextApproval) {
+                const decision = evt.payload.decision === 'approved' ? 'approved' : 'denied'
+                nextApproval = { ...nextApproval, decision }
+              }
+            }
+
+            const updated = [...list]
+            updated[targetIdx] = {
+              ...target,
+              text: nextText,
+              tools: nextTools.length > 0 ? nextTools : undefined,
+              approval: nextApproval,
+              streaming: !TERMINAL_RUN_STATUSES.has(latestRun.status),
+            }
+            return { ...prev, [sessionId]: updated }
+          })
+        }
+
+        setActiveRunBySession((prev) => ({ ...prev, [sessionId]: latestRun }))
+        setBots((prev) =>
+          prev.map((b) => {
+            if (b.id !== botId) return b
+            if (latestRun.status === 'awaiting_approval') {
+              return { ...b, statusLabel: 'Approval needed', avatarStatus: 'approval' }
+            }
+            if (TERMINAL_RUN_STATUSES.has(latestRun.status)) {
+              return {
+                ...b,
+                statusLabel: latestRun.status === 'failed' ? 'Error' : 'Ready',
+                avatarStatus: latestRun.status === 'completed' ? 'completed' : 'idle',
+              }
+            }
+            return { ...b, statusLabel: 'Thinking...', avatarStatus: 'thinking' }
+          }),
+        )
+
+        if (TERMINAL_RUN_STATUSES.has(latestRun.status)) {
+          stopPollingRun(run.id)
+          await refreshSessionMessages(sessionId, latestRun)
+          const sessRes = await bridge.listSessions({ agentId: botId })
+          setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
+        }
+      } catch (err) {
+        stopPollingRun(run.id)
+        setBannerError(err instanceof Error ? err.message : 'Failed to poll run events')
+      }
+    }
+
+    const timer = window.setInterval(() => {
+      void pollOnce()
+    }, 120)
+    runPollTimersRef.current.set(run.id, timer)
+    void pollOnce()
+  }
+
+  useEffect(() => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeBotId || !botsLoaded) return
+
+    let cancelled = false
+    const syncSessions = async () => {
+      try {
+        let listRes = await bridge.listSessions({ agentId: activeBotId })
+        if (cancelled) return
+
+        if (listRes.sessions.length === 0) {
+          const created = await bridge.createSession({
+            agentId: activeBotId,
+            title: 'New conversation',
+          })
+          if (cancelled) return
+          listRes = {
+            sessions: [created],
+            activeSessionId: created.id,
+            total: 1,
+          }
+        }
+
+        const chosenSessionId = listRes.activeSessionId ?? listRes.sessions[0]?.id ?? null
+        setSessionsByBot((prev) => ({ ...prev, [activeBotId]: listRes.sessions }))
+        setActiveSessionByBot((prev) => ({ ...prev, [activeBotId]: chosenSessionId }))
+
+        if (chosenSessionId) {
+          const chosenSession = listRes.sessions.find((s) => s.id === chosenSessionId)
+          let activeRun: RunRecord | null = null
+          if (chosenSession?.activeRunId) {
+            activeRun = await bridge.getRun(chosenSession.activeRunId)
+            if (cancelled) return
+            setActiveRunBySession((prev) => ({ ...prev, [chosenSessionId]: activeRun }))
+          }
+
+          const msgRes = await bridge.listMessages({ sessionId: chosenSessionId, limit: 200 })
+          if (cancelled) return
+          setMessagesBySession((prev) => ({
+            ...prev,
+            [chosenSessionId]: msgRes.messages.map((m) => persistedToChatMessage(m, activeRun)),
+          }))
+
+          if (activeRun && !TERMINAL_RUN_STATUSES.has(activeRun.status)) {
+            startPollingRun(activeBotId, chosenSessionId, activeRun)
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setBannerError(err instanceof Error ? err.message : 'Failed to load sessions')
+        }
+      }
+    }
+
+    void syncSessions()
+    return () => {
+      cancelled = true
+    }
+  }, [activeBotId, botsLoaded])
 
   const handleUpdateSettings = async (patch: AppSettingsPatch): Promise<void> => {
     const bridge = window.ghostBot
@@ -363,7 +630,59 @@ export function App() {
     return res.canceled ? null : res.path
   }
 
+  const handleNewChat = async () => {
+    const bridge = window.ghostBot
+    if (!activeBot || !bridge) return
+    try {
+      const created = await bridge.createSession({
+        agentId: activeBot.id,
+        title: 'New conversation',
+      })
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [activeBot.id]: [created, ...(prev[activeBot.id] ?? [])],
+      }))
+      setActiveSessionByBot((prev) => ({ ...prev, [activeBot.id]: created.id }))
+      setMessagesBySession((prev) => ({ ...prev, [created.id]: [] }))
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to create conversation')
+    }
+  }
+
+  const handleSelectSession = async (sessionId: string) => {
+    const bridge = window.ghostBot
+    if (!activeBot || !bridge) return
+    try {
+      await bridge.setActiveSession({ agentId: activeBot.id, sessionId })
+      setActiveSessionByBot((prev) => ({ ...prev, [activeBot.id]: sessionId }))
+      const msgRes = await bridge.listMessages({ sessionId, limit: 200 })
+      const sess = (sessionsByBot[activeBot.id] ?? []).find((s) => s.id === sessionId)
+      let activeRun: RunRecord | null = null
+      if (sess?.activeRunId) {
+        activeRun = await bridge.getRun(sess.activeRunId)
+        setActiveRunBySession((prev) => ({ ...prev, [sessionId]: activeRun }))
+      }
+      setMessagesBySession((prev) => ({
+        ...prev,
+        [sessionId]: msgRes.messages.map((m) => persistedToChatMessage(m, activeRun)),
+      }))
+      if (activeRun && !TERMINAL_RUN_STATUSES.has(activeRun.status)) {
+        startPollingRun(activeBot.id, sessionId, activeRun)
+      }
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to switch conversation')
+    }
+  }
+
   const handleStopStream = () => {
+    const bridge = window.ghostBot
+    if (bridge && activeSessionRun && !TERMINAL_RUN_STATUSES.has(activeSessionRun.status)) {
+      void bridge.cancelRun(activeSessionRun.id).catch((err: unknown) => {
+        setBannerError(err instanceof Error ? err.message : 'Failed to cancel run')
+      })
+      return
+    }
+
     if (streamTimerRef.current !== null) {
       window.clearInterval(streamTimerRef.current)
       streamTimerRef.current = null
@@ -387,9 +706,59 @@ export function App() {
   }
 
   const handleSendMock = (overrideText?: string) => {
-    if (!activeBot || !isMockMode || streamingBotId) return
+    if (!activeBot) return
+    const bridge = window.ghostBot
     const text = (overrideText ?? draft).trim()
     if (!text) return
+
+    if (bridge) {
+      if (activeSessionIsStreaming) return
+      if (!overrideText) setDraft('')
+      const botId = activeBot.id
+      void (async () => {
+        try {
+          let targetSessionId = activeSessionId
+          if (!targetSessionId) {
+            const created = await bridge.createSession({
+              agentId: botId,
+              title: text.slice(0, 60),
+            })
+            targetSessionId = created.id
+            setSessionsByBot((prev) => ({
+              ...prev,
+              [botId]: [created, ...(prev[botId] ?? [])],
+            }))
+            setActiveSessionByBot((prev) => ({ ...prev, [botId]: created.id }))
+          }
+
+          const idempotencyKey =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `run-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+          const started = await bridge.startRun({
+            sessionId: targetSessionId,
+            idempotencyKey,
+            text,
+          })
+
+          runSeqCursorRef.current.set(started.run.id, 0)
+          setActiveRunBySession((prev) => ({ ...prev, [targetSessionId]: started.run }))
+          setBots((prev) =>
+            prev.map((b) =>
+              b.id === botId ? { ...b, statusLabel: 'Thinking...', avatarStatus: 'thinking' } : b,
+            ),
+          )
+          await refreshSessionMessages(targetSessionId, started.run)
+          startPollingRun(botId, targetSessionId, started.run, started.assistantMessageId)
+        } catch (err) {
+          setBannerError(err instanceof Error ? err.message : 'Failed to start run')
+        }
+      })()
+      return
+    }
+
+    if (!isMockMode || streamingBotId) return
     if (!overrideText) setDraft('')
 
     const botId = activeBot.id
@@ -483,6 +852,23 @@ export function App() {
 
   const handleResolveApproval = (approvalId: string, decision: 'approved' | 'denied') => {
     if (!activeBot) return
+    const bridge = window.ghostBot
+    if (bridge && activeSessionRun && activeSessionId) {
+      void bridge
+        .resolveApproval({
+          runId: activeSessionRun.id,
+          approvalId,
+          decision,
+        })
+        .then((res) => {
+          setActiveRunBySession((prev) => ({ ...prev, [activeSessionId]: res.run }))
+        })
+        .catch((err: unknown) => {
+          setBannerError(err instanceof Error ? err.message : 'Failed to resolve approval')
+        })
+      return
+    }
+
     setMessagesByBot((prev) => ({
       ...prev,
       [activeBot.id]: (prev[activeBot.id] ?? []).map((m) =>
@@ -536,6 +922,10 @@ export function App() {
           leftCollapsed={prefs.leftCollapsed}
           rightCollapsed={prefs.rightCollapsed}
           isMockMode={isMockMode}
+          sessions={hasBridge ? activeBotSessions : undefined}
+          activeSessionId={hasBridge ? activeSessionId : undefined}
+          onSelectSession={hasBridge ? (sid) => void handleSelectSession(sid) : undefined}
+          onNewChat={hasBridge ? () => void handleNewChat() : undefined}
           onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
           onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
           onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
@@ -579,7 +969,7 @@ export function App() {
             <ChatComposer
               bot={activeBot}
               draft={draft}
-              isStreaming={streamingBotId !== null}
+              isStreaming={hasBridge ? activeSessionIsStreaming : streamingBotId !== null}
               isMockMode={isMockMode}
               runtimeSnapshot={runtimeSnapshot}
               onDraftChange={setDraft}

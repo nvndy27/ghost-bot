@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 2A — Session, Run, Event and Message Persistence Foundation
+
+2026-11-25. Phase 1D hardened (`chmod 0700` on existing Codex profile dir) and merged to `main` (`20c236a`); Phase 2A **Implemented & Tested** on `feat/phase-2a-execution-foundation` (awaiting Phase 2A acceptance gate; live AI inference intentionally disabled).
+
+| State | Evidence |
+|---|---|
+| Implemented | Documented [ADR 0006](adr/0006-daemon-execution-foundation.md) and added SQLite migration `0003_execution_foundation` (`apps/daemon/src/db/schema.ts`, `migrations.ts`) adding `sessions.updated_at`/`archived_at`, `messages.seq_order`/`status`/`updated_at` (`ON DELETE RESTRICT`), `runs` (`UNIQUE(session_id, idempotency_key)`), and `run_events` (`UNIQUE(run_id, seq)`, `UNIQUE(run_id, event_key)`). |
+| Implemented | Built `RunStateMachine` (`apps/daemon/src/execution/state-machine.ts`), `RunEventStore` (`apps/daemon/src/execution/event-store.ts`), `SessionRepository` (`apps/daemon/src/sessions/repository.ts`), `mock-scenarios.ts`, and `RunOrchestrator` (`apps/daemon/src/execution/orchestrator.ts`) with startup crash reconciliation (`reconcileOnStartup`), single-active-run-per-session lock, idempotency deduplication, bounded message batching, and explicit blocking of live Codex inference in Phase 2A (`LIVE_INFERENCE_DISABLED`). |
+| Implemented | Wired 11 Zod-validated IPC channels & daemon routes (`packages/shared-types/ipc.ts`, `apps/daemon/src/server.ts`, `apps/desktop/electron/main.ts`, `preload.cts`) and integrated `App.tsx` / `ChatHeader.tsx` with daemon-owned sessions, persisted message history, `+ New chat` / session switching, `runs.start`/`cancel`/`resolveApproval`, and bounded `120ms` `afterSeq` cursor polling. |
+| Tested | `pnpm lint`, `pnpm typecheck`, `pnpm build`, `tests/execution-foundation.test.ts` (all Phase 2A tests), `scripts/verify-phase-2a-ui.mjs` (4 screenshots in `design/reviews/phase-2a/`), `scripts/verify-phase-1b-ui.mjs`, `scripts/verify-phase-1c-ui.mjs`, `scripts/verify-phase-1d-ui.mjs`, `scripts/verify-electron-persistence.mjs` (4 launches), `scripts/verify-phase-1d-electron.mjs`, and `scripts/verify-phase-2a-electron.mjs` (real Electron + Daemon + SQLite + interrupted-run crash recovery + Codex inference block) all passed. Note: `tests/codex-adapter.test.ts:307` passed 11/11 standalone and showed a pre-existing parallel timing flake under full `node --test tests/*.test.ts`. |
+
 ## Phase 1D — Settings & Runtime Bridge
 
 2026-11-25. Phase 1C upgraded (`0002_sessions_restrict_agent_delete`), hardened (`lstat` DB dir/file checks), and merged to `main` (`d371b6d`); Phase 1D **Verified**.
