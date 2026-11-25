@@ -78,8 +78,10 @@ Every scope retains its owning `userId`:
 ### Record Lifecycle
 - `active` (`archivedAt: null`): Eligible for normal `getById`, `list`, `search`, deduplication, and `buildMemoryContext` (provided `expiresAt === null || expiresAt > now`).
 - `archived` (`archivedAt: <UTC ISO>`): Excluded from normal retrieval, search, active deduplication, and context assembly.
-- `expired` (`expiresAt !== null && expiresAt <= now`): Excluded from normal retrieval, search, active deduplication, and context assembly.
+- `expired` (`expiresAt !== null && expiresAt <= now`): Excluded from normal retrieval, search, active deduplication, and context assembly. On `create` or `update` with matching normalized content in the same scope, an expired active record is automatically transitioned to `archived` inside the write transaction so it never blocks valid new writes.
 - `deleted`: Permanently removed from the logical SQLite tables (`memories` and `memories_fts`).
+- **Closed repository lifecycle**: `close()` is idempotent; any subsequent repository operation fails closed with `MemoryStorageError`.
+- **Archived immutability**: Archived records cannot be modified via `update()`.
 
 ## 5. Storage Schema & Proposed Daemon Integration
 
@@ -135,7 +137,11 @@ When integrated into `apps/daemon/src/db/schema.ts` in a future phase:
 - **Credential Protection**: Ingestion (`create`/`update`) rejects content, tags, or provenance matching recognized patterns (`sk-...`, `pk_live_/pk_test_`, `gh[pousr]_...`, `AKIA...`, `xox...`, `AIza...`, `Bearer ...`, `Authorization: ...`, PEM private keys, env key assignments, JSON token fields).
 - **Limitations of Pattern Detection**: Regex detection cannot catch arbitrary high-entropy secrets, custom token formats, or split/encoded credentials.
 - **Logging & Errors**: Errors are sanitized via `sanitizeErrorMessage` / `redactSecrets`; raw memory content and database rows are never logged.
-- **Storage Security**: File-backed databases enforce `0o700` directory permissions, `0o600` file permissions on `.sqlite`, `-wal`, and `-shm`, `uid` ownership checks, and reject symlinks or relative/NUL paths.
+- **Storage Security & Filesystem Assumptions**:
+  - Newly created file-backed databases are opened with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode `0o600` before SQLite initialization; failed initializations clean up newly created empty files.
+  - Existing storage directories must be owned by the current user, have no symlink ancestors, and already have mode `0o700` (existing permissive directories fail closed rather than mutating unrelated caller directory permissions).
+  - Existing `.sqlite`, `-wal`, and `-shm` artifacts reject symlinks and multiple hardlinks (`nlink > 1`).
+  - **Residual filesystem limitation**: Node.js/`node:sqlite` cannot eliminate OS-level TOCTOU races between path checks and SQLite's internal `-wal`/`-shm` creation, nor protect against malicious processes running under the same OS user UID. Storage paths are assumed to reside under a trusted user-owned data directory.
 - **Deletion Semantics**: `delete()` removes the row from `memories` and `memories_fts` inside a transaction. It does **not** guarantee forensic erasure from SQLite freelist pages, WAL files, OS page cache, or filesystem snapshots.
 
 ## 11. Threat Model & Residual Risks
@@ -186,6 +192,7 @@ repo.close()
 
 ## 13. Verification Commands & Results
 
-- `corepack pnpm --filter @ghost-bot/memory test` — **10/10 tests pass** (unit + SQLite integration).
-- `corepack pnpm --filter @ghost-bot/memory typecheck` — **0 errors** (strict TypeScript).
-- `corepack pnpm lint` — **0 errors**.
+- `corepack pnpm --filter @ghost-bot/memory test` — unit + SQLite integration + hardening regression tests.
+- `corepack pnpm --filter @ghost-bot/memory typecheck` — strict TypeScript check (`0` errors).
+- `corepack pnpm lint` — ESLint across `packages`, `apps`, and `tests` (`0` errors).
+- `corepack pnpm test` — root workspace regression suite.

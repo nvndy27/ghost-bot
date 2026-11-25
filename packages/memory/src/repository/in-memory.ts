@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import {
   MemoryDuplicateError,
   MemoryNotFoundError,
+  MemoryStorageError,
   MemoryUnsupportedOriginError,
   MemoryValidationError,
 } from '../contracts/errors.ts'
@@ -9,6 +10,8 @@ import { MEMORY_SCHEMA_VERSION } from '../contracts/limits.ts'
 import {
   CreateMemoryInputSchema,
   ListMemoriesQuerySchema,
+  MemoryContentSchema,
+  MemoryIdSchema,
   MemoryRecordSchema,
   MemoryScopeSchema,
   SearchMemoriesQuerySchema,
@@ -54,13 +57,29 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   private readonly records = new Map<string, MemoryRecord>()
   private readonly clock: Clock
   private readonly idGenerator: IdGenerator
+  private closed = false
 
   constructor(options: InMemoryRepositoryOptions = {}) {
     this.clock = options.clock ?? (() => new Date())
     this.idGenerator = options.idGenerator ?? (() => randomUUID())
   }
 
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new MemoryStorageError('Memory repository is closed')
+    }
+  }
+
+  private nowIso(): string {
+    const d = this.clock()
+    if (!(d instanceof Date) || !Number.isFinite(d.getTime())) {
+      throw new MemoryValidationError('Repository clock returned an invalid Date')
+    }
+    return d.toISOString()
+  }
+
   create(rawAuth: MemoryAuthContext, rawInput: CreateMemoryInput): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = CreateMemoryInputSchema.safeParse(rawInput)
     if (!parsed.success) {
@@ -78,7 +97,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
       sourceRefs: input.sourceRefs,
     })
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (input.expiresAt !== null && input.expiresAt <= now) {
       throw new MemoryValidationError('expiresAt must be strictly in the future relative to creation time')
     }
@@ -89,12 +108,26 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     const scopeKey = getScopeKey(input.scope)
 
     for (const existing of this.records.values()) {
-      if (existing.status === 'active' && getScopeKey(existing.scope) === scopeKey && existing.contentHash === contentHash) {
-        throw new MemoryDuplicateError()
+      if (existing.status !== 'active') continue
+      if (getScopeKey(existing.scope) !== scopeKey || existing.contentHash !== contentHash) continue
+      if (existing.expiresAt !== null && existing.expiresAt <= now) {
+        this.records.set(existing.id, {
+          ...existing,
+          status: 'archived',
+          archivedAt: now,
+          updatedAt: now,
+        })
+        continue
       }
+      throw new MemoryDuplicateError()
     }
 
-    const id = input.id ?? this.idGenerator()
+    const rawId = input.id ?? this.idGenerator()
+    const parsedId = MemoryIdSchema.safeParse(rawId)
+    if (!parsedId.success) {
+      throw new MemoryValidationError('Generated or supplied memory ID is invalid')
+    }
+    const id = parsedId.data
     if (this.records.has(id)) {
       throw new MemoryValidationError('Memory ID already exists')
     }
@@ -131,7 +164,11 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     id: string,
     options?: { includeUserWide?: boolean; includeArchived?: boolean; includeExpired?: boolean },
   ): MemoryRecord | null {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      return null
+    }
     const record = this.records.get(id)
     if (!record) return null
 
@@ -143,7 +180,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
       return null
     }
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (!includeExpired && record.expiresAt !== null && record.expiresAt <= now) {
       return null
     }
@@ -152,6 +189,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   list(rawAuth: MemoryAuthContext, rawQuery: ListMemoriesQuery = {}): MemoryListResult {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = ListMemoriesQuerySchema.safeParse(rawQuery)
     if (!parsed.success) {
@@ -161,7 +199,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     const allowedScopes = resolveAuthorizedScopesForQuery(auth, query.scopeKinds, query.includeUserWide)
     const allowedScopeKeys = new Set(allowedScopes.map(getScopeKey))
     const filterTags = query.tags ? normalizeTags(query.tags) : []
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
 
     const matching: MemoryRecord[] = []
     for (const record of this.records.values()) {
@@ -196,6 +234,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   search(rawAuth: MemoryAuthContext, rawQuery: SearchMemoriesQuery): MemorySearchResult {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = SearchMemoriesQuerySchema.safeParse(rawQuery)
     if (!parsed.success) {
@@ -206,7 +245,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     const allowedScopeKeys = new Set(allowedScopes.map(getScopeKey))
     const filterTags = query.tags ? normalizeTags(query.tags) : []
     const parsedQuery = parseSearchQuery(query.query)
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
 
     if (parsedQuery.tokens.length === 0) {
       return { items: [], engine: 'lexical_fallback', queryTokens: [] }
@@ -241,7 +280,11 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   update(rawAuth: MemoryAuthContext, id: string, rawInput: UpdateMemoryInput): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
     const parsed = UpdateMemoryInputSchema.safeParse(rawInput)
     if (!parsed.success) {
       throw new MemoryValidationError(`Invalid update input: ${parsed.error.issues[0]?.message ?? 'validation failed'}`)
@@ -249,6 +292,9 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     const existing = this.records.get(id)
     if (!existing || !isAuthorizedToWriteRecord(auth, existing)) {
       throw new MemoryNotFoundError()
+    }
+    if (existing.status === 'archived') {
+      throw new MemoryValidationError('Cannot update an archived memory record')
     }
     const input = parsed.data
     assertNoCredentialsInFields({
@@ -258,7 +304,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
       sourceRefs: input.sourceRefs,
     })
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (input.expiresAt !== undefined && input.expiresAt !== null && input.expiresAt <= now) {
       throw new MemoryValidationError('expiresAt must be strictly in the future relative to update time')
     }
@@ -268,11 +314,20 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     const nextHash = computeContentHash(nextNormalized)
     const scopeKey = getScopeKey(existing.scope)
 
-    if (existing.status === 'active' && nextHash !== existing.contentHash) {
+    if (nextHash !== existing.contentHash) {
       for (const other of this.records.values()) {
-        if (other.id !== id && other.status === 'active' && getScopeKey(other.scope) === scopeKey && other.contentHash === nextHash) {
-          throw new MemoryDuplicateError()
+        if (other.id === id || other.status !== 'active') continue
+        if (getScopeKey(other.scope) !== scopeKey || other.contentHash !== nextHash) continue
+        if (other.expiresAt !== null && other.expiresAt <= now) {
+          this.records.set(other.id, {
+            ...other,
+            status: 'archived',
+            archivedAt: now,
+            updatedAt: now,
+          })
+          continue
         }
+        throw new MemoryDuplicateError()
       }
     }
 
@@ -301,7 +356,11 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   archive(rawAuth: MemoryAuthContext, id: string): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
     const existing = this.records.get(id)
     if (!existing || !isAuthorizedToWriteRecord(auth, existing)) {
       throw new MemoryNotFoundError()
@@ -309,7 +368,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
     if (existing.status === 'archived') {
       return structuredClone(existing)
     }
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     const archived = MemoryRecordSchema.parse({
       ...existing,
       status: 'archived',
@@ -321,7 +380,11 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   delete(rawAuth: MemoryAuthContext, id: string): boolean {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
     const existing = this.records.get(id)
     if (!existing || !isAuthorizedToWriteRecord(auth, existing)) {
       throw new MemoryNotFoundError()
@@ -330,18 +393,23 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   findDuplicate(rawAuth: MemoryAuthContext, rawScope: MemoryScope, content: string): MemoryRecord | null {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const scopeParsed = MemoryScopeSchema.safeParse(rawScope)
     if (!scopeParsed.success) {
       throw new MemoryValidationError('Invalid scope for duplicate check')
     }
+    const contentParsed = MemoryContentSchema.safeParse(content)
+    if (!contentParsed.success) {
+      throw new MemoryValidationError('Invalid content for duplicate check')
+    }
     const scope = scopeParsed.data
     if (!isAuthorizedToReadScope(auth, scope, { includeUserWide: scope.kind === 'user' })) {
       return null
     }
-    const contentHash = computeContentHash(normalizeForDeduplication(normalizeStoredContent(content)))
+    const contentHash = computeContentHash(normalizeForDeduplication(normalizeStoredContent(contentParsed.data)))
     const scopeKey = getScopeKey(scope)
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
 
     for (const existing of this.records.values()) {
       if (
@@ -357,6 +425,7 @@ export class InMemoryMemoryRepository implements MemoryRepository {
   }
 
   close(): void {
+    this.closed = true
     this.records.clear()
   }
 }

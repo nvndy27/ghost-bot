@@ -13,6 +13,8 @@ import { MEMORY_SCHEMA_VERSION } from '../contracts/limits.ts'
 import {
   CreateMemoryInputSchema,
   ListMemoriesQuerySchema,
+  MemoryContentSchema,
+  MemoryIdSchema,
   MemoryRecordSchema,
   MemoryScopeSchema,
   SearchMemoriesQuerySchema,
@@ -159,6 +161,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
   private readonly handle: MemoryDatabaseHandle
   private readonly clock: Clock
   private readonly idGenerator: IdGenerator
+  private closed = false
 
   constructor(handle: MemoryDatabaseHandle, options: SqliteMemoryRepositoryOptions = {}) {
     this.handle = handle
@@ -166,7 +169,33 @@ export class SqliteMemoryRepository implements MemoryRepository {
     this.idGenerator = options.idGenerator ?? (() => randomUUID())
   }
 
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new MemoryStorageError('Memory repository is closed')
+    }
+  }
+
+  private nowIso(): string {
+    const d = this.clock()
+    if (!(d instanceof Date) || !Number.isFinite(d.getTime())) {
+      throw new MemoryValidationError('Repository clock returned an invalid Date')
+    }
+    return d.toISOString()
+  }
+
+  private archiveExpiredDuplicateInTx(scopeKey: string, contentHash: string, now: string): void {
+    this.handle.sqlite
+      .prepare(
+        `UPDATE memories
+         SET status = 'archived', archived_at = ?, updated_at = ?
+         WHERE scope_key = ? AND content_hash = ? AND status = 'active'
+           AND expires_at IS NOT NULL AND expires_at <= ?`,
+      )
+      .run(now, now, scopeKey, contentHash, now)
+  }
+
   create(rawAuth: MemoryAuthContext, rawInput: CreateMemoryInput): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = CreateMemoryInputSchema.safeParse(rawInput)
     if (!parsed.success) {
@@ -184,7 +213,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
       sourceRefs: input.sourceRefs,
     })
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (input.expiresAt !== null && input.expiresAt <= now) {
       throw new MemoryValidationError('expiresAt must be strictly in the future relative to creation time')
     }
@@ -194,7 +223,12 @@ export class SqliteMemoryRepository implements MemoryRepository {
     const contentHash = computeContentHash(normalizedContent)
     const scopeKey = getScopeKey(input.scope)
     const tags = normalizeTags(input.tags)
-    const id = input.id ?? this.idGenerator()
+    const rawId = input.id ?? this.idGenerator()
+    const parsedId = MemoryIdSchema.safeParse(rawId)
+    if (!parsedId.success) {
+      throw new MemoryValidationError('Generated or supplied memory ID is invalid')
+    }
+    const id = parsedId.data
 
     const record = MemoryRecordSchema.parse({
       schemaVersion: MEMORY_SCHEMA_VERSION,
@@ -227,6 +261,8 @@ export class SqliteMemoryRepository implements MemoryRepository {
         if (existingId) {
           throw new MemoryValidationError('Memory ID already exists')
         }
+
+        this.archiveExpiredDuplicateInTx(scopeKey, contentHash, now)
 
         this.handle.sqlite
           .prepare(
@@ -280,7 +316,11 @@ export class SqliteMemoryRepository implements MemoryRepository {
     id: string,
     options?: { includeUserWide?: boolean; includeArchived?: boolean; includeExpired?: boolean },
   ): MemoryRecord | null {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      return null
+    }
     const row = this.handle.sqlite
       .prepare('SELECT * FROM memories WHERE id = ?')
       .get(id) as RawMemoryRow | undefined
@@ -296,7 +336,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
       return null
     }
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (!includeExpired && record.expiresAt !== null && record.expiresAt <= now) {
       return null
     }
@@ -305,6 +345,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   list(rawAuth: MemoryAuthContext, rawQuery: ListMemoriesQuery = {}): MemoryListResult {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = ListMemoriesQuerySchema.safeParse(rawQuery)
     if (!parsed.success) {
@@ -325,7 +366,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
       whereClauses.push("status = 'active'")
     }
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (!query.includeExpired) {
       whereClauses.push('(expires_at IS NULL OR expires_at > ?)')
       params.push(now)
@@ -360,6 +401,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   search(rawAuth: MemoryAuthContext, rawQuery: SearchMemoriesQuery): MemorySearchResult {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const parsed = SearchMemoriesQuerySchema.safeParse(rawQuery)
     if (!parsed.success) {
@@ -376,7 +418,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
 
     const scopeKeys = allowedScopes.map(getScopeKey)
     const placeholders = scopeKeys.map(() => '?').join(', ')
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     const whereClauses: string[] = [
       `m.scope_key IN (${placeholders})`,
       'm.user_id = ?',
@@ -436,7 +478,11 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   update(rawAuth: MemoryAuthContext, id: string, rawInput: UpdateMemoryInput): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
     const parsed = UpdateMemoryInputSchema.safeParse(rawInput)
     if (!parsed.success) {
       throw new MemoryValidationError(`Invalid update input: ${parsed.error.issues[0]?.message ?? 'validation failed'}`)
@@ -449,7 +495,7 @@ export class SqliteMemoryRepository implements MemoryRepository {
       sourceRefs: input.sourceRefs,
     })
 
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
     if (input.expiresAt !== undefined && input.expiresAt !== null && input.expiresAt <= now) {
       throw new MemoryValidationError('expiresAt must be strictly in the future relative to update time')
     }
@@ -466,11 +512,18 @@ export class SqliteMemoryRepository implements MemoryRepository {
         if (!isAuthorizedToWriteRecord(auth, existing)) {
           throw new MemoryNotFoundError()
         }
+        if (existing.status === 'archived') {
+          throw new MemoryValidationError('Cannot update an archived memory record')
+        }
 
         const nextContent = input.content !== undefined ? normalizeStoredContent(input.content) : existing.content
         const nextNormalized = normalizeForDeduplication(nextContent)
         const nextHash = computeContentHash(nextNormalized)
         const nextTags = input.tags !== undefined ? normalizeTags(input.tags) : existing.tags
+
+        if (nextHash !== existing.contentHash) {
+          this.archiveExpiredDuplicateInTx(getScopeKey(existing.scope), nextHash, now)
+        }
 
         const updated = MemoryRecordSchema.parse({
           ...existing,
@@ -536,8 +589,12 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   archive(rawAuth: MemoryAuthContext, id: string): MemoryRecord {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
-    const now = this.clock().toISOString()
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
+    const now = this.nowIso()
 
     try {
       return this.handle.transaction(() => {
@@ -575,7 +632,11 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   delete(rawAuth: MemoryAuthContext, id: string): boolean {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
+    if (!MemoryIdSchema.safeParse(id).success) {
+      throw new MemoryValidationError('Invalid memory ID')
+    }
 
     try {
       return this.handle.transaction(() => {
@@ -603,19 +664,24 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   findDuplicate(rawAuth: MemoryAuthContext, rawScope: MemoryScope, content: string): MemoryRecord | null {
+    this.assertOpen()
     const auth = validateAuthContext(rawAuth)
     const scopeParsed = MemoryScopeSchema.safeParse(rawScope)
     if (!scopeParsed.success) {
       throw new MemoryValidationError('Invalid scope for duplicate check')
+    }
+    const contentParsed = MemoryContentSchema.safeParse(content)
+    if (!contentParsed.success) {
+      throw new MemoryValidationError('Invalid content for duplicate check')
     }
     const scope = scopeParsed.data
     if (!isAuthorizedToReadScope(auth, scope, { includeUserWide: scope.kind === 'user' })) {
       return null
     }
 
-    const contentHash = computeContentHash(normalizeForDeduplication(normalizeStoredContent(content)))
+    const contentHash = computeContentHash(normalizeForDeduplication(normalizeStoredContent(contentParsed.data)))
     const scopeKey = getScopeKey(scope)
-    const now = this.clock().toISOString()
+    const now = this.nowIso()
 
     const row = this.handle.sqlite
       .prepare(
@@ -634,6 +700,8 @@ export class SqliteMemoryRepository implements MemoryRepository {
   }
 
   close(): void {
+    if (this.closed) return
+    this.closed = true
     this.handle.close()
   }
 }

@@ -1,6 +1,11 @@
+import { unlink } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { MemoryStorageCorruptionError, MemoryStorageError, MemoryUnsafePathError } from '../contracts/errors.ts'
-import { assertSafeDatabaseArtifacts, prepareSafeDatabasePath } from '../security/path-guard.ts'
+import {
+  assertSafeDatabaseArtifacts,
+  ensurePrivateDatabaseFileCreated,
+  prepareSafeDatabasePath,
+} from '../security/path-guard.ts'
 import { sanitizeErrorMessage } from '../security/redaction.ts'
 import { initializeMemorySchema } from './sqlite-schema.ts'
 
@@ -21,6 +26,7 @@ export async function openMemoryDatabase(
   options: OpenMemoryDatabaseOptions = {},
 ): Promise<MemoryDatabaseHandle> {
   const dbPath = await prepareSafeDatabasePath(dbPathInput)
+  const createdNewFile = await ensurePrivateDatabaseFileCreated(dbPath)
 
   let sqlite: DatabaseSync
   let fts5Enabled = false
@@ -28,6 +34,9 @@ export async function openMemoryDatabase(
   try {
     sqlite = new DatabaseSync(dbPath)
   } catch (err) {
+    if (createdNewFile) {
+      await unlink(dbPath).catch(() => undefined)
+    }
     throw new MemoryStorageError(`Failed to open memory SQLite database: ${sanitizeErrorMessage(err)}`)
   }
 
@@ -52,6 +61,11 @@ export async function openMemoryDatabase(
       sqlite.close()
     } catch {
       // Ignore close error during failed initialization.
+    }
+    if (createdNewFile) {
+      await unlink(dbPath).catch(() => undefined)
+      await unlink(`${dbPath}-wal`).catch(() => undefined)
+      await unlink(`${dbPath}-shm`).catch(() => undefined)
     }
     if (
       err instanceof MemoryStorageCorruptionError ||
