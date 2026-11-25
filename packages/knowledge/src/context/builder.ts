@@ -15,6 +15,7 @@ import type {
   KnowledgeDocument,
   KnowledgeScopeKind,
 } from '../contracts/types.ts'
+import type { KnowledgeRepository } from '../repository/interface.ts'
 import { isAuthorizedToReadKnowledgeScope, validateKnowledgeAuthContext } from '../security/authorization.ts'
 import { serializeKnowledgeEnvelope, type SerializedKnowledgeItem } from './serializer.ts'
 
@@ -235,4 +236,85 @@ export function buildKnowledgeContext(
       evaluatedAt: nowIso,
     },
   }
+}
+
+export function revalidateKnowledgeCandidates(
+  repository: KnowledgeRepository,
+  rawAuth: KnowledgeAuthContext,
+  rawCandidates: readonly KnowledgeContextCandidate[],
+  options: { includeUserWide?: boolean } = {},
+): KnowledgeContextCandidate[] {
+  const auth = validateKnowledgeAuthContext(rawAuth)
+  if (rawCandidates.length > KNOWLEDGE_LIMITS.maxSearchCandidates) {
+    throw new KnowledgeValidationError(
+      `Candidate count exceeds limit (${KNOWLEDGE_LIMITS.maxSearchCandidates})`,
+    )
+  }
+
+  const includeUserWide = options.includeUserWide ?? false
+  const valid: KnowledgeContextCandidate[] = []
+  const chunkCache = new Map<string, Map<string, KnowledgeChunk>>()
+
+  for (const raw of rawCandidates) {
+    const docParsed = KnowledgeDocumentSchema.safeParse(raw.document)
+    const chunkParsed = KnowledgeChunkSchema.safeParse(raw.chunk)
+    if (!docParsed.success || !chunkParsed.success) {
+      throw new KnowledgeValidationError('Candidate document or chunk failed schema validation')
+    }
+    const candidateDoc = docParsed.data
+    const candidateChunk = chunkParsed.data
+
+    const currentDoc = repository.getDocumentById(auth, candidateDoc.id, {
+      includeUserWide,
+      includeArchived: false,
+    })
+    if (!currentDoc || currentDoc.status !== 'ready') {
+      continue
+    }
+    if (currentDoc.currentRevisionId !== candidateChunk.revisionId) {
+      continue
+    }
+
+    let chunksById = chunkCache.get(currentDoc.id)
+    if (!chunksById) {
+      const currentChunks = repository.getDocumentChunks(auth, currentDoc.id, {
+        includeUserWide,
+        includeArchived: false,
+      })
+      chunksById = new Map(currentChunks.map((c) => [c.id, c]))
+      chunkCache.set(currentDoc.id, chunksById)
+    }
+
+    const authoritativeChunk = chunksById.get(candidateChunk.id)
+    if (!authoritativeChunk) {
+      continue
+    }
+
+    valid.push({
+      document: currentDoc,
+      chunk: authoritativeChunk,
+      score: raw.score,
+    })
+  }
+
+  return valid
+}
+
+export function buildValidatedKnowledgeContext(
+  repository: KnowledgeRepository,
+  rawAuth: KnowledgeAuthContext,
+  rawCandidates: readonly KnowledgeContextCandidate[],
+  rawOptions: KnowledgeContextBuildOptions = {},
+  clock: Clock = () => new Date(),
+): KnowledgeContextBuildResult {
+  const parsedOpts = KnowledgeContextBuildOptionsSchema.safeParse(rawOptions)
+  if (!parsedOpts.success) {
+    throw new KnowledgeValidationError(
+      `Invalid knowledge context options: ${parsedOpts.error.issues[0]?.message ?? 'validation failed'}`,
+    )
+  }
+  const revalidated = revalidateKnowledgeCandidates(repository, rawAuth, rawCandidates, {
+    includeUserWide: parsedOpts.data.includeUserWide,
+  })
+  return buildKnowledgeContext(rawAuth, revalidated, parsedOpts.data, clock)
 }

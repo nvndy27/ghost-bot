@@ -15,6 +15,21 @@ function sha256Hex(data: Uint8Array | string): string {
   return createHash('sha256').update(data).digest('hex')
 }
 
+function assertWellFormedUtf16(text: string): void {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw new KnowledgeValidationError('Direct text input contains unpaired UTF-16 surrogate')
+      }
+      i++
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new KnowledgeValidationError('Direct text input contains unpaired UTF-16 surrogate')
+    }
+  }
+}
+
 function prepareDocumentFromBytes(
   auth: KnowledgeAuthContext,
   bytes: Uint8Array,
@@ -70,6 +85,7 @@ export class KnowledgeIngestionPipeline {
     input: Omit<IngestBytesInput, 'sourceType' | 'mediaType'> & { text: string; sourceType?: 'direct_text' | 'markdown' },
   ): PersistedDocumentResult {
     const auth = validateKnowledgeAuthContext(rawAuth)
+    assertWellFormedUtf16(input.text)
     const sourceType = input.sourceType ?? 'direct_text'
     const mediaType = sourceType === 'markdown' ? 'text/markdown' : 'text/plain'
     const bytes = Buffer.from(input.text, 'utf8')

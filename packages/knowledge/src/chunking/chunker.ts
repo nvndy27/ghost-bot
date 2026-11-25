@@ -22,6 +22,7 @@ interface TextSegment {
 }
 
 const HEADING_REGEX = /^(#{1,6})\s+(.+?)\s*#*$/
+const FENCE_REGEX = /^(`{3,}|~{3,})/
 
 function splitByCodePoints(text: string, maxChars: number, overlapChars: number): Array<{ text: string; offset: number }> {
   const codePoints = Array.from(text)
@@ -77,6 +78,7 @@ function buildLineSegments(normalizedText: string, sourceType: KnowledgeSourceTy
   let blockStartLine = 1
   let blockStartChar = 0
   let runningChar = 0
+  let activeFence: { char: string; len: number } | null = null
 
   const flushBlock = (endLine: number) => {
     if (currentLines.length === 0) return
@@ -104,27 +106,38 @@ function buildLineSegments(normalizedText: string, sourceType: KnowledgeSourceTy
     const trimmed = line.trim()
 
     if (sourceType === 'markdown') {
-      const headingMatch = HEADING_REGEX.exec(trimmed)
-      if (headingMatch) {
-        flushBlock(lineNum - 1)
-        const level = headingMatch[1]!.length
-        const headingTitle = headingMatch[2]!.trim().slice(0, KNOWLEDGE_LIMITS.maxTitleLength)
-        while (headingStack.length > 0 && headingStack[headingStack.length - 1]!.level >= level) {
-          headingStack.pop()
+      const fenceMatch = FENCE_REGEX.exec(trimmed)
+      if (fenceMatch) {
+        const fenceStr = fenceMatch[1]!
+        const fenceChar = fenceStr[0]!
+        if (!activeFence) {
+          activeFence = { char: fenceChar, len: fenceStr.length }
+        } else if (activeFence.char === fenceChar && fenceStr.length >= activeFence.len && trimmed.slice(fenceStr.length).trim() === '') {
+          activeFence = null
         }
-        headingStack.push({ level, title: headingTitle })
-        blockStartLine = lineNum
-        blockStartChar = runningChar
-        currentLines = [line]
-        runningChar += line.length + 1
-        flushBlock(lineNum)
-        blockStartLine = lineNum + 1
-        blockStartChar = runningChar
-        continue
+      } else if (!activeFence) {
+        const headingMatch = HEADING_REGEX.exec(trimmed)
+        if (headingMatch) {
+          flushBlock(lineNum - 1)
+          const level = headingMatch[1]!.length
+          const headingTitle = headingMatch[2]!.trim().slice(0, KNOWLEDGE_LIMITS.maxTitleLength)
+          while (headingStack.length > 0 && headingStack[headingStack.length - 1]!.level >= level) {
+            headingStack.pop()
+          }
+          headingStack.push({ level, title: headingTitle })
+          blockStartLine = lineNum
+          blockStartChar = runningChar
+          currentLines = [line]
+          runningChar += line.length + 1
+          flushBlock(lineNum)
+          blockStartLine = lineNum + 1
+          blockStartChar = runningChar
+          continue
+        }
       }
     }
 
-    if (trimmed.length === 0) {
+    if (trimmed.length === 0 && !activeFence) {
       flushBlock(lineNum - 1)
       runningChar += line.length + 1
       blockStartLine = lineNum + 1

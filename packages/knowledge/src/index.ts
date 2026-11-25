@@ -93,7 +93,9 @@ export { buildBoundedExcerpt, buildKnowledgeCitation } from './citations/builder
 export { serializeKnowledgeEnvelope, type SerializedKnowledgeEnvelope, type SerializedKnowledgeItem } from './context/serializer.ts'
 export {
   buildKnowledgeContext,
+  buildValidatedKnowledgeContext,
   estimateKnowledgeTokensHeuristic,
+  revalidateKnowledgeCandidates,
   type KnowledgeContextBuildResult,
   type KnowledgeContextCandidate,
 } from './context/builder.ts'

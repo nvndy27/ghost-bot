@@ -12,13 +12,19 @@ export function compareKnowledgeMatches(a: KnowledgeSearchMatch, b: KnowledgeSea
   return a.chunk.chunkIndex - b.chunk.chunkIndex
 }
 
-function rangesOverlap(
+const SUBSTANTIAL_OVERLAP_RATIO = 0.5
+
+function hasSubstantialOverlap(
   aStart: number,
   aEnd: number,
   bStart: number,
   bEnd: number,
 ): boolean {
-  return Math.min(aEnd, bEnd) > Math.max(aStart, bStart)
+  const overlapLen = Math.min(aEnd, bEnd) - Math.max(aStart, bStart)
+  if (overlapLen <= 0) return false
+  const candidateLen = bEnd - bStart
+  if (candidateLen <= 0) return true
+  return overlapLen / candidateLen >= SUBSTANTIAL_OVERLAP_RATIO
 }
 
 export function rankAndSuppressChunks(
@@ -39,7 +45,7 @@ export function rankAndSuppressChunks(
       const existingRanges = acceptedByRevision.get(revKey) ?? []
       if (
         existingRanges.some((r) =>
-          rangesOverlap(r.startChar, r.endChar, match.chunk.location.startChar, match.chunk.location.endChar),
+          hasSubstantialOverlap(r.startChar, r.endChar, match.chunk.location.startChar, match.chunk.location.endChar),
         )
       ) {
         continue

@@ -912,56 +912,45 @@ export class SqliteKnowledgeRepository implements KnowledgeRepository {
     }
 
     const ftsQuery = this.handle.fts5Enabled ? buildSafeFts5MatchQuery(parsedQuery.tokens) : null
-    let joinedRows: Array<{ doc: KnowledgeDocument; chunk: KnowledgeChunk }>
-
-    if (this.handle.fts5Enabled && ftsQuery !== null) {
-      const sql = `
-        SELECT
-          d.id AS d_id, d.schema_version AS d_schema_version, d.collection_id AS d_collection_id,
-          d.scope_kind AS d_scope_kind, d.user_id AS d_user_id, d.bot_id AS d_bot_id,
-          d.workspace_id AS d_workspace_id, d.title AS d_title, d.source_type AS d_source_type,
-          d.media_type AS d_media_type, d.display_filename AS d_display_filename, d.tags_json AS d_tags_json,
-          d.status AS d_status, d.current_revision_id AS d_current_revision_id,
-          d.raw_fingerprint AS d_raw_fingerprint, d.extracted_fingerprint AS d_extracted_fingerprint,
-          d.created_at AS d_created_at, d.updated_at AS d_updated_at, d.archived_at AS d_archived_at,
-          c.id AS c_id, c.schema_version AS c_schema_version, c.document_id AS c_document_id,
-          c.revision_id AS c_revision_id, c.scope_kind AS c_scope_kind, c.user_id AS c_user_id,
-          c.bot_id AS c_bot_id, c.workspace_id AS c_workspace_id, c.chunk_index AS c_chunk_index,
-          c.content AS c_content, c.normalized_content AS c_normalized_content,
-          c.content_hash AS c_content_hash, c.location_json AS c_location_json, c.created_at AS c_created_at
-        FROM knowledge_chunks_fts f
-        INNER JOIN knowledge_chunks c ON c.id = f.chunk_id
-        INNER JOIN knowledge_documents d ON d.id = c.document_id
-        WHERE ${where.join(' AND ')} AND knowledge_chunks_fts MATCH ?
-      `
-      const rawRows = this.handle.sqlite.prepare(sql).all(...params, ftsQuery) as unknown as Array<Record<string, unknown>>
-      joinedRows = rawRows.map((r) => decodeJoinedRow(r))
-    } else {
-      const sql = `
-        SELECT
-          d.id AS d_id, d.schema_version AS d_schema_version, d.collection_id AS d_collection_id,
-          d.scope_kind AS d_scope_kind, d.user_id AS d_user_id, d.bot_id AS d_bot_id,
-          d.workspace_id AS d_workspace_id, d.title AS d_title, d.source_type AS d_source_type,
-          d.media_type AS d_media_type, d.display_filename AS d_display_filename, d.tags_json AS d_tags_json,
-          d.status AS d_status, d.current_revision_id AS d_current_revision_id,
-          d.raw_fingerprint AS d_raw_fingerprint, d.extracted_fingerprint AS d_extracted_fingerprint,
-          d.created_at AS d_created_at, d.updated_at AS d_updated_at, d.archived_at AS d_archived_at,
-          c.id AS c_id, c.schema_version AS c_schema_version, c.document_id AS c_document_id,
-          c.revision_id AS c_revision_id, c.scope_kind AS c_scope_kind, c.user_id AS c_user_id,
-          c.bot_id AS c_bot_id, c.workspace_id AS c_workspace_id, c.chunk_index AS c_chunk_index,
-          c.content AS c_content, c.normalized_content AS c_normalized_content,
-          c.content_hash AS c_content_hash, c.location_json AS c_location_json, c.created_at AS c_created_at
-        FROM knowledge_chunks c
-        INNER JOIN knowledge_documents d ON d.id = c.document_id
-        WHERE ${where.join(' AND ')}
-      `
-      const rawRows = this.handle.sqlite.prepare(sql).all(...params) as unknown as Array<Record<string, unknown>>
-      joinedRows = rawRows.map((r) => decodeJoinedRow(r))
-    }
-
     const filterTags = query.tags ? normalizeTags(query.tags) : []
     const matches: KnowledgeSearchMatch[] = []
-    for (const { doc, chunk } of joinedRows) {
+
+    const JOINED_COLUMNS = `
+      d.id AS d_id, d.schema_version AS d_schema_version, d.collection_id AS d_collection_id,
+      d.scope_kind AS d_scope_kind, d.user_id AS d_user_id, d.bot_id AS d_bot_id,
+      d.workspace_id AS d_workspace_id, d.title AS d_title, d.source_type AS d_source_type,
+      d.media_type AS d_media_type, d.display_filename AS d_display_filename, d.tags_json AS d_tags_json,
+      d.status AS d_status, d.current_revision_id AS d_current_revision_id,
+      d.raw_fingerprint AS d_raw_fingerprint, d.extracted_fingerprint AS d_extracted_fingerprint,
+      d.created_at AS d_created_at, d.updated_at AS d_updated_at, d.archived_at AS d_archived_at,
+      c.id AS c_id, c.schema_version AS c_schema_version, c.document_id AS c_document_id,
+      c.revision_id AS c_revision_id, c.scope_kind AS c_scope_kind, c.user_id AS c_user_id,
+      c.bot_id AS c_bot_id, c.workspace_id AS c_workspace_id, c.chunk_index AS c_chunk_index,
+      c.content AS c_content, c.normalized_content AS c_normalized_content,
+      c.content_hash AS c_content_hash, c.location_json AS c_location_json, c.created_at AS c_created_at
+    `
+
+    const stmt =
+      this.handle.fts5Enabled && ftsQuery !== null
+        ? this.handle.sqlite.prepare(`
+            SELECT ${JOINED_COLUMNS}
+            FROM knowledge_chunks_fts f
+            INNER JOIN knowledge_chunks c ON c.id = f.chunk_id
+            INNER JOIN knowledge_documents d ON d.id = c.document_id
+            WHERE ${where.join(' AND ')} AND knowledge_chunks_fts MATCH ?
+          `)
+        : this.handle.sqlite.prepare(`
+            SELECT ${JOINED_COLUMNS}
+            FROM knowledge_chunks c
+            INNER JOIN knowledge_documents d ON d.id = c.document_id
+            WHERE ${where.join(' AND ')}
+          `)
+
+    const queryParams =
+      this.handle.fts5Enabled && ftsQuery !== null ? [...params, ftsQuery] : params
+
+    for (const rawRow of stmt.iterate(...queryParams) as Iterable<Record<string, unknown>>) {
+      const { doc, chunk } = decodeJoinedRow(rawRow)
       if (!isAuthorizedToReadKnowledgeScope(auth, doc.scope, { includeUserWide: query.includeUserWide })) {
         continue
       }

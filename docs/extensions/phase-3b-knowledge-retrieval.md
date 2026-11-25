@@ -88,10 +88,10 @@ packages/knowledge/
 
 ## 5. Chunking & Source-Location Semantics
 
-- **Paragraph & heading awareness**: Splits on blank lines and Markdown headings (`#`–`######`), maintaining `sectionPath` up to depth 6.
-- **Unicode safety**: Oversized paragraphs are split by Unicode code points (`Array.from`) so UTF-16 surrogate pairs (e.g., emoji) are never split mid-character.
+- **Paragraph, heading, & fence awareness**: Splits on blank lines and Markdown headings (`#`–`######`) outside fenced code blocks (` ``` ` / `~~~`), maintaining `sectionPath` up to depth 6.
+- **Unicode safety**: Direct text rejects unpaired UTF-16 surrogates (`KnowledgeValidationError`) before encoding; oversized paragraphs are split by Unicode code points (`Array.from`) so UTF-16 surrogate pairs (e.g., emoji) are never split mid-character.
 - **Bounded overlap**: `0 <= overlapChars < targetChunkChars <= maxChunkChars` prevents infinite loops.
-- **Source locations**: `startLine`/`endLine` (1-indexed) and `startChar`/`endChar` (0-indexed offsets into the **NFC-normalized extracted text**, not raw file byte offsets). `pageNumber` is `null` (reserved for future PDF support; never fabricated).
+- **Source locations**: `startLine`/`endLine` (1-indexed) and `startChar`/`endChar` (0-indexed **UTF-16 code units** into the **NFC-normalized extracted text**, matching JS `.slice(startChar, endChar)`, not raw file byte offsets). `pageNumber` is `null` (reserved for future PDF support; never fabricated).
 
 ## 6. SQLite Schema & Document Lifecycle
 
@@ -110,9 +110,11 @@ Lifecycle:
 ## 7. Authorization, Retrieval, Citations & Context Budgets
 
 - **Authorization**: Same fail-closed model as Phase 3A (`KnowledgeAuthContext` constructed by trusted host/daemon; no implicit user-wide fallback; `allowUserWideRead` never implies `allowUserWideWrite`; unauthorized lookups return `null` or `KnowledgeNotFoundError`).
-- **Retrieval**: SQL `WHERE` filters authorized `scope_key`, `user_id`, `status = 'ready'`, and `c.revision_id = d.current_revision_id` before FTS5/lexical scoring. Supports Vietnamese NFC/NFD normalization, accent folding, and `đ/Đ -> d/D`. Suppresses overlapping/duplicate chunks deterministically (`score DESC, updatedAt DESC, documentId ASC, chunkIndex ASC`). **Note**: Phase 3B implements deterministic lexical retrieval only, not semantic/embedding search.
-- **Citations**: `resolveCitation` verifies active `'ready'` status, `revisionId === currentRevisionId`, and scope authorization before returning bounded excerpts (`maxCitationExcerptChars = 280`).
-- **Context Builder**: `buildKnowledgeContext` enforces `maxDocuments`, `maxChunks`, `maxChars`, UTF-8 `maxBytes`, and heuristic `maxEstimatedTokens` (`chars_div_4_heuristic`) against the final JSON `untrusted_knowledge_reference_data` envelope (`authority: "none"`). Structural isolation does not guarantee a downstream LLM will ignore malicious text; runtime tool/permission policies must remain independent.
+- **Retrieval**: SQL `WHERE` filters authorized `scope_key`, `user_id`, `status = 'ready'`, and `c.revision_id = d.current_revision_id`, streaming all authorized matching rows via `stmt.iterate()` so exact global ranking is preserved even beyond 500 matching chunks. Supports Vietnamese `NFC`/`NFD`, accent folding, and explicit `đ/Đ -> d/D`.
+- **Overlap suppression policy**: Suppresses exact duplicate chunk hashes and chunks with `>= 50%` character-range overlap (`overlapLen / candidateLen >= 0.5`) within the same revision, preserving adjacent chunks with small boundary overlaps (`score DESC, updatedAt DESC, documentId ASC, chunkIndex ASC`). **Note**: Phase 3B implements deterministic lexical retrieval only, not semantic/embedding search.
+- **Citations & Stale-Candidate Validation**: `resolveCitation` verifies active `'ready'` status, `revisionId === currentRevisionId`, and scope authorization before returning bounded excerpts (`maxCitationExcerptChars = 280`). Pure `buildKnowledgeContext` operates on caller-supplied snapshots; use `buildValidatedKnowledgeContext(repository, auth, candidates, options, clock)` (or `revalidateKnowledgeCandidates`) at the host/daemon boundary to exclude documents archived, deleted, or superseded after retrieval.
+- **Context Builder**: `buildKnowledgeContext` enforces `maxDocuments`, `maxChunks`, `maxChars`, UTF-8 `maxBytes`, and heuristic `maxEstimatedTokens` (`chars_div_4_heuristic`) on the final JSON `untrusted_knowledge_reference_data` envelope (`authority: "none"`). Structural isolation does not guarantee a downstream LLM will ignore malicious text; runtime tool/permission policies must remain independent.
+- **Historical revisions & synchronous SQLite**: Historical rows in `knowledge_document_revisions` and `knowledge_chunks` are retained for auditability (while `knowledge_chunks_fts` entries for superseded revisions are deleted on replacement) and removed on `deleteDocument` via `ON DELETE CASCADE`. Because `node:sqlite` (`DatabaseSync`) is synchronous, large batch ingestion in a future daemon should run in a dedicated worker or chunked background task.
 
 ## 8. Synthetic Usage Example
 

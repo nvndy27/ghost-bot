@@ -174,7 +174,9 @@ export async function readAuthorizedSourceFile(
   }
 
   const flags =
-    constants.O_RDONLY | (typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0)
+    constants.O_RDONLY |
+    (typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0) |
+    (typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0)
   const handle = await open(canonicalFile, flags)
   try {
     const fdStat = await handle.stat()
