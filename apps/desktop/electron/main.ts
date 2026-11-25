@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import { chmod, mkdtemp, rm } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -16,32 +17,40 @@ import {
   ProviderSummarySchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
+import {
+  isAllowedNavigationUrl,
+  isAuthorizedIpcContext,
+  validateLoopbackDevUrl,
+} from './security.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const appRoot = resolve(__dirname, '..')
 const repoRoot = resolve(appRoot, '..', '..')
-const devUrl = process.env.GHOST_BOT_DEV_URL || ''
+const devOrigin = validateLoopbackDevUrl(process.env.GHOST_BOT_DEV_URL ?? '')
+const distIndexPath = join(appRoot, 'dist', 'index.html')
+const distIndexUrl = pathToFileURL(distIndexPath).href
 
 let mainWindow: BrowserWindow | null = null
 let daemonChild: ChildProcessWithoutNullStreams | null = null
+let runtimeDir = ''
 let daemonSocketPath = ''
 let daemonToken = ''
 let quitting = false
 
 if (process.platform === 'linux') {
-  // Fedora/GTK4 environments require pinning Chromium/Electron to GTK 3.
   app.commandLine.appendSwitch('gtk-version', '3')
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
 }
 
 function buildCspHeader(): string {
-  if (devUrl) {
+  if (devOrigin) {
+    const wsOrigin = devOrigin.replace(/^http:/, 'ws:')
     return [
       "default-src 'self'",
-      `script-src 'self' 'unsafe-inline' ${devUrl}`,
+      `script-src 'self' 'unsafe-inline' ${devOrigin}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
-      `connect-src 'self' ${devUrl} ws://127.0.0.1:5173`,
+      `connect-src 'self' ${devOrigin} ${wsOrigin}`,
       "object-src 'none'",
       "base-uri 'none'",
       "frame-ancestors 'none'",
@@ -59,23 +68,28 @@ function buildCspHeader(): string {
   ].join('; ')
 }
 
-export function isAuthorizedSender(event: IpcMainInvokeEvent): boolean {
-  const frameUrl = event.senderFrame?.url
-  if (!frameUrl) return false
-  if (devUrl) {
-    try {
-      return new URL(frameUrl).origin === new URL(devUrl).origin
-    } catch {
-      return false
-    }
-  }
-  const distIndexUrl = pathToFileURL(join(appRoot, 'dist', 'index.html')).href
-  return frameUrl === distIndexUrl || frameUrl.startsWith(`${distIndexUrl}#`)
+function isAuthorizedSender(event: IpcMainInvokeEvent): boolean {
+  const win = mainWindow
+  return isAuthorizedIpcContext(
+    {
+      senderMatchesWindow: Boolean(win && !win.isDestroyed() && event.sender === win.webContents),
+      frameMatchesMainFrame: Boolean(
+        win && !win.isDestroyed() && event.senderFrame === win.webContents.mainFrame,
+      ),
+      frameUrl: event.senderFrame?.url,
+    },
+    devOrigin,
+    distIndexUrl,
+  )
 }
 
 async function startDaemon(): Promise<void> {
+  const baseRuntime = process.env.XDG_RUNTIME_DIR || tmpdir()
+  runtimeDir = await mkdtemp(join(baseRuntime, 'ghost-bot-rt-'))
+  await chmod(runtimeDir, 0o700)
+
   daemonToken = randomBytes(32).toString('hex')
-  daemonSocketPath = join(tmpdir(), `ghost-bot-daemon-${process.pid}.sock`)
+  daemonSocketPath = join(runtimeDir, 'daemon.sock')
   const daemonEntry = join(repoRoot, 'apps', 'daemon', 'src', 'index.ts')
   const runtimeMode = process.env.GHOST_BOT_RUNTIME_MODE === 'mock' ? 'mock' : 'codex'
 
@@ -116,43 +130,63 @@ async function startDaemon(): Promise<void> {
       }
     })
 
+    child.once('error', (err) => {
+      clearTimeout(timeout)
+      rl.close()
+      rejectReady(err)
+    })
+
     child.once('exit', (code) => {
       clearTimeout(timeout)
       rl.close()
       if (!quitting) {
-        rejectReady(new Error(`Daemon exited early with code ${code ?? 'unknown'}`))
+        rejectReady(new Error(`Daemon exited unexpectedly with code ${code ?? 'unknown'}`))
       }
     })
+  })
+
+  child.on('exit', (code) => {
+    if (!quitting) {
+      console.error(`Daemon exited unexpectedly (code=${code ?? 'unknown'}); shutting down.`)
+      quitting = true
+      app.exit(1)
+    }
   })
 }
 
 async function stopDaemon(): Promise<void> {
   const child = daemonChild
   daemonChild = null
-  if (!child) return
+  if (child) {
+    await new Promise<void>((resolveStop) => {
+      const killTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveStop()
+      }, 2000)
 
-  await new Promise<void>((resolveStop) => {
-    const killTimer = setTimeout(() => {
+      child.once('close', () => {
+        clearTimeout(killTimer)
+        resolveStop()
+      })
+
       try {
-        child.kill('SIGKILL')
+        child.stdin.end()
+        child.kill('SIGTERM')
       } catch {
-        // ignore
+        clearTimeout(killTimer)
+        resolveStop()
       }
-      resolveStop()
-    }, 2000)
-
-    child.once('close', () => {
-      clearTimeout(killTimer)
-      resolveStop()
     })
-
-    try {
-      child.kill('SIGTERM')
-    } catch {
-      clearTimeout(killTimer)
-      resolveStop()
-    }
-  })
+  }
+  if (runtimeDir) {
+    const dir = runtimeDir
+    runtimeDir = ''
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+  }
 }
 
 function queryDaemon<T>(path: string, schema: z.ZodType<T>): Promise<T> {
@@ -239,16 +273,15 @@ function createMainWindow(): BrowserWindow {
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event, targetUrl) => {
-    const allowedPrefix = devUrl || pathToFileURL(join(appRoot, 'dist', 'index.html')).href
-    if (!targetUrl.startsWith(allowedPrefix)) {
+    if (!isAllowedNavigationUrl(targetUrl, devOrigin, distIndexUrl)) {
       event.preventDefault()
     }
   })
 
-  if (devUrl) {
-    void win.loadURL(devUrl)
+  if (devOrigin) {
+    void win.loadURL(devOrigin)
   } else {
-    void win.loadFile(join(appRoot, 'dist', 'index.html'))
+    void win.loadFile(distIndexPath)
   }
 
   return win
@@ -264,13 +297,51 @@ app.whenReady().then(async () => {
     })
   })
 
-  await startDaemon()
+  try {
+    await startDaemon()
+  } catch (err) {
+    console.error('Failed to start daemon:', err instanceof Error ? err.message : String(err))
+    await stopDaemon()
+    app.exit(1)
+    return
+  }
+
   registerIpcHandlers()
   mainWindow = createMainWindow()
 
   if (process.env.GHOST_BOT_SMOKE_EXIT === '1') {
+    const consoleErrors: string[] = []
+    mainWindow.webContents.on('console-message', (event) => {
+      if (event.level === 'error') consoleErrors.push(event.message)
+    })
     mainWindow.webContents.once('did-finish-load', () => {
-      setTimeout(() => app.quit(), 300)
+      setTimeout(() => {
+        void mainWindow?.webContents
+          .executeJavaScript(`(async () => {
+            if (!window.ghostBot) throw new Error('Missing preload bridge');
+            const info = await window.ghostBot.getAppInfo();
+            const health = await window.ghostBot.getDaemonHealth();
+            const providers = await window.ghostBot.listProviders();
+            const rootText = document.getElementById('root')?.innerText ?? '';
+            return { info, health, providersCount: providers.length, hasRoot: rootText.length > 0 };
+          })()`)
+          .then((res: { info: { sandboxed: boolean }; health: { ok: boolean }; providersCount: number; hasRoot: boolean }) => {
+            if (!res.info.sandboxed || !res.health.ok || res.providersCount < 1 || !res.hasRoot || consoleErrors.length > 0) {
+              console.error('Smoke verification failed:', JSON.stringify({ res, consoleErrors }))
+              quitting = true
+              void stopDaemon().finally(() => app.exit(1))
+              return
+            }
+            console.log('Smoke verification passed:', JSON.stringify(res))
+            quitting = true
+            void stopDaemon().finally(() => app.exit(0))
+          })
+          .catch((err: unknown) => {
+            console.error('Smoke script error:', err)
+            quitting = true
+            void stopDaemon().finally(() => app.exit(1))
+          })
+      }, 400)
     })
   }
 })
@@ -280,6 +351,7 @@ app.on('before-quit', () => {
 })
 
 app.on('window-all-closed', () => {
+  quitting = true
   void stopDaemon().finally(() => {
     app.quit()
   })

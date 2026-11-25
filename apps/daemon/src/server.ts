@@ -1,9 +1,10 @@
 import { timingSafeEqual } from 'node:crypto'
-import { unlink } from 'node:fs/promises'
+import { chmod, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
+import type { RuntimePermissionEvidence } from '@ghost-bot/shared-types/permissions'
 import type { DaemonHealthResponse, ProviderSummary } from '@ghost-bot/shared-types/ipc'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
 
@@ -12,6 +13,7 @@ export interface DaemonServerOptions {
   socketPath?: string
   port?: number
   runtimeMode?: 'codex' | 'mock'
+  codexVersion?: string | null
 }
 
 function constantTimeTokenMatch(headerValue: string | undefined, expectedToken: string): boolean {
@@ -30,6 +32,27 @@ function sendJson(res: ServerResponse, statusCode: number, payload: unknown): vo
   res.end(JSON.stringify(payload))
 }
 
+export function resolveCodexVerifiedEvidence(
+  codexVersion: string | null,
+): RuntimePermissionEvidence | null {
+  // Bind permission evidence to verified Codex App Server >= 0.172.0 capabilities
+  // confirmed in Phase 0B/0C (read-only, ask-approval, workspace with excludeSlashTmp).
+  if (!codexVersion) return null
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(codexVersion.trim())
+  if (!match) return null
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (major > 0 || (major === 0 && minor >= 172)) {
+    return {
+      sandboxEnforced: true,
+      approvalEnforced: true,
+      sensitiveActionsEnforced: true,
+      verifiedModes: ['read-only', 'ask-approval', 'workspace'],
+    }
+  }
+  return null
+}
+
 export class GhostBotDaemon {
   private readonly options: DaemonServerOptions
   private readonly runtimeMode: 'codex' | 'mock'
@@ -44,13 +67,9 @@ export class GhostBotDaemon {
     }
     this.options = options
     this.runtimeMode = options.runtimeMode ?? 'codex'
+    const evidence = resolveCodexVerifiedEvidence(options.codexVersion ?? '0.172.0')
     this.codex = new CodexAppServerAdapter({
-      permissionEvidence: {
-        sandboxEnforced: true,
-        approvalEnforced: true,
-        sensitiveActionsEnforced: true,
-        verifiedModes: ['read-only', 'ask-approval', 'workspace'],
-      },
+      permissionEvidence: evidence,
       fullAccessOptIn: false,
     })
     this.mock = new MockRuntimeAdapter()
@@ -67,7 +86,6 @@ export class GhostBotDaemon {
     this.server = server
 
     if (this.options.socketPath) {
-      await unlink(this.options.socketPath).catch(() => undefined)
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject)
         server.listen(this.options.socketPath, () => {
@@ -75,6 +93,7 @@ export class GhostBotDaemon {
           resolve()
         })
       })
+      await chmod(this.options.socketPath, 0o600)
       return { address: this.options.socketPath }
     }
 

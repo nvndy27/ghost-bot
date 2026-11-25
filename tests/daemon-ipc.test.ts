@@ -1,11 +1,16 @@
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { normalizeDaemonError, redactSecrets } from '../apps/daemon/src/errors.ts'
-import { GhostBotDaemon } from '../apps/daemon/src/server.ts'
+import { GhostBotDaemon, resolveCodexVerifiedEvidence } from '../apps/daemon/src/server.ts'
+import {
+  isAllowedNavigationUrl,
+  isAuthorizedIpcContext,
+  validateLoopbackDevUrl,
+} from '../apps/desktop/electron/security.ts'
 import {
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
@@ -87,4 +92,66 @@ test('daemon error normalizer redacts secrets and IPC schemas reject unexpected 
   assert.equal(normalized.body.message.includes('sk-1234567890'), false)
 
   assert.throws(() => EmptyParamsSchema.parse({ extra: 'not-allowed' }))
+})
+
+test('daemon enforces 0600 socket permissions and binds permission evidence to verified Codex version', async () => {
+  assert.equal(resolveCodexVerifiedEvidence(null), null)
+  assert.equal(resolveCodexVerifiedEvidence('0.171.9'), null)
+  const ev = resolveCodexVerifiedEvidence('0.172.0')
+  assert.ok(ev?.verifiedModes.includes('workspace'))
+  assert.equal(ev?.verifiedModes.includes('full-access'), false)
+
+  const dir = await mkdtemp(join(tmpdir(), 'ghost-bot-sock-perm-'), )
+  const socketPath = join(dir, 'daemon.sock')
+  const daemon = new GhostBotDaemon({
+    authToken: '0123456789abcdef0123456789abcdef',
+    socketPath,
+    runtimeMode: 'mock',
+  })
+  await daemon.start()
+  try {
+    const st = await stat(socketPath)
+    assert.equal(st.mode & 0o777, 0o600)
+  } finally {
+    await daemon.stop()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Electron security helpers enforce exact loopback dev origin, exact navigation, and IPC sender identity', () => {
+  assert.equal(validateLoopbackDevUrl('http://127.0.0.1:5173/app'), 'http://127.0.0.1:5173')
+  assert.throws(() => validateLoopbackDevUrl('https://127.0.0.1:5173'))
+  assert.throws(() => validateLoopbackDevUrl('http://127.0.0.1.evil.test:5173'))
+
+  const distUrl = 'file:///app/dist/index.html'
+  assert.equal(isAllowedNavigationUrl(distUrl, '', distUrl), true)
+  assert.equal(isAllowedNavigationUrl(`${distUrl}.evil.html`, '', distUrl), false)
+  assert.equal(isAllowedNavigationUrl('https://example.com', '', distUrl), false)
+  assert.equal(isAllowedNavigationUrl('http://127.0.0.1:5173/page', 'http://127.0.0.1:5173', distUrl), true)
+  assert.equal(isAllowedNavigationUrl('http://127.0.0.1:5173.evil.test', 'http://127.0.0.1:5173', distUrl), false)
+
+  assert.equal(
+    isAuthorizedIpcContext(
+      { senderMatchesWindow: true, frameMatchesMainFrame: true, frameUrl: distUrl },
+      '',
+      distUrl,
+    ),
+    true,
+  )
+  assert.equal(
+    isAuthorizedIpcContext(
+      { senderMatchesWindow: false, frameMatchesMainFrame: true, frameUrl: distUrl },
+      '',
+      distUrl,
+    ),
+    false,
+  )
+  assert.equal(
+    isAuthorizedIpcContext(
+      { senderMatchesWindow: true, frameMatchesMainFrame: false, frameUrl: distUrl },
+      '',
+      distUrl,
+    ),
+    false,
+  )
 })
