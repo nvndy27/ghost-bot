@@ -16,7 +16,7 @@ Local-first, multi-agent AI desktop workspace inspired by the supplied Grok Bot-
 - `packages/`: starter runtime contracts, avatar renderer; no real authentication or tools.
 - `apps/`: reserved entry points for the implementation; no fake working backend.
 
-## Fedora / Hyprland
+## Fedora 
 For the future implementation, use a normal user account; install current supported Node LTS, pnpm, Git, optional Podman and a Secret Service-compatible keyring. Avoid root execution. Validate Wayland/Electron behavior and screen-sharing portals separately. The prototype needs only a browser.
 
 ## Status / boundaries
