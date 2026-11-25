@@ -18,6 +18,12 @@ Only with participant awareness/consent and platform-supported integration; opt-
 
 ## Phase 0 boundary evidence
 
-The isolated Codex profile excludes inherited API keys and user configuration. The OpenClaw probe uses existing CLI-managed credentials and refuses a nonmatching Gateway URL. Probes emit summaries only. Never use them as a production credential broker or expose them through renderer IPC.
+The Codex App Server adapter (`packages/runtime-adapters/codex/codex-app-server.ts`) uses a dedicated persistent profile (`~/.config/ghost-bot/codex-profile`), never touches `~/.codex`, and strips `OPENAI_API_KEY` / `CODEX_API_KEY` from the child environment so subscription-first execution cannot silently fall back to paid API keys.
 
-The preflight tests exercise deny-by-default capability selection. No execution permission mode is enabled by Phase 0 evidence. Before enabling one, test direct tool calls, native commands, plugin/MCP paths, absolute and symlinked paths, and external side effects against the actual runtime boundary.
+Live verification (`scripts/verify-codex-live.mjs`) confirmed:
+- `read-only`: reads workspace files without modifying disk; writes are blocked and leave no side effects.
+- `workspace`: writes succeed inside the canonical workspace root while writes outside the workspace (including `/tmp` and `$TMPDIR`, explicitly blocked via `excludeSlashTmp: true` and `excludeTmpdirEnvVar: true` in `sandboxPolicy`) are prevented.
+- `ask-approval`: server-initiated approval requests (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`) are bound to `approvalId`, `runId`, canonical `argsHash`, and expiry; denied or mismatched decisions fail closed and produce no filesystem side effects.
+- `full-access`: remains disabled by default unless explicit opt-in and verified evidence are supplied.
+
+The OpenClaw probe uses existing CLI-managed credentials (`operator.read`, `read_only`) and refuses a nonmatching Gateway URL. Probes and verification scripts emit redacted summaries only and are never exposed through renderer IPC.

@@ -1,7 +1,8 @@
 # Known issues
 
-- Ollama discovery requires an Ollama service at the default loopback endpoint.
-- Codex returned a catalog in an isolated profile. Account eligibility, quota and execution behavior need separate evidence.
-- OpenClaw health uses the CLI's configured credentials. Native device pairing, minimal scopes and execution controls need separate tests.
-- Prototype settings, usage, tools, routines and approvals are demonstration data. The headless smoke test covers initial rendering.
-- The design screenshots travel separately from Git while distribution rights are unresolved.
+- Ollama discovery requires an Ollama service at `127.0.0.1:11434` (currently not installed locally).
+- Kimi Code CLI (`kimi`) is not installed locally; live `kimi acp` negotiation is unverified.
+- OpenClaw Gateway probe verified `ws://127.0.0.1:18789` reachability with `operator.read` (`read_only`); a native WebSocket adapter with scoped device pairing and execution controls is not yet implemented.
+- Codex `full-access` (`dangerFullAccess`) remains disabled by default; only `read-only`, `ask-approval`, and `workspace` (with `excludeSlashTmp: true` and `excludeTmpdirEnvVar: true`) are verified.
+- Prototype settings, usage, tools, routines and approvals in `prototype/` remain demonstration data until Phase 1/2 desktop integration.
+- The design screenshots under `design/references/` travel separately from Git while distribution rights are unresolved.

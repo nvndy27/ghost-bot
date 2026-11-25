@@ -5,12 +5,12 @@ States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. 
 ## Phase 0 — Technical proof
 
 - **Verified** — Starter kit audit, project rename, Git initialization and initial private GitHub push.
-- **Verified** — OpenClaw CLI health and isolated Codex App Server initialize/account/model/effort discovery.
-- **Tested** — Model metadata normalization and fail-closed permission preflight.
-- **Implemented** — Runtime event envelope, SQLite design, security boundary and provider research.
-- **Blocked** — Live Ollama discovery requires a local service.
-- **Not Started** — Account-bound Codex quota, streaming, interruption and permission proof. Native OpenClaw session and permission verification.
-- **In Progress** — Phase 0 exit review. Phase 1 remains gated on the review of provider and permission gaps.
+- **Verified** — Reusable JSON-RPC stdio client (`packages/runtime-adapters/json-rpc-client.ts`) and Codex App Server adapter (`packages/runtime-adapters/codex/codex-app-server.ts`).
+- **Verified** — Dedicated ChatGPT-authenticated Codex profile (`plus`), model/effort discovery, live rate-limit windows, streaming, cancellation, session resume, read-only/workspace sandboxing (`excludeSlashTmp: true`), and rejected approval with no side effect.
+- **Verified** — OpenClaw CLI health and read-only loopback gateway probe (`operator.read`).
+- **Tested** — 16 offline unit tests (JSON-RPC correlation, concurrency, timeouts, cancellation, crashes, malformed payloads, unknown quota, permission modes, approval rejection) and strict TypeScript check.
+- **Blocked** — Live Ollama discovery (no local service) and live Kimi ACP (CLI not installed); non-blocking for Phase 1.
+- **Verified** — Phase 0 exit gate **PASS** (2026-11-25). Ready for Phase 1 desktop foundation.
 
 ## Phase 1 — Desktop foundation
 - [ ] Electron + React TS + Vite + pnpm workspace, lint/typecheck/test pipeline.
