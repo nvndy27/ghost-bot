@@ -10,3 +10,5 @@
 - Before concluding: run available lint/typecheck/tests, review security regressions, update roadmap and progress with evidence, report blockers and changed files. Never claim an untested integration works.
 
 - Use the exact roadmap states Not Started, In Progress, Implemented, Tested, Verified and Blocked. Record the evidence and handoff in docs/PROGRESS.md, docs/KNOWN_ISSUES.md and docs/NEXT_STEPS.md. Keep reference screenshots local until their distribution rights are confirmed.
+
+- After completing any task, include a short summary paragraph in the final response. State what changed, what was verified, and any remaining blocker. Keep the existing milestone handoff fields when applicable.
