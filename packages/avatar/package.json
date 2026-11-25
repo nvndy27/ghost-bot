@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./presets": "./presets.ts"
+    "./presets": "./presets.ts",
+    "./svg-sanitizer": "./svg-sanitizer.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "isomorphic-dompurify": "^4.9.0"
   }
 }

@@ -12,7 +12,14 @@ Opt-in integration: Codex dedicated ChatGPT profile (`node scripts/verify-codex-
 - `node scripts/probe-openclaw.mjs` & `openclaw gateway probe --json` — **pass** (`ok: true`, `ws://127.0.0.1:18789`, `operator.read`).
 - `node scripts/probe-ollama.mjs` — **blocked** (no local Ollama binary or listener at `127.0.0.1:11434`).
 
-## Phase 1A & 1B commands and results
+## Phase 1C commands and results
+
+- `pnpm lint` — **pass** (0 errors).
+- `pnpm typecheck` — **pass** across all 5 TypeScript workspace packages.
+- `pnpm test` — **32/32 offline tests pass** (Phase 0 + Step 0 + Phase 1A + Phase 1B + Phase 1C SQLite migrations/CRUD/rollback/corrupt recovery + adversarial SVG sanitization).
+- `pnpm build` — **pass**.
+- `node scripts/verify-electron-persistence.mjs` — **pass** (4-launch real Electron + daemon + SQLite persistence E2E: create, edit, restart, verify, delete, restart, delete all seeded bots, restart, verify empty state).
+- `node scripts/verify-phase-1b-ui.mjs` & `node scripts/verify-phase-1c-ui.mjs` — **pass** (0 console errors; 4 new screenshots in `design/reviews/phase-1c/`).
 
 - `pnpm lint` — **pass** (0 errors across `packages`, `apps`, `tests`).
 - `pnpm typecheck` — **pass** across all 5 TypeScript workspace packages.

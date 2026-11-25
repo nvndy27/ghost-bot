@@ -5,10 +5,11 @@ import { BotAvatar } from './BotAvatar.tsx'
 export interface LeftSidebarProps {
   width: number
   bots: WorkspaceBot[]
-  activeBotId: string
+  activeBotId: string | null
   searchQuery: string
   onSearchChange: (value: string) => void
   onSelectBot: (botId: string) => void
+  onCreateBot: () => void
   onOpenSettings: () => void
   onCollapse: () => void
   isMockMode: boolean
@@ -21,6 +22,7 @@ export function LeftSidebar({
   searchQuery,
   onSearchChange,
   onSelectBot,
+  onCreateBot,
   onOpenSettings,
   onCollapse,
   isMockMode,
@@ -40,9 +42,9 @@ export function LeftSidebar({
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           <button
             type="button"
-            disabled
-            title="Create bot (available in Phase 1C)"
-            aria-label="Create bot (Phase 1C)"
+            onClick={onCreateBot}
+            title="Create bot"
+            aria-label="Create bot"
           >
             +
           </button>

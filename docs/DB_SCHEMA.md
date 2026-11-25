@@ -23,7 +23,13 @@ All IDs UUID/ULID; UTC timestamps except stored routine timezone. Foreign keys o
 
 Use cascade only for clearly owned ephemeral rows; user deletion must consider artifacts and runtime remote data separately. Index sessions(agent_id,created_at), events(run_id,seq), routines(enabled,next_run_at), usage(account_id,observed_at), tasks(status). Store avatar config not redundant raster images. Persist canonical app event projection, runtime mapping and reconnect cursor; avoid duplicating full runtime databases. Migration SQL to be implemented after Phase 0.
 
-## First migration design
+## Phase 1C implementation notes
+
+- Implemented in `apps/daemon/src/db/` (`schema.ts`, `migrations.ts`, `client.ts`, `seed.ts`) using `node:sqlite` (`DatabaseSync`) + `drizzle-orm/sqlite-core` + `drizzle-orm/sqlite-proxy` (see [ADR 0005](adr/0005-node-sqlite-and-drizzle.md)).
+- Persistent path: `${GHOST_BOT_DATA_DIR:-${XDG_DATA_HOME:-~/.local/share}/ghost-bot}/ghost-bot.sqlite` (`0700` dir, `0600` file), separate from the temporary `0700` Unix socket runtime directory.
+- Migration `0001_initial_schema` creates `provider_accounts`, `model_profiles`, `agents`, `teams`, `team_members`, `sessions`, `messages`, `settings`, `usage_records`, and `audit_logs` with `PRAGMA foreign_keys = ON`, `ON DELETE RESTRICT` on `sessions.agent_id`, and `BEGIN IMMEDIATE` transactions tracked in `schema_migrations`. Unsupported newer schema versions fail explicitly.
+- Bot deletion soft-archives `agents.archived_at` so historical `sessions`, `messages`, `usage_records`, and `audit_logs` are preserved.
+- First-launch seeding (`seed.initial_bots.v1`) runs once when `agents` is empty and never recreates deleted bots.
 
 Create provider accounts, model profiles, agents, sessions, runs, run events, messages and approvals in dependency order. Defer teams, memory and schedules until their vertical slices. Create the SQLite database beneath the application data directory with user-only permissions. Enable foreign keys on every connection and use one daemon writer. Keep run creation, event insertion, cursor advancement and message projection transactional.
 

@@ -7,14 +7,24 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, ipcMain, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import {
   AppInfoResponseSchema,
+  BotIdParamsSchema,
+  BotIdSchema,
+  BotRecordSchema,
+  BotsListResponseSchema,
+  CreateBotInputSchema,
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
   IPC_CHANNELS,
+  ImportAvatarSvgInputSchema,
+  ImportAvatarSvgResponseSchema,
   ProviderSummarySchema,
+  SetActiveBotParamsSchema,
+  UpdateBotInputSchema,
+  WorkspacePickResponseSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
 import {
@@ -99,6 +109,8 @@ async function startDaemon(): Promise<void> {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+      GHOST_BOT_DATA_DIR: process.env.GHOST_BOT_DATA_DIR,
       DISPLAY: process.env.DISPLAY,
       WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY,
       DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
@@ -189,15 +201,26 @@ async function stopDaemon(): Promise<void> {
   }
 }
 
-function queryDaemon<T>(path: string, schema: z.ZodType<T>): Promise<T> {
+function queryDaemon<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  options?: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown },
+): Promise<T> {
   return new Promise((resolveReq, rejectReq) => {
+    const payload = options?.body !== undefined ? JSON.stringify(options.body) : undefined
     const req = httpRequest(
       {
         socketPath: daemonSocketPath,
         path,
-        method: 'GET',
+        method: options?.method ?? 'GET',
         headers: {
           Authorization: `Bearer ${daemonToken}`,
+          ...(payload !== undefined
+            ? {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': Buffer.byteLength(payload, 'utf8'),
+              }
+            : {}),
         },
         timeout: 5000,
       },
@@ -209,7 +232,14 @@ function queryDaemon<T>(path: string, schema: z.ZodType<T>): Promise<T> {
           try {
             const parsed = JSON.parse(raw) as unknown
             if ((res.statusCode ?? 500) >= 400) {
-              rejectReq(new Error(`Daemon error ${res.statusCode}`))
+              const errMsg =
+                parsed &&
+                typeof parsed === 'object' &&
+                'message' in parsed &&
+                typeof (parsed as { message?: unknown }).message === 'string'
+                  ? (parsed as { message: string }).message
+                  : `Daemon error ${res.statusCode}`
+              rejectReq(new Error(errMsg))
               return
             }
             resolveReq(schema.parse(parsed))
@@ -223,6 +253,7 @@ function queryDaemon<T>(path: string, schema: z.ZodType<T>): Promise<T> {
     req.on('timeout', () => {
       req.destroy(new Error('Daemon request timed out'))
     })
+    if (payload !== undefined) req.write(payload)
     req.end()
   })
 }
@@ -250,6 +281,81 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     EmptyParamsSchema.parse(params)
     return queryDaemon('/providers', z.array(ProviderSummarySchema))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(params)
+    return queryDaemon('/bots', BotsListResponseSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_CREATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = CreateBotInputSchema.parse(params)
+    return queryDaemon('/bots', BotRecordSchema, { method: 'POST', body: input })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = UpdateBotInputSchema.parse(params)
+    return queryDaemon(`/bots/${encodeURIComponent(input.id)}`, BotRecordSchema, {
+      method: 'PATCH',
+      body: input.patch,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_DUPLICATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = BotIdParamsSchema.parse(params)
+    return queryDaemon(`/bots/${encodeURIComponent(id)}/duplicate`, BotRecordSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_DELETE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = BotIdParamsSchema.parse(params)
+    return queryDaemon(
+      `/bots/${encodeURIComponent(id)}`,
+      z.object({ deletedId: BotIdSchema, activeBotId: BotIdSchema.nullable() }),
+      { method: 'DELETE' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.BOTS_SET_ACTIVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const body = SetActiveBotParamsSchema.parse(params)
+    return queryDaemon(
+      '/settings/active-bot',
+      z.object({ activeBotId: BotIdSchema.nullable() }),
+      { method: 'PUT', body },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.AVATAR_IMPORT_SVG, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const body = ImportAvatarSvgInputSchema.parse(params)
+    return queryDaemon('/avatars/import-svg', ImportAvatarSvgResponseSchema, {
+      method: 'POST',
+      body,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_PICK, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(params)
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return WorkspacePickResponseSchema.parse({ canceled: true, path: null })
+    }
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Bot Workspace Directory',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    const chosen = !result.canceled && result.filePaths[0] ? result.filePaths[0] : null
+    return WorkspacePickResponseSchema.parse({
+      canceled: result.canceled || !chosen,
+      path: chosen,
+    })
   })
 }
 

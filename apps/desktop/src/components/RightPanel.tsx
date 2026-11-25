@@ -3,7 +3,7 @@ import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 
 export interface RightPanelProps {
   width: number
-  bot: WorkspaceBot
+  bot: WorkspaceBot | null
   activeTasks: ToolStep[]
   isMockMode: boolean
   onCollapse: () => void
@@ -44,7 +44,7 @@ export function RightPanel({
       <div className="gb-screen-mock" aria-hidden="true">
         <div className="gb-screen-bar">
           <span>● ● ●</span>
-          <span style={{ marginLeft: 'auto' }}>{bot.workspacePath}</span>
+          <span style={{ marginLeft: 'auto' }}>{bot?.workspacePath ?? 'No workspace'}</span>
         </div>
         <div className="gb-screen-body">
           <div className="gb-screen-side" />

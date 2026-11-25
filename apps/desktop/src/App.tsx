@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import type {
+  BotRecord,
+  CreateBotInput,
   DaemonHealthResponse,
   GhostBotBridge,
   ProviderSummary,
+  UpdateBotInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
+import { BotEditorModal } from './components/BotEditorModal.tsx'
 import { ChatComposer } from './components/ChatComposer.tsx'
 import { ChatHeader } from './components/ChatHeader.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
@@ -32,10 +37,30 @@ declare global {
   }
 }
 
+function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
+  return {
+    id: rec.id,
+    name: rec.name,
+    description: rec.description,
+    statusLabel: 'Ready',
+    avatarStatus: 'idle',
+    avatar: rec.avatar,
+    instructions: rec.instructions,
+    workspacePath: rec.workspacePath,
+    modelId: rec.modelId,
+    effort: rec.effort,
+    permission: rec.permission,
+  }
+}
+
 export function App() {
+  const hasBridge = typeof window !== 'undefined' && Boolean(window.ghostBot)
   const [prefs, setPrefs] = useState<UiPreferences>(() => loadUiPreferences())
-  const [bots, setBots] = useState<WorkspaceBot[]>(() => INITIAL_MOCK_BOTS)
-  const [activeBotId, setActiveBotId] = useState<string>('chief')
+  const [bots, setBots] = useState<WorkspaceBot[]>(() => (hasBridge ? [] : INITIAL_MOCK_BOTS))
+  const [activeBotId, setActiveBotId] = useState<string | null>(() =>
+    hasBridge ? null : 'chief',
+  )
+  const [botsLoaded, setBotsLoaded] = useState<boolean>(() => !hasBridge)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>(
     () => INITIAL_MOCK_MESSAGES,
@@ -44,16 +69,20 @@ export function App() {
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
+  const [botEditor, setBotEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
+    open: false,
+    mode: 'create',
+  })
+  const [bannerError, setBannerError] = useState<string | null>(null)
   const [health, setHealth] = useState<DaemonHealthResponse | null>(null)
   const [providers, setProviders] = useState<ProviderSummary[]>([])
 
   const streamTimerRef = useRef<number | null>(null)
 
   const isMockMode = health === null || health.runtimeMode === 'mock'
-  const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0]
-  const activeMessages = messagesByBot[activeBot.id] ?? []
+  const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0] ?? null
+  const activeMessages = activeBot ? (messagesByBot[activeBot.id] ?? []) : []
 
-  // Sync theme & reduced motion attributes
   useEffect(() => {
     const apply = () => {
       document.documentElement.dataset.theme = resolveEffectiveTheme(prefs.theme)
@@ -66,17 +95,20 @@ export function App() {
     return () => media.removeEventListener('change', apply)
   }, [prefs.theme, prefs.reducedMotion])
 
-  // Fetch daemon health & provider status over restricted preload bridge
   useEffect(() => {
     const bridge = window.ghostBot
     if (!bridge) return
-    void Promise.all([bridge.getDaemonHealth(), bridge.listProviders()])
-      .then(([daemonHealth, providerList]) => {
+    void Promise.all([bridge.getDaemonHealth(), bridge.listProviders(), bridge.listBots()])
+      .then(([daemonHealth, providerList, botsRes]) => {
         setHealth(daemonHealth)
         setProviders(providerList)
+        setBots(botsRes.bots.map(recordToWorkspaceBot))
+        setActiveBotId(botsRes.activeBotId ?? botsRes.bots[0]?.id ?? null)
+        setBotsLoaded(true)
       })
-      .catch(() => {
-        // Keep mock mode if daemon IPC is unavailable.
+      .catch((err: unknown) => {
+        setBannerError(err instanceof Error ? err.message : 'Failed to load workspace state')
+        setBotsLoaded(true)
       })
   }, [])
 
@@ -130,8 +162,137 @@ export function App() {
       }
     }
 
-  const updateActiveBot = (patch: Partial<WorkspaceBot>) => {
-    setBots((prev) => prev.map((b) => (b.id === activeBot.id ? { ...b, ...patch } : b)))
+  const handleSelectBot = (id: string) => {
+    setActiveBotId(id)
+    const bridge = window.ghostBot
+    if (bridge) {
+      void bridge.setActiveBot(id).catch((err: unknown) => {
+        setBannerError(err instanceof Error ? err.message : 'Failed to persist active bot')
+      })
+    }
+  }
+
+  const updateActiveBotInline = (patch: Partial<WorkspaceBot>) => {
+    if (!activeBot) return
+    const targetId = activeBot.id
+    setBots((prev) => prev.map((b) => (b.id === targetId ? { ...b, ...patch } : b)))
+    const bridge = window.ghostBot
+    if (bridge) {
+      const ipcPatch: UpdateBotInput['patch'] = {}
+      if (patch.modelId !== undefined) ipcPatch.modelId = patch.modelId
+      if (
+        patch.effort === 'low' ||
+        patch.effort === 'medium' ||
+        patch.effort === 'high'
+      ) {
+        ipcPatch.effort = patch.effort
+      }
+      if (
+        patch.permission === 'read-only' ||
+        patch.permission === 'ask-approval' ||
+        patch.permission === 'workspace'
+      ) {
+        ipcPatch.permission = patch.permission
+      }
+      if (Object.keys(ipcPatch).length > 0) {
+        void bridge.updateBot({ id: targetId, patch: ipcPatch }).catch((err: unknown) => {
+          setBannerError(err instanceof Error ? err.message : 'Failed to save bot setting')
+        })
+      }
+    }
+  }
+
+  const handleCreateBot = async (input: CreateBotInput) => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      const created = await bridge.createBot(input)
+      setBots((prev) => [...prev, recordToWorkspaceBot(created)])
+      setActiveBotId(created.id)
+      return
+    }
+    const localBot: WorkspaceBot = {
+      id: `bot-${Date.now()}`,
+      name: input.name,
+      description: input.description,
+      statusLabel: 'Ready',
+      avatarStatus: 'idle',
+      avatar: input.avatar,
+      instructions: input.instructions,
+      workspacePath: input.workspacePath,
+      modelId: input.modelId,
+      effort: input.effort,
+      permission: input.permission,
+    }
+    setBots((prev) => [...prev, localBot])
+    setActiveBotId(localBot.id)
+  }
+
+  const handleEditBot = async (input: UpdateBotInput) => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      const updated = await bridge.updateBot(input)
+      setBots((prev) =>
+        prev.map((b) => (b.id === updated.id ? { ...b, ...recordToWorkspaceBot(updated) } : b)),
+      )
+      return
+    }
+    setBots((prev) =>
+      prev.map((b) => (b.id === input.id ? { ...b, ...input.patch } : b)),
+    )
+  }
+
+  const handleDuplicateBot = async (id: string) => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      const copy = await bridge.duplicateBot(id)
+      setBots((prev) => [...prev, recordToWorkspaceBot(copy)])
+      setActiveBotId(copy.id)
+      return
+    }
+    const src = bots.find((b) => b.id === id)
+    if (!src) return
+    const copy: WorkspaceBot = {
+      ...src,
+      id: `bot-${Date.now()}`,
+      name: `${src.name.slice(0, 52)} (Copy)`,
+    }
+    setBots((prev) => [...prev, copy])
+    setActiveBotId(copy.id)
+  }
+
+  const handleDeleteBot = async (id: string) => {
+    if (streamingBotId === id) {
+      handleStopStream()
+    }
+    const bridge = window.ghostBot
+    if (bridge) {
+      const res = await bridge.deleteBot(id)
+      setBots((prev) => prev.filter((b) => b.id !== res.deletedId))
+      setActiveBotId(res.activeBotId)
+      return
+    }
+    setBots((prev) => {
+      const next = prev.filter((b) => b.id !== id)
+      setActiveBotId((cur) => (cur === id ? (next[0]?.id ?? null) : cur))
+      return next
+    })
+  }
+
+  const handleImportSvg = async (rawSvg: string, label?: string) => {
+    const bridge = window.ghostBot
+    if (bridge) {
+      return bridge.importAvatarSvg(rawSvg, label)
+    }
+    const res = sanitizeCustomSvg(rawSvg)
+    if (!res.ok) throw new Error(res.reason)
+    return { svgDataUrl: res.dataUrl, label }
+  }
+
+  const handlePickWorkspace = async (): Promise<string | null> => {
+    const bridge = window.ghostBot
+    if (!bridge) return null
+    const res = await bridge.pickWorkspace()
+    return res.canceled ? null : res.path
   }
 
   const handleStopStream = () => {
@@ -158,7 +319,7 @@ export function App() {
   }
 
   const handleSendMock = (overrideText?: string) => {
-    if (!isMockMode || streamingBotId) return
+    if (!activeBot || !isMockMode || streamingBotId) return
     const text = (overrideText ?? draft).trim()
     if (!text) return
     if (!overrideText) setDraft('')
@@ -253,6 +414,7 @@ export function App() {
   }
 
   const handleResolveApproval = (approvalId: string, decision: 'approved' | 'denied') => {
+    if (!activeBot) return
     setMessagesByBot((prev) => ({
       ...prev,
       [activeBot.id]: (prev[activeBot.id] ?? []).map((m) =>
@@ -261,7 +423,7 @@ export function App() {
           : m,
       ),
     }))
-    updateActiveBot({ statusLabel: 'Ready', avatarStatus: 'idle' })
+    updateActiveBotInline({ statusLabel: 'Ready', avatarStatus: 'idle' })
   }
 
   const latestTools =
@@ -279,10 +441,11 @@ export function App() {
           <LeftSidebar
             width={prefs.leftWidth}
             bots={bots}
-            activeBotId={activeBot.id}
+            activeBotId={activeBot?.id ?? null}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            onSelectBot={(id) => setActiveBotId(id)}
+            onSelectBot={handleSelectBot}
+            onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
             onCollapse={() => updatePrefs({ leftCollapsed: true })}
             isMockMode={isMockMode}
@@ -305,31 +468,76 @@ export function App() {
           leftCollapsed={prefs.leftCollapsed}
           rightCollapsed={prefs.rightCollapsed}
           isMockMode={isMockMode}
+          onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
           onToggleLeft={() => updatePrefs({ leftCollapsed: !prefs.leftCollapsed })}
           onToggleRight={() => updatePrefs({ rightCollapsed: !prefs.rightCollapsed })}
         />
 
-        <MessageList
-          bot={activeBot}
-          messages={activeMessages}
-          isMockMode={isMockMode}
-          onReviewDiff={(app) => setDiffApproval(app)}
-          onResolveApproval={handleResolveApproval}
-          onUsePrompt={(text) => handleSendMock(text)}
-        />
+        {bannerError && (
+          <div
+            role="alert"
+            style={{
+              margin: '10px 24px 0',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              border: '1px solid var(--gb-danger)',
+              color: 'var(--gb-danger)',
+              fontSize: '13px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span>{bannerError}</span>
+            <button type="button" onClick={() => setBannerError(null)} aria-label="Dismiss error">
+              ×
+            </button>
+          </div>
+        )}
 
-        <ChatComposer
-          bot={activeBot}
-          draft={draft}
-          isStreaming={streamingBotId !== null}
-          isMockMode={isMockMode}
-          onDraftChange={setDraft}
-          onModelChange={(modelId) => updateActiveBot({ modelId })}
-          onEffortChange={(effort) => updateActiveBot({ effort })}
-          onPermissionChange={(permission: PermissionMode) => updateActiveBot({ permission })}
-          onSend={() => handleSendMock()}
-          onStop={handleStopStream}
-        />
+        {!botsLoaded ? (
+          <div style={{ margin: 'auto', color: 'var(--gb-muted)' }}>Loading bots...</div>
+        ) : activeBot ? (
+          <>
+            <MessageList
+              bot={activeBot}
+              messages={activeMessages}
+              isMockMode={isMockMode}
+              onReviewDiff={(app) => setDiffApproval(app)}
+              onResolveApproval={handleResolveApproval}
+              onUsePrompt={(text) => handleSendMock(text)}
+            />
+
+            <ChatComposer
+              bot={activeBot}
+              draft={draft}
+              isStreaming={streamingBotId !== null}
+              isMockMode={isMockMode}
+              onDraftChange={setDraft}
+              onModelChange={(modelId) => updateActiveBotInline({ modelId })}
+              onEffortChange={(effort) => updateActiveBotInline({ effort })}
+              onPermissionChange={(permission: PermissionMode) =>
+                updateActiveBotInline({ permission })
+              }
+              onSend={() => handleSendMock()}
+              onStop={handleStopStream}
+            />
+          </>
+        ) : (
+          <div style={{ margin: 'auto', textAlign: 'center', padding: '32px' }}>
+            <h2 style={{ margin: '0 0 8px' }}>No bots yet</h2>
+            <p className="gb-muted" style={{ margin: '0 0 16px' }}>
+              Create your first bot to configure its avatar, instructions, and workspace.
+            </p>
+            <button
+              type="button"
+              className="gb-btn-accent"
+              onClick={() => setBotEditor({ open: true, mode: 'create' })}
+            >
+              Create your first bot
+            </button>
+          </div>
+        )}
       </main>
 
       {!prefs.rightCollapsed && (
@@ -360,6 +568,20 @@ export function App() {
         providers={providers}
         onUpdatePreferences={updatePrefs}
         onClose={() => setSettingsOpen(false)}
+      />
+      <BotEditorModal
+        open={botEditor.open}
+        mode={botEditor.mode}
+        initialBot={botEditor.mode === 'edit' ? activeBot : null}
+        canPickWorkspace={hasBridge}
+        canImportSvg={true}
+        onSaveCreate={handleCreateBot}
+        onSaveEdit={handleEditBot}
+        onDuplicate={handleDuplicateBot}
+        onDelete={handleDeleteBot}
+        onImportSvg={handleImportSvg}
+        onPickWorkspace={handlePickWorkspace}
+        onClose={() => setBotEditor((prev) => ({ ...prev, open: false }))}
       />
     </div>
   )
