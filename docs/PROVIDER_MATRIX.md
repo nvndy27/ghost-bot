@@ -1,17 +1,15 @@
-# Provider integration matrix — hypotheses, NOT verified
+# Provider integration matrix
 
-The subscription-first goal does not imply consumer chat entitlements equal coding/runtime/API entitlements. Exact model lists, effort values, quotas, refresh times and eligibility must be discovered. Links below are starting points for official research, not evidence that an integration currently works.
+Evidence reviewed 2026-11-25. A catalog, authenticated handshake, and actual model execution are separate checks.
 
-| Provider | Candidate supported route | P0 status | Discovery / constraints |
-|---|---|---|---|
-| OpenAI ChatGPT | Codex App Server, official account auth | unverified | initialize, auth state, model list, effort, rate-limit fields, approval and sandbox; Codex entitlement may differ from ChatGPT chat |
-| OpenClaw | Gateway RPC / configured agents | unverified | protocol version, scopes, session, agent, tool and approval capabilities; validate supported providers and license |
-| Anthropic Claude | documented Claude integration / API | unverified | verify whether a third-party personal client may use subscription auth; if not, API only with user opt-in |
-| Google Gemini | official Gemini API / eligible coding runtime | unverified | verify current account/plan support; consumer subscription may not provide API usage |
-| Moonshot Kimi | Kimi Code / ACP if supported; API | unverified | verify plan, auth, ACP version, model and quota support |
-| Local | Ollama, LM Studio, llama.cpp | unverified | model discovery, streaming, tools vary per model; local resource limits |
-| OpenRouter | official API | deferred | explicit opt-in, cost accounting |
+| Route | Evidence | Status and limitations |
+|---|---|---|
+| OpenAI via Codex App Server | [Official App Server protocol](https://learn.chatgpt.com/docs/app-server) documents stdio initialization, managed ChatGPT auth, model discovery, quota RPCs, approvals and turn interruption. | **Verified** for isolated local initialize, account response and catalog on 0.172.0. Signed-out catalog returned 11 entries with 62 effort options total. User eligibility, quota, inference, cancellation and sandbox behavior remain unverified. |
+| OpenClaw Gateway | [Handshake](https://docs.openclaw.ai/gateway/protocol/handshake) and [CLI](https://docs.openclaw.ai/cli/gateway) document protocol negotiation, device challenge, scoped operator access and RPCs. | **Verified** for the configured CLI's loopback health RPC on CLI 2026.11.8 (2d4ab29). Gateway version, auth method, delegated scopes, model access, session streaming, and permission enforcement remain unverified. Use a separately scoped identity for a future native adapter. |
+| Anthropic Claude | [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) documents API key authentication and requires prior approval for offering Claude.ai login or rate limits in third-party products. | **Blocked** for subscription login pending explicit vendor approval. API key route documented and **Not Started**. Separate opt-in required. |
+| Google Gemini | [Google transition announcement](https://github.com/google-gemini/gemini-cli/discussions/28017) ended Gemini CLI service for individual free, Pro and Ultra accounts on June 18, 2026. Enterprise and API key routes remain. [Gemini API auth](https://ai.google.dev/gemini-api/docs/api-key). | **Not Started**. Investigate supported Antigravity integration and third-party eligibility before promising subscription access. API support requires separate opt-in. |
+| Moonshot Kimi Code | [Official CLI release notes](https://moonshotai.github.io/kimi-code/en/release-notes/changelog.html) document ACP and effort configuration. | **Not Started** for live ACP negotiation. Verify installed version, official Kimi login, account entitlement, dynamic session config, permissions, and quota disclosure. |
+| Ollama | Official loopback [version](https://docs.ollama.com/api/version) and [model list](https://docs.ollama.com/api/tags) endpoints. | **Blocked** for live verification. No installed CLI or listener at 127.0.0.1:11434. Discovery probe implemented. Validate model-specific chat behavior, streaming and cancellation separately. |
+| LM Studio, llama.cpp, OpenRouter | Deferred. | **Not Started**. |
 
-Research starting points: https://github.com/openclaw/openclaw ; https://docs.openclaw.ai/ ; https://github.com/openai/codex ; https://developers.openai.com/codex/ ; https://docs.anthropic.com/ ; https://ai.google.dev/ ; https://github.com/MoonshotAI ; https://docs.ollama.com/ ; https://lmstudio.ai/docs/ ; https://agentclientprotocol.com/ . Verify current canonical URLs and applicable terms before implementation.
-
-For each probe record date, official URL, installed version, plan type (never account identifiers), auth mechanism, capabilities, exact observed response fields (redacted), pass/fail/blocked, limitations. No hidden endpoints or cookie extraction. No silent fallback. Quota unsupported → null and UI 'Unavailable'; locally counted tokens separate from provider quota.
+Unknown quota stays null. Count observed or estimated local usage separately and label its source. Never substitute an API key account for a subscription account without user opt-in.

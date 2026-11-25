@@ -15,3 +15,9 @@ contextIsolation, sandbox, nodeIntegration:false, restrictive CSP, validate IPC 
 
 ## Meeting assistant
 Only with participant awareness/consent and platform-supported integration; opt-in recording, transcript retention and deletion controls. No covert recording.
+
+## Phase 0 boundary evidence
+
+The isolated Codex profile excludes inherited API keys and user configuration. The OpenClaw probe uses existing CLI-managed credentials and refuses a nonmatching Gateway URL. Probes emit summaries only. Never use them as a production credential broker or expose them through renderer IPC.
+
+The preflight tests exercise deny-by-default capability selection. No execution permission mode is enabled by Phase 0 evidence. Before enabling one, test direct tool calls, native commands, plugin/MCP paths, absolute and symlinked paths, and external side effects against the actual runtime boundary.

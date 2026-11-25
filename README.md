@@ -21,3 +21,7 @@ For the future implementation, use a normal user account; install current suppor
 
 ## Status / boundaries
 No provider credentials, subscriptions, live quota, real agent execution, automation or computer use have been connected or tested. Provider eligibility and official APIs must be verified in Phase 0. The source screenshots may include third-party material: keep them internal as references, not distributable production assets. Original SVG presets are distinct from third-party icon files. No third-party source code is vendored. A production project license has not been chosen.
+
+## Phase 0 development
+
+Run `npm test` with Node 24 or later. See [probe commands](scripts/README.md), [provider evidence](docs/PROVIDER_MATRIX.md), [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md). The screenshots remain local under `design/references/` pending distribution rights.

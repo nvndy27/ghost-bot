@@ -31,3 +31,7 @@ Renderer has no Node, secrets or direct CLI. Preload exposes allowlisted typed c
 
 ## Deployment
 Start single-user local. Bind IPC/daemon to local socket or loopback with random auth token and origin validation. Keep no internet-exposed gateway by default. Fedora systemd user service later with explicit enablement; sleep/shutdown interrupts local schedules. Remote worker only after threat model and encrypted transport. Electron sandbox/contextIsolation on, nodeIntegration off, CSP, strict navigation and external-link handling. Verify Wayland compatibility.
+
+## Phase 0 evidence
+
+See [provider matrix](PROVIDER_MATRIX.md) for the observed Codex and OpenClaw surfaces. [ADR 0003](adr/0003-provider-probes-and-permissions.md) records how discovery evidence and execution permissions are evaluated. The proposed initial SQLite migration scope and transactional projection rules are in [DB schema](DB_SCHEMA.md).

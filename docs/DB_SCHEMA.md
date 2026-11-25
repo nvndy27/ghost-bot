@@ -22,3 +22,13 @@ All IDs UUID/ULID; UTC timestamps except stored routine timezone. Foreign keys o
 | settings | key, value_json, updated_at |
 
 Use cascade only for clearly owned ephemeral rows; user deletion must consider artifacts and runtime remote data separately. Index sessions(agent_id,created_at), events(run_id,seq), routines(enabled,next_run_at), usage(account_id,observed_at), tasks(status). Store avatar config not redundant raster images. Persist canonical app event projection, runtime mapping and reconnect cursor; avoid duplicating full runtime databases. Migration SQL to be implemented after Phase 0.
+
+## First migration design
+
+Create provider accounts, model profiles, agents, sessions, runs, run events, messages and approvals in dependency order. Defer teams, memory and schedules until their vertical slices. Create the SQLite database beneath the application data directory with user-only permissions. Enable foreign keys on every connection and use one daemon writer. Keep run creation, event insertion, cursor advancement and message projection transactional.
+
+- Store external session IDs under a unique `(runtime_id, account_id, external_session_id)` key. Bind runs to the session's account and runtime and persist the selected model, effort and permission snapshot at creation.
+- Use `(run_id, seq)` as the event key, with a positive integer sequence starting at 1. Keep upstream checkpoints separate from the app sequence. Check terminal state before appending or projecting events.
+- Give each client run request a unique `(session_id, idempotency_key)`. Reusing the key with different input fails. Pin message order independently of timestamps.
+- Bind approvals to run, action hash, scope and expiry. Consume an allowed approval with a conditional update in a transaction. Expire outstanding approvals on restart. Keep ambiguous execution outcomes for reconciliation.
+- Use opaque keyring references for credentials. Exclude raw provider payloads, private reasoning, and unredacted tool arguments from the durable event stream.

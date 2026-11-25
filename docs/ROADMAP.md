@@ -1,13 +1,16 @@
 # Roadmap
 
-All items are planned unless explicitly marked complete. Estimates intentionally omitted until Phase 0 results. The UI prototype is not a completed production milestone.
+States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. See [progress](PROGRESS.md) for test evidence.
 
 ## Phase 0 — Technical proof
-- [ ] Verify OpenClaw protocol and auth; run minimal gateway probe.
-- [ ] Verify Codex App Server account eligibility, initialize/model/effort/quota/approval events.
-- [ ] Investigate permitted Claude/Gemini/Kimi integrations and Ollama; update matrix.
-- [ ] Normalize capabilities/events, clarify ownership, test fail-closed permissions and cancellation.
-- [ ] Record reproducible commands/results, blockers, decisions; review gate before Phase 1.
+
+- **Verified** — Starter kit audit, project rename, Git initialization and initial private GitHub push.
+- **Verified** — OpenClaw CLI health and isolated Codex App Server initialize/account/model/effort discovery.
+- **Tested** — Model metadata normalization and fail-closed permission preflight.
+- **Implemented** — Runtime event envelope, SQLite design, security boundary and provider research.
+- **Blocked** — Live Ollama discovery requires a local service.
+- **Not Started** — Account-bound Codex quota, streaming, interruption and permission proof. Native OpenClaw session and permission verification.
+- **In Progress** — Phase 0 exit review. Phase 1 remains gated on the review of provider and permission gaps.
 
 ## Phase 1 — Desktop foundation
 - [ ] Electron + React TS + Vite + pnpm workspace, lint/typecheck/test pipeline.

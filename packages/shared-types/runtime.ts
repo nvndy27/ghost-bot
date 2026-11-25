@@ -1,4 +1,4 @@
-// Proposed app-level contracts. Not a provider SDK. Verify via Phase 0.
+// App-level runtime contracts. Provider adapters validate and normalize upstream messages.
 export type PermissionMode = 'read-only' | 'ask-approval' | 'workspace' | 'full-access';
 export type AuthKind = 'subscription' | 'api-key' | 'local';
 export type AuthState = { status: 'connected' | 'disconnected' | 'pending' | 'error'; detail?: string };
@@ -30,4 +30,15 @@ export interface AgentRuntime {
   run(request: AgentRequest): AsyncIterable<AgentEvent>;
   resolveApproval(decision: ApprovalDecision): Promise<void>;
   cancel(runId: string): Promise<void>;
+}
+
+/** Durable wire format emitted by the daemon after validation and redaction. */
+export interface RuntimeEventV1 {
+  version: 1;
+  runtimeId: string;
+  sessionId: string;
+  runId: string;
+  seq: number;
+  timestamp: string;
+  payload: EventPayload;
 }
