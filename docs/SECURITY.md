@@ -16,6 +16,12 @@ contextIsolation, sandbox, nodeIntegration:false, restrictive CSP, validate IPC 
 ## Meeting assistant
 Only with participant awareness/consent and platform-supported integration; opt-in recording, transcript retention and deletion controls. No covert recording.
 
+## Phase 1C persistence and custom SVG boundary
+
+- SQLite persistence (`ghost-bot.sqlite`) is owned exclusively by `@ghost-bot/daemon` under a `0700` data directory with `0600` file permissions, separate from the `0700` Unix socket runtime directory. Foreign keys and `BEGIN IMMEDIATE` transactions are enforced on every connection.
+- Custom SVG avatar imports (`packages/avatar/svg-sanitizer.ts`) are validated at the daemon boundary using `isomorphic-dompurify` plus an explicit pre- and post-parse allowlist: max 32 KB, max 150 elements, no XML DTD/ENTITY declarations, no `<script>` / `<foreignObject>` / `<image>` / `<use>` / `<animate>` / `<style>`, no `on*` event handlers, and no external URLs (`http://`, `https://`, `javascript:`, `data:` except the exact `xmlns="http://www.w3.org/2000/svg"` namespace). Approved SVGs are stored and rendered solely as inert `data:image/svg+xml;base64,...` `<img>` sources without `dangerouslySetInnerHTML`.
+- `full-access` permission remains rejected at both Zod IPC schemas (`BotPermissionSchema`) and daemon persistence routes.
+
 ## Phase 0 boundary evidence
 
 The Codex App Server adapter (`packages/runtime-adapters/codex/codex-app-server.ts`) uses a dedicated persistent profile (`~/.config/ghost-bot/codex-profile`), never touches `~/.codex`, and strips `OPENAI_API_KEY` / `CODEX_API_KEY` from the child environment so subscription-first execution cannot silently fall back to paid API keys.

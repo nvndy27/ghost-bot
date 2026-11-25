@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 1C — Bot management, SQLite persistence, and Avatar Editor
+- Added SQLite persistence in `@ghost-bot/daemon` using `node:sqlite` (`DatabaseSync`) + `drizzle-orm` ([ADR 0005](docs/adr/0005-node-sqlite-and-drizzle.md)) with `0700`/`0600` permissions, `PRAGMA foreign_keys = ON`, transactional migrations (`schema_migrations`), and single-time first-launch seeding.
+- Added Bot CRUD (`list`, `create`, `update`, `duplicate`, `delete`, `setActiveBot`), audit logging, and directory picker IPC behind Zod validation (`packages/shared-types/ipc.ts`).
+- Added full Ghost Avatar Editor (`BotEditorModal.tsx`) with 12 presets, 12-color palette, 4 eye styles, rotation, randomize, reset, 7-state preview, and strict custom SVG sanitization (`packages/avatar/svg-sanitizer.ts`) rendered via inert `<img>` data URLs.
+- Added `tests/db-persistence.test.ts`, `tests/svg-sanitizer.test.ts`, `scripts/verify-electron-persistence.mjs`, and `scripts/verify-phase-1c-ui.mjs` (32/32 unit tests + real 3-launch Electron persistence E2E passing).
+
 ### Phase 1B — Main workspace UI & Phase 1A hardening
 - Hardened Phase 1A daemon runtime dir (`0700`) and Unix socket (`0600`), exact URL/origin navigation checks, loopback-only dev URLs, WebContents + mainFrame IPC sender validation, version-bound Codex permission evidence, and enhanced Electron smoke verification; merged Phase 1A into `main`.
 - Implemented the three-panel React workspace (`LeftSidebar`, `ChatHeader`, `MessageList`, `ChatComposer`, `RightPanel`, `DiffPreviewModal`, `SettingsModal`, `BotAvatar`) using `design/tokens.json` and all 12 `avatarPresets`.

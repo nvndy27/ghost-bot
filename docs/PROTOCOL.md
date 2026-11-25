@@ -10,4 +10,9 @@ Capability negotiation: supported effort strings and policy modes per runtime/mo
 
 The proposed wire envelope is `RuntimeEventV1` with `version: 1`, runtime/session/run identifiers, a positive contiguous sequence per run starting at 1, an RFC 3339 UTC event timestamp and a discriminated payload. The daemon validates and redacts before assigning sequence and persisting. Consumers replay after the last committed sequence, ignore duplicates and resync on gaps. An unresolved interrupt leaves the run outcome unresolved until reconciliation confirms a terminal event.
 
-Codex discovery metadata has its own type. A model catalog cannot supply evidence that tools, attachments, approvals or a sandbox work. Permission preflight requires verified enforcement for the runtime and mode. Actual execution must also enforce the scoped action, approval expiry, request hash and sandbox containment.
+## Phase 1C IPC surface (implemented)
+
+Allowlisted typed IPC channels in `packages/shared-types/ipc.ts` (validated by `WebContents` + `mainFrame` + Zod in Electron main and authenticated via Bearer token on the daemon Unix socket):
+- `ghost:app:info`, `ghost:daemon:health`, `ghost:providers:list`
+- `ghost:bots:list`, `ghost:bots:create`, `ghost:bots:update`, `ghost:bots:duplicate`, `ghost:bots:delete`, `ghost:bots:set-active`
+- `ghost:avatar:import-svg`, `ghost:workspace:pick`
