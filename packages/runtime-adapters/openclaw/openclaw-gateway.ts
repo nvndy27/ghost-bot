@@ -108,6 +108,7 @@ class CliOpenClawTransport implements OpenClawGatewayTransport {
       ],
       {
         timeout: this.timeoutMs + 3000,
+        maxBuffer: 1024 * 1024,
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
@@ -179,8 +180,12 @@ export class OpenClawGatewayAdapter implements AgentRuntime {
         verifiedModes: [],
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'OpenClaw Gateway unreachable'
-      const authRequired = /auth|token|password|unauthorized|401/i.test(msg)
+      const rawMsg = err instanceof Error ? err.message : 'OpenClaw Gateway unreachable'
+      const msg = rawMsg
+        .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+        .replace(/(token|password|secret|key)\s*[=:]\s*\S+/gi, '$1=[REDACTED]')
+        .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
+      const authRequired = /auth|token|password|unauthorized|401/i.test(rawMsg)
       return {
         available: false,
         runtimeVersion: null,

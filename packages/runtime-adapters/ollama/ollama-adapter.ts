@@ -14,6 +14,8 @@ import type {
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 export const OLLAMA_MAX_HISTORY_MESSAGES = 24
+export const OLLAMA_MAX_HISTORY_BYTES = 32 * 1024
+export const OLLAMA_MAX_STREAM_BYTES = 2 * 1024 * 1024
 
 export function assertLoopbackOllamaUrl(rawUrl: string): string {
   let parsed: URL
@@ -187,7 +189,17 @@ export class OllamaLocalAdapter implements AgentRuntime {
     let seq = 0
     let assistantText = ''
 
-    const boundedHistory = state.history.slice(-OLLAMA_MAX_HISTORY_MESSAGES)
+    const recentTurns = state.history.slice(-OLLAMA_MAX_HISTORY_MESSAGES)
+    const boundedHistory: Array<{ role: 'user' | 'assistant'; content: string }> = []
+    let historyBytes = 0
+    for (let i = recentTurns.length - 1; i >= 0; i -= 1) {
+      const turn = recentTurns[i]
+      if (!turn) continue
+      const turnBytes = Buffer.byteLength(turn.content, 'utf8')
+      if (historyBytes + turnBytes > OLLAMA_MAX_HISTORY_BYTES) break
+      historyBytes += turnBytes
+      boundedHistory.unshift(turn)
+    }
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = []
     if (state.config.instructions.trim()) {
       messages.push({ role: 'system', content: state.config.instructions.trim() })
@@ -225,10 +237,25 @@ export class OllamaLocalAdapter implements AgentRuntime {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let totalStreamBytes = 0
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        totalStreamBytes += value.byteLength
+        if (totalStreamBytes > OLLAMA_MAX_STREAM_BYTES) {
+          ctrl.abort()
+          seq += 1
+          yield {
+            type: 'run.failed',
+            runId: request.runId,
+            seq,
+            timestamp: new Date().toISOString(),
+            code: 'OLLAMA_RESPONSE_TOO_LARGE',
+            message: `Ollama stream exceeded ${OLLAMA_MAX_STREAM_BYTES} bytes limit`,
+          }
+          return
+        }
         buffer += decoder.decode(value, { stream: true })
         let nlIdx = buffer.indexOf('\n')
         while (nlIdx !== -1) {

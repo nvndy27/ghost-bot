@@ -17,7 +17,7 @@
     "build": "vite build && tsc -p tsconfig.electron.json && node scripts/bundle-daemon.mjs",
     "package:linux": "pnpm build && electron-builder --linux --config electron-builder.yml --publish never",
     "package:appimage": "pnpm build && electron-builder --linux AppImage --config electron-builder.yml --publish never",
-    "package:rpm": "pnpm build && electron-builder --linux rpm --config electron-builder.yml --publish never"
+    "package:rpm": "pnpm build && electron-builder --linux dir --config electron-builder.yml --publish never && node scripts/build-rpm.mjs"
   },
   "dependencies": {
     "@ghost-bot/avatar": "workspace:*",

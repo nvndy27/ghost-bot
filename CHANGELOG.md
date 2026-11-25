@@ -7,7 +7,7 @@
 - Added optional `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`) with loopback HTTP validation, `/api/version` + `/api/tags` discovery, bounded stateless `/api/chat` NDJSON streaming, `AbortController` cancellation, and `read-only` enforcement.
 - Hardened `JsonRpcClient.close()` to wait for actual child process exit and reject on failed termination, and updated `RunOrchestrator.reconcileOnStartup()` to reconstruct durable quarantine for interrupted `cancelling` runs.
 - Polished `RightPanel.tsx` and `SettingsModal.tsx` usage/rate-limit displays (source, account/plan, used/remaining %, reset timestamp, last refresh, stale status) and increased `ghost:providers:list` timeout to 15s.
-- Added `tests/openclaw-adapter.test.ts`, `tests/ollama-adapter.test.ts`, `tests/phase-2e-mvp.test.ts` (61/61 unit tests across 3 consecutive runs), `scripts/verify-phase-2e-acceptance.mjs` (4 screenshots in `design/reviews/phase-2e/`), `verify:offline` script, and `docs/PHASE2_RELEASE_REPORT.md`.
+- Added `apps/desktop/scripts/build-rpm.mjs` (`pnpm package:rpm` via native `/usr/bin/rpmbuild` v6.1.0), `tests/openclaw-adapter.test.ts`, `tests/ollama-adapter.test.ts`, `tests/phase-2e-mvp.test.ts` (62/62 unit tests across 3 consecutive runs), `scripts/verify-phase-2e-acceptance.mjs` (process-tree RSS/PSS/CPU + 4 screenshots in `design/reviews/phase-2e/`), `verify:offline` script, and `docs/PHASE2_RELEASE_REPORT.md`.
 
 ### Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
 - Added `RuntimeLifecycleState`, deduplicated `RuntimeRegistry.reconnect()`, and `closeOwnedClient()` (`apps/daemon/src/runtime/registry.ts`).

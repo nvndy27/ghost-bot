@@ -17,14 +17,24 @@ await mkdir(outDir, { recursive: true })
 const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-2e-ux-'))
 const consoleErrors = []
 
-async function readProcRssMb(pid) {
+async function readProcMemMb(pid) {
+  let rssMb = null
+  let pssMb = null
   try {
     const status = await readFile(`/proc/${pid}/status`, 'utf8')
-    const match = /VmRSS:\s+(\d+)\s+kB/.exec(status)
-    return match ? Number((Number(match[1]) / 1024).toFixed(1)) : null
+    const m = /VmRSS:\s+(\d+)\s+kB/.exec(status)
+    if (m) rssMb = Number((Number(m[1]) / 1024).toFixed(1))
   } catch {
-    return null
+    // ignore
   }
+  try {
+    const smaps = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8')
+    const m = /Pss:\s+(\d+)\s+kB/.exec(smaps)
+    if (m) pssMb = Number((Number(m[1]) / 1024).toFixed(1))
+  } catch {
+    // ignore
+  }
+  return { rssMb, pssMb }
 }
 
 async function launchDesktop() {
@@ -42,6 +52,7 @@ async function launchDesktop() {
 }
 
 const metrics = {
+  scope: 'application-only (Electron main/renderer/GPU + @ghost-bot/daemon; zero external AI runtime)',
   environment: {
     platform: process.platform,
     arch: process.arch,
@@ -51,10 +62,19 @@ const metrics = {
   coldStartupMs: 0,
   warmStartupMs: 0,
   daemonRssMb: null,
+  daemonPssMb: null,
+  totalTreeRssMb: null,
+  totalTreePssMb: null,
+  rendererMemoryMb: null,
+  gpuMemoryMb: null,
+  idleCpuPercent: null,
+  repeatedSwitchesMs: 0,
+  repeatedRunsMs: 0,
   streamingDurationMs: 0,
   metadataRefreshMs: 0,
   historyLoadMs: 0,
   shutdownMs: 0,
+  daemonExitedCleanly: false,
 }
 
 try {
@@ -72,10 +92,33 @@ try {
 
     const health = await page.evaluate(() => window.ghostBot.getDaemonHealth())
     assert.equal(health.ok, true)
-    metrics.daemonRssMb = await readProcRssMb(health.pid)
+    const daemonPid = health.pid
+    const daemonMem = await readProcMemMb(daemonPid)
+    metrics.daemonRssMb = daemonMem.rssMb
+    metrics.daemonPssMb = daemonMem.pssMb
 
-    // Idle check (1s): verify no active runs / errors while idle
-    await page.waitForTimeout(1000)
+    // Idle CPU & process-tree RSS/PSS over a 2-second observation interval
+    const appMetricsBefore = await app1.evaluate(({ app }) => app.getAppMetrics())
+    await page.waitForTimeout(2000)
+    const appMetricsAfter = await app1.evaluate(({ app }) => app.getAppMetrics())
+    const idleCpuSum = appMetricsAfter.reduce((acc, m) => acc + (m.cpu?.percentCPUUsage ?? 0), 0)
+    metrics.idleCpuPercent = Number(idleCpuSum.toFixed(2))
+
+    let treeRss = daemonMem.rssMb ?? 0
+    let treePss = daemonMem.pssMb ?? 0
+    for (const proc of appMetricsAfter) {
+      const mem = await readProcMemMb(proc.pid)
+      if (mem.rssMb !== null) treeRss += mem.rssMb
+      if (mem.pssMb !== null) treePss += mem.pssMb
+      if (proc.type === 'Tab') {
+        metrics.rendererMemoryMb = Number(((proc.memory?.workingSetSize ?? 0) / 1024).toFixed(1))
+      } else if (proc.type === 'GPU') {
+        metrics.gpuMemoryMb = Number(((proc.memory?.workingSetSize ?? 0) / 1024).toFixed(1))
+      }
+    }
+    metrics.totalTreeRssMb = Number(treeRss.toFixed(1))
+    metrics.totalTreePssMb = Number(treePss.toFixed(1))
+    void appMetricsBefore
 
     // 2. Create and edit bot
     await page.getByRole('button', { name: 'Create bot' }).click()
@@ -182,6 +225,13 @@ try {
     const shutdownStart = performance.now()
     await app1.close()
     metrics.shutdownMs = Math.round(performance.now() - shutdownStart)
+    // Verify owned daemon exited cleanly
+    try {
+      process.kill(daemonPid, 0)
+      metrics.daemonExitedCleanly = false
+    } catch {
+      metrics.daemonExitedCleanly = true
+    }
   } catch (err) {
     await app1.close().catch(() => undefined)
     throw err
