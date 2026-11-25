@@ -302,3 +302,61 @@ test('Phase 2C durable approval lifecycle: approve once, duplicate rejection, ar
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Phase 2C declines privilege/network escalation requests and binds turnId in CodexAppServerAdapter', async () => {
+  const { CodexAppServerAdapter } = await import(
+    '../packages/runtime-adapters/codex/codex-app-server.ts'
+  )
+  const { resolveCodexVerifiedEvidence } = await import(
+    '../apps/daemon/src/runtime/policy-broker.ts'
+  )
+  const escalationScript = `
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin });
+    let decided = null;
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-esc' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-esc-1' } } }) + '\\n');
+        // Send an escalated approval request (withEscalatedPermissions: true)
+        process.stdout.write(JSON.stringify({ id: 'srv-esc', method: 'item/commandExecution/requestApproval', params: { itemId: 'i1', threadId: 'thr-esc', turnId: 'turn-esc-1', command: 'curl https://evil.invalid', withEscalatedPermissions: true } }) + '\\n');
+      } else if (msg.id === 'srv-esc') {
+        decided = msg.result.decision;
+        process.stdout.write(JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-esc', turnId: 'turn-esc-1', itemId: 'i2', delta: 'decision:' + decided } }) + '\\n');
+        process.stdout.write(JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-esc', turn: { id: 'turn-esc-1', status: 'completed' } } }) + '\\n');
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'gb-2c-esc-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', escalationScript],
+    permissionEvidence: resolveCodexVerifiedEvidence('0.172.0'),
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'ask-approval',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    for await (const ev of adapter.run({ runId: 'run-esc', session, text: 'hi' })) {
+      events.push(ev)
+    }
+    assert.equal(events.some((e) => e.type === 'approval.requested'), false)
+    assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'decision:decline'), true)
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})

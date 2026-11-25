@@ -66,6 +66,7 @@ interface ActiveRun {
 interface PendingApproval {
   approvalId: string
   runId: string
+  turnId: string
   argsHash: string
   expiresAtMs: number
   timer: NodeJS.Timeout
@@ -635,6 +636,16 @@ export class CodexAppServerAdapter implements AgentRuntime {
         'Approval decision mismatch on runId or argsHash',
       )
     }
+    const active = this.activeRunsById.get(decision.runId)
+    if (!active || active.done || active.turnId !== pending.turnId) {
+      this.pendingApprovals.delete(decision.approvalId)
+      clearTimeout(pending.timer)
+      pending.resolve('decline')
+      throw new JsonRpcClientError(
+        'TRANSPORT_ERROR',
+        'Approval request is no longer bound to the active turn',
+      )
+    }
     if (Date.now() > pending.expiresAtMs) {
       this.pendingApprovals.delete(decision.approvalId)
       clearTimeout(pending.timer)
@@ -818,12 +829,25 @@ export class CodexAppServerAdapter implements AgentRuntime {
       if (typeof p.turnId === 'string' && p.turnId !== active.turnId) {
         return { decision: 'decline' }
       }
+      // Fail closed on privilege/network escalation requests outside configured sandbox.
+      if (
+        p.withEscalatedPermissions === true ||
+        p.escalated === true ||
+        p.networkAccess === true ||
+        p.additionalPermissions !== undefined ||
+        p.grantRoot !== undefined
+      ) {
+        return { decision: 'decline' }
+      }
       const approvalId =
         typeof p.approvalId === 'string'
           ? p.approvalId
           : typeof p.itemId === 'string'
             ? p.itemId
             : randomUUID()
+      if (this.pendingApprovals.has(approvalId)) {
+        return { decision: 'decline' }
+      }
       const argsHash = stableHash({ method: req.method, params: p })
       const timeoutMs = this.options.approvalTimeoutMs ?? 60_000
       const expiresAtMs = Date.now() + timeoutMs
@@ -836,6 +860,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
               ? p.reason
               : req.method
 
+      const boundTurnId = active.turnId
       return new Promise<{ decision: 'accept' | 'decline' }>((resolveDecision) => {
         const timer = setTimeout(() => {
           if (this.pendingApprovals.delete(approvalId)) {
@@ -846,6 +871,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
         this.pendingApprovals.set(approvalId, {
           approvalId,
           runId: active.runId,
+          turnId: boundTurnId,
           argsHash,
           expiresAtMs,
           timer,
@@ -859,6 +885,7 @@ export class CodexAppServerAdapter implements AgentRuntime {
           argsHash,
           summary,
           expiresAt: new Date(expiresAtMs).toISOString(),
+          turnId: boundTurnId,
         })
       })
     }

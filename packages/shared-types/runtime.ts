@@ -12,7 +12,7 @@ export interface ApprovalDecision { approvalId: string; runId: string; argsHash:
 export type EventPayload =
   | { type: 'message.delta'; text: string }
   | { type: 'tool.started' | 'tool.completed'; tool: string; callId: string; summary: string }
-  | { type: 'approval.requested'; approvalId: string; tool: string; argsHash: string; summary: string; expiresAt: string }
+  | { type: 'approval.requested'; approvalId: string; tool: string; argsHash: string; summary: string; expiresAt: string; turnId?: string }
   | { type: 'usage.updated'; usage: UsageSnapshot }
   | { type: 'artifact.created'; artifactId: string; name: string }
   | { type: 'run.completed' | 'run.cancelled' }

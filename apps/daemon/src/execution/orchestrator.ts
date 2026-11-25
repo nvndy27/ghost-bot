@@ -168,7 +168,7 @@ export class RunOrchestrator {
   private readonly settingsRepo?: SettingsRepository
   private readonly policyBroker: RuntimePolicyBroker
   private readonly activeControls = new Map<string, ActiveRunControl>()
-  private readonly sessionsWithUnconfirmedStop = new Set<string>()
+  private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
 
   constructor(dbHandle: DatabaseHandle, options?: RunOrchestratorOptions) {
@@ -340,12 +340,17 @@ export class RunOrchestrator {
       })
     }
 
-    if (this.sessionsWithUnconfirmedStop.has(input.sessionId)) {
-      throw new DaemonError(
-        'RUN_STOP_UNCONFIRMED',
-        `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
-        { statusCode: 409, retryable: true },
-      )
+    const unconfirmedGen = this.sessionsWithUnconfirmedStop.get(input.sessionId)
+    if (unconfirmedGen !== undefined) {
+      const currentGen = this.runtimeRegistry?.getGeneration() ?? 0
+      if (unconfirmedGen === currentGen) {
+        throw new DaemonError(
+          'RUN_STOP_UNCONFIRMED',
+          `Previous run cancellation in session "${input.sessionId}" has not been confirmed stopped by the runtime.`,
+          { statusCode: 409, retryable: true },
+        )
+      }
+      this.sessionsWithUnconfirmedStop.delete(input.sessionId)
     }
 
     // Preflight read of session & bot to prepare async Codex verification before atomic transaction.
@@ -798,7 +803,6 @@ export class RunOrchestrator {
           control,
         }).finally(() => {
           if (control.cancelTimeout) clearTimeout(control.cancelTimeout)
-          this.sessionsWithUnconfirmedStop.delete(input.sessionId)
           this.activeControls.delete(txResult.run.id)
         })
       } else {
@@ -888,7 +892,10 @@ export class RunOrchestrator {
             try {
               const cur = this.getRun(runId)
               if (!isTerminalStatus(cur.status)) {
-                this.sessionsWithUnconfirmedStop.add(cur.sessionId)
+                this.sessionsWithUnconfirmedStop.set(
+                  cur.sessionId,
+                  this.runtimeRegistry?.getGeneration() ?? 0,
+                )
                 this.finalizeRun({
                   runId,
                   sessionId: cur.sessionId,
@@ -1772,7 +1779,7 @@ export class RunOrchestrator {
                  thread_id, turn_id, provider_request_id, action_type, action_summary,
                  args_json, args_hash, permission_mode, status, decision_meta_json,
                  created_at, expires_at, resolved_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)`,
             )
             .run(
               ev.approvalId,
@@ -1782,6 +1789,7 @@ export class RunOrchestrator {
               generation,
               accountKey,
               providerSession.externalId,
+              ev.turnId ?? null,
               ev.approvalId,
               ev.tool,
               redactSecrets(ev.summary),
@@ -1863,6 +1871,7 @@ export class RunOrchestrator {
           }
         } else if (ev.type === 'run.completed') {
           sawTerminal = true
+          this.sessionsWithUnconfirmedStop.delete(sessionId)
           flushCodexBuffer(true)
           this.finalizeRun({
             runId,
@@ -1878,6 +1887,7 @@ export class RunOrchestrator {
           break
         } else if (ev.type === 'run.cancelled') {
           sawTerminal = true
+          this.sessionsWithUnconfirmedStop.delete(sessionId)
           flushCodexBuffer(true)
           const cancelledText =
             accumulatedText.trim().length > 0

@@ -23,7 +23,7 @@ Gate: restart persistence, UI matches references, offline integration tests pass
 ## Phase 2 — Functional MVP
 - [x] Phase 2A — Daemon-owned session, run, event, and message persistence foundation (**Verified**; merged to `main` at `2ffc521`).
 - [x] Phase 2B — Live read-only Codex execution, thread continuity, streaming, and cancellation (**Verified**; 3-turn live Electron+Codex E2E and offline suites passed).
-- [ ] Phase 2C — Live tools, durable interactive approvals, and workspace-write permissions (**Implemented & Offline-Tested** on `feat/phase-2c-tools-approvals`; awaiting authorized live tool/approval probe).
+- [x] Phase 2C — Live tools, durable interactive approvals, and workspace-write permissions (**Verified**; live Deny + Approve once + canary containment + 53/53 tests passed).
 - [ ] Real verified Codex integration; connect/disconnect/stream/cancel/resume.
 - [ ] OpenClaw adapter if verified; optional local Ollama.
 - [ ] Dynamic model/effort, actual permission enforcement, approval/diff display.
