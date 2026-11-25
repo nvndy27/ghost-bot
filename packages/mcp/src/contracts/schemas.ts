@@ -100,6 +100,7 @@ export const McpServerConfigSchema = z
     trustState: McpTrustStateSchema,
     configFingerprint: Sha256HexSchema,
     trustedFingerprint: Sha256HexSchema.nullable(),
+    trustedBinaryDigest: Sha256HexSchema.nullable().default(null),
     connectTimeoutMs: z.number().int().min(500).max(MCP_LIMITS.maxTimeoutMs).default(MCP_LIMITS.defaultConnectTimeoutMs),
     requestTimeoutMs: z.number().int().min(500).max(MCP_LIMITS.maxTimeoutMs).default(MCP_LIMITS.defaultRequestTimeoutMs),
     createdAt: UtcTimestampSchema,

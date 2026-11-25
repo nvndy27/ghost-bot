@@ -22,7 +22,20 @@ function assertBoundedSchema(value: unknown, depth = 0): void {
   if (Array.isArray(value)) {
     for (const item of value) assertBoundedSchema(item, depth + 1)
   } else if (value !== null && typeof value === 'object') {
-    for (const item of Object.values(value)) assertBoundedSchema(item, depth + 1)
+    const obj = value as Record<string, unknown>
+    if (typeof obj.$ref === 'string' && /^https?:\/\//i.test(obj.$ref)) {
+      throw new McpProtocolError('Discovered tool schema must not contain remote $ref URLs')
+    }
+    if ('$dynamicRef' in obj || '$recursiveRef' in obj) {
+      throw new McpProtocolError('Discovered tool schema contains unsupported dynamic/recursive $ref')
+    }
+    if (typeof obj.pattern === 'string' && obj.pattern.length > MCP_LIMITS.maxSchemaPatternLength) {
+      throw new McpProtocolError('Discovered tool schema pattern exceeds maximum length')
+    }
+    if (Array.isArray(obj.enum) && obj.enum.length > MCP_LIMITS.maxSchemaEnumItems) {
+      throw new McpProtocolError('Discovered tool schema enum exceeds maximum items')
+    }
+    for (const item of Object.values(obj)) assertBoundedSchema(item, depth + 1)
   }
 }
 
@@ -191,7 +204,7 @@ export async function discoverServerCapabilities(
   assertUniqueCapabilities(resourceTemplates, (template) => template.uriTemplate, 2048)
   assertUniqueCapabilities(prompts, (prompt) => prompt.name, MCP_LIMITS.maxCapabilityNameLength)
 
-  return McpCapabilitySnapshotSchema.parse({
+  const snapshot = McpCapabilitySnapshotSchema.parse({
     serverId: params.serverId,
     configFingerprint: params.configFingerprint,
     connectionGeneration: params.connectionGeneration,
@@ -201,4 +214,11 @@ export async function discoverServerCapabilities(
     resourceTemplates,
     prompts,
   })
+  const totalBytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8')
+  if (totalBytes > MCP_LIMITS.maxTotalDiscoveryBytes) {
+    throw new McpProtocolError(
+      `Total discovered capability snapshot exceeds limit (${MCP_LIMITS.maxTotalDiscoveryBytes} bytes)`,
+    )
+  }
+  return snapshot
 }

@@ -34,7 +34,7 @@ import {
   authorizeMcpToolInvocation,
   validateMcpAuthContext,
 } from '../security/authorization.ts'
-import { validateStdioLaunchPaths } from '../security/path-guard.ts'
+import { computeLaunchBinaryDigestSync, validateStdioLaunchPaths } from '../security/path-guard.ts'
 import { buildMinimalChildEnv } from '../security/redaction.ts'
 import { assertServerTrustedForLaunch } from '../security/trust.ts'
 import { BoundedStdioClientTransport } from '../transport/bounded-stdio.ts'
@@ -164,6 +164,14 @@ export class McpConnectionManager {
       assertServerTrustedForLaunch(current)
       if (current.configFingerprint !== server.configFingerprint) {
         throw new McpTrustError('MCP configuration changed during connection')
+      }
+      if (current.trustedBinaryDigest !== null) {
+        const actualDigest = computeLaunchBinaryDigestSync(executablePath, current.transport.args)
+        if (!actualDigest || actualDigest !== current.trustedBinaryDigest) {
+          throw new McpTrustError(
+            'Trusted MCP executable or script content changed since approval; reauthorization required',
+          )
+        }
       }
       const decision = this.hostPolicy.evaluateLaunch(auth, current)
       if (!decision.allowed) {

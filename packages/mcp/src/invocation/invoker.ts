@@ -34,9 +34,9 @@ function validateArgsAgainstSchema(args: Record<string, unknown>, inputSchema: R
     throw new McpProtocolError('Tool input schema exceeds maximum allowed size')
   }
 
-  // Validate locally with no remote $ref resolution
+  // Validate locally with no remote $ref resolution; clone args to prevent mutation
   const validator = new Validator(inputSchema as Schema, '2020-12', false)
-  const result = validator.validate(args)
+  const result = validator.validate(structuredClone(args))
   if (!result.valid) {
     const firstErr = result.errors[0]?.error ?? 'schema validation failed'
     throw new McpValidationError(`Invalid tool arguments: ${firstErr}`)

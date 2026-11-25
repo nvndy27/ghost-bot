@@ -38,9 +38,9 @@ packages/mcp/
 
 ## 4. Server Registry, Configuration Identity & Trust Invalidation
 
-- **Isolated SQLite Schema**: `mcp_schema_meta` (`schema_version = 1`) and `mcp_servers` (`UNIQUE(scope_key, display_name)`). Persists configuration and opaque `secretRefs` only; never stores raw secret values, tool outputs, or ephemeral process state.
-- **Trust & Fingerprinting**: `computeServerConfigFingerprint(scope, transport)` hashes `scope`, `executablePath`, `args`, `cwd`, `envAllowlist`, and `secretRefs`. New servers start `enabled: false, trustState: 'untrusted'`. Any `update()` changing `transport` automatically resets `trustState = 'untrusted'`, `trustedFingerprint = null`, and `enabled = false`.
-- **Distinction**: Configuration fingerprinting detects config edits, not silent replacement of the executable binary or its imported libraries on disk.
+- **Isolated SQLite Schema**: `mcp_schema_meta` (`schema_version = 1`) and `mcp_servers` (`UNIQUE(scope_key, display_name)`). Persists configuration and opaque `secretRefs` only; never stores raw secret values, tool outputs, or ephemeral process state. `decodeServerRow` recomputes `configFingerprint` and verifies `scope_key` and trust-state invariants on every read.
+- **Trust, Fingerprinting & Executable Digest**: `computeServerConfigFingerprint(scope, transport)` hashes `scope`, `executablePath`, `args`, `cwd`, `envAllowlist`, and `secretRefs`. `approveTrust()` also pins `trustedBinaryDigest` (SHA-256 of `executablePath` + primary script argument if present as regular files), and `connect()` re-verifies it before launch. Any `update()` changing `transport` automatically resets `trustState = 'untrusted'`, `trustedFingerprint = null`, `trustedBinaryDigest = null`, and `enabled = false`.
+- **Distinction**: Configuration fingerprinting and `trustedBinaryDigest` detect config edits and direct binary/script replacement at the same path, but do **not** verify transitive `node_modules` or shared-library dependency chains.
 
 ## 5. Authorization & Deny-by-Default Policy
 
@@ -50,8 +50,10 @@ packages/mcp/
 ## 6. STDIO Process Launch, Bounded Transport & Cleanup
 
 - **Launch Validation (`validateStdioLaunchPaths`)**: Requires absolute non-symlink executable (`uid` = current user or root, executable bit set), non-symlink `cwd` owned by current user, and blocks shells/package-runners (`npx`, `npm`, `uvx`, `pip`, `curl`, `wget`, `sh`, `bash`, etc.).
-- **Minimal Environment (`buildMinimalChildEnv`)**: Starts from empty `{}` (never inherits `process.env` or provider keys like `OPENAI_API_KEY` / `CODEX_API_KEY`).
-- **Hard-Bounded Framing (`BoundedStdioClientTransport`)**: Enforces `maxMessageBytes` (1 MiB) **before** buffering `\n`-delimited stdout lines; oversized messages immediately destroy streams, terminate the subprocess, and emit `McpTransportError`. `stderr` is capped at `16 KiB` and redacted.
+- **Minimal Environment (`buildMinimalChildEnv`)**: Starts from empty `{}` (never inherits `process.env` or provider keys like `OPENAI_API_KEY` / `CODEX_API_KEY`) and blocks loader/interpreter-injection variables (`NODE_OPTIONS`, `NODE_PATH`, `LD_*`, `DYLD_*`, `PYTHON*`, `BASH_ENV`, `ENV`, `PATH`, `HOME`, `RUBYOPT`, `PERL5OPT`, `GCONV_PATH`, `GLIBC_TUNABLES`).
+- **Hard-Bounded Framing (`BoundedStdioClientTransport`)**: Enforces `maxMessageBytes` (1 MiB) **before** buffering `\n`-delimited stdout lines; oversized messages immediately destroy streams, terminate the owned process group (`detached: true`, `-child.pid`), and emit `McpTransportError`. `stderr` is capped at `16 KiB` and redacted across chunk boundaries.
+- **Public API Boundary**: `@ghost-bot/mcp` exports policy-enforced `SqliteMcpRegistry` and `McpConnectionManager` rather than raw transport/invocation primitives.
+- **Dependency-Security Note**: `corepack pnpm audit --prod` reports 1 high advisory on `zod < 4.6.6` (`GHSA-mrhx-c7xc-m3w5`) inherited from the workspace's `zod@3.25.76` baseline (`apps/daemon` / `packages/shared-types`). Upgrading the entire monorepo to Zod 4 is deferred outside Phase 3C.
 - **Cleanup**: `SIGTERM` followed by bounded `SIGKILL` escalation (`gracefulShutdownMs`). Child-spawned grandchild processes outside direct PID signaling are a documented OS limitation unless process-group/cgroup containment is added at the host layer.
 - **OS Isolation Limitation**: `shell: false`, path validation, and env filtering are **not** OS sandboxing; a local MCP subprocess runs with the parent user's OS privileges.
 

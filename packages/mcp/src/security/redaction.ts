@@ -17,6 +17,7 @@ const BLOCKED_ENV_VARS = new Set([
   'NPM_TOKEN',
   'NODE_AUTH_TOKEN',
   'PATH',
+  'HOME',
   'NODE_OPTIONS',
   'NODE_PATH',
   'BASH_ENV',

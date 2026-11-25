@@ -27,6 +27,8 @@ export const MCP_LIMITS = {
   maxCapabilityDescriptionLength: 1024,
   maxSchemaBytes: 65_536,
   maxSchemaDepth: 12,
+  maxSchemaPatternLength: 256,
+  maxSchemaEnumItems: 256,
   maxToolArgsBytes: 65_536,
   maxToolResultBytes: 262_144, // 256 KiB
   maxResourceBytes: 262_144,

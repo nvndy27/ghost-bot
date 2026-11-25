@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { chmod, constants, lstat, mkdir, open, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, parse, resolve, sep } from 'node:path'
 import { McpUnsafePathError } from '../contracts/errors.ts'
@@ -185,4 +187,33 @@ export async function validateStdioLaunchPaths(
   const canonicalCwd = await realpath(cwdInput)
 
   return { executablePath: canonicalExe, cwd: canonicalCwd }
+}
+
+export function computeLaunchBinaryDigestSync(
+  executablePath: string,
+  args: readonly string[],
+): string | null {
+  try {
+    const exeStat = lstatSync(executablePath)
+    if (!exeStat.isFile() || exeStat.isSymbolicLink()) return null
+    const canonicalExe = realpathSync(executablePath)
+    const hash = createHash('sha256')
+    hash.update(readFileSync(canonicalExe))
+
+    const firstArg = args[0]
+    if (firstArg && isAbsolute(firstArg) && !firstArg.includes('\0')) {
+      try {
+        const argStat = lstatSync(firstArg)
+        if (argStat.isFile() && !argStat.isSymbolicLink()) {
+          hash.update('\0script\0')
+          hash.update(readFileSync(realpathSync(firstArg)))
+        }
+      } catch {
+        // Non-file first argument (e.g., flag) is not hashed as a script.
+      }
+    }
+    return hash.digest('hex')
+  } catch {
+    return null
+  }
 }

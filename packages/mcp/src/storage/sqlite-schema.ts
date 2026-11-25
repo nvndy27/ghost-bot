@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   trust_state TEXT NOT NULL CHECK (trust_state IN ('untrusted', 'trusted', 'revoked')),
   config_fingerprint TEXT NOT NULL,
   trusted_fingerprint TEXT,
+  trusted_binary_digest TEXT,
   connect_timeout_ms INTEGER NOT NULL,
   request_timeout_ms INTEGER NOT NULL,
   created_at TEXT NOT NULL,

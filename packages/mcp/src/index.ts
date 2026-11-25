@@ -79,15 +79,9 @@ export { openMcpDatabase, type McpDatabaseHandle } from './storage/sqlite-client
 export { initializeMcpSchema, MCP_DB_SCHEMA_VERSION } from './storage/sqlite-schema.ts'
 export { SqliteMcpRegistry, type SqliteMcpRegistryOptions } from './storage/sqlite-registry.ts'
 
-export { BoundedStdioClientTransport, type BoundedStdioTransportOptions } from './transport/bounded-stdio.ts'
-export { buildCapabilityKey, discoverServerCapabilities } from './discovery/discoverer.ts'
-export { invokeMcpTool, type McpToolInvocationResult } from './invocation/invoker.ts'
-export {
-  getMcpPrompt,
-  readMcpResource,
-  type McpPromptGetResult,
-  type McpResourceReadResult,
-} from './invocation/resources.ts'
+export { buildCapabilityKey } from './discovery/discoverer.ts'
+export type { McpToolInvocationResult } from './invocation/invoker.ts'
+export type { McpPromptGetResult, McpResourceReadResult } from './invocation/resources.ts'
 
 export {
   McpConnectionManager,

@@ -38,6 +38,7 @@ import {
   validateMcpAuthContext,
 } from '../security/authorization.ts'
 import { assertNoCredentialsInServerInput } from '../security/redaction.ts'
+import { computeLaunchBinaryDigestSync } from '../security/path-guard.ts'
 import type { McpDatabaseHandle } from './sqlite-client.ts'
 
 export interface SqliteMcpRegistryOptions {
@@ -74,6 +75,7 @@ function decodeServerRow(row: Record<string, unknown>): McpServerConfig {
     trustState: row.trust_state,
     configFingerprint: row.config_fingerprint,
     trustedFingerprint: row.trusted_fingerprint ?? null,
+    trustedBinaryDigest: row.trusted_binary_digest ?? null,
     connectTimeoutMs: row.connect_timeout_ms,
     requestTimeoutMs: row.request_timeout_ms,
     createdAt: row.created_at,
@@ -161,6 +163,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       trustState: 'untrusted',
       configFingerprint,
       trustedFingerprint: null,
+      trustedBinaryDigest: null,
       connectTimeoutMs: input.connectTimeoutMs ?? MCP_LIMITS.defaultConnectTimeoutMs,
       requestTimeoutMs: input.requestTimeoutMs ?? MCP_LIMITS.defaultRequestTimeoutMs,
       createdAt: now,
@@ -181,9 +184,9 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
             `INSERT INTO mcp_servers (
               id, schema_version, scope_kind, user_id, bot_id, workspace_id, scope_key,
               display_name, description, transport_json, enabled, trust_state,
-              config_fingerprint, trusted_fingerprint, connect_timeout_ms, request_timeout_ms,
+              config_fingerprint, trusted_fingerprint, trusted_binary_digest, connect_timeout_ms, request_timeout_ms,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             server.id,
@@ -200,6 +203,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
             server.trustState,
             server.configFingerprint,
             server.trustedFingerprint,
+            server.trustedBinaryDigest,
             server.connectTimeoutMs,
             server.requestTimeoutMs,
             server.createdAt,
@@ -323,6 +327,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
           enabled: configChanged ? false : existing.enabled,
           trustState: configChanged ? 'untrusted' : existing.trustState,
           trustedFingerprint: configChanged ? null : existing.trustedFingerprint,
+          trustedBinaryDigest: configChanged ? null : existing.trustedBinaryDigest,
           connectTimeoutMs: input.connectTimeoutMs ?? existing.connectTimeoutMs,
           requestTimeoutMs: input.requestTimeoutMs ?? existing.requestTimeoutMs,
           updatedAt: now,
@@ -332,7 +337,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
           .prepare(
             `UPDATE mcp_servers SET
               display_name = ?, description = ?, transport_json = ?,
-              enabled = ?, trust_state = ?, config_fingerprint = ?, trusted_fingerprint = ?,
+              enabled = ?, trust_state = ?, config_fingerprint = ?, trusted_fingerprint = ?, trusted_binary_digest = ?,
               connect_timeout_ms = ?, request_timeout_ms = ?, updated_at = ?
             WHERE id = ?`,
           )
@@ -344,6 +349,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
             updated.trustState,
             updated.configFingerprint,
             updated.trustedFingerprint,
+            updated.trustedBinaryDigest,
             updated.connectTimeoutMs,
             updated.requestTimeoutMs,
             updated.updatedAt,
@@ -382,6 +388,10 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       ...existing,
       trustState: 'trusted',
       trustedFingerprint: existing.configFingerprint,
+      trustedBinaryDigest: computeLaunchBinaryDigestSync(
+        existing.transport.executablePath,
+        existing.transport.args,
+      ),
       updatedAt: now,
     }))
   }
@@ -392,6 +402,7 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       enabled: false,
       trustState: 'revoked',
       trustedFingerprint: null,
+      trustedBinaryDigest: null,
       updatedAt: now,
     }))
   }
@@ -421,9 +432,16 @@ export class SqliteMcpRegistry implements McpRegistryRepository {
       const next = McpServerConfigSchema.parse(transform(existing, now))
       this.handle.sqlite
         .prepare(
-          'UPDATE mcp_servers SET enabled = ?, trust_state = ?, trusted_fingerprint = ?, updated_at = ? WHERE id = ?',
+          'UPDATE mcp_servers SET enabled = ?, trust_state = ?, trusted_fingerprint = ?, trusted_binary_digest = ?, updated_at = ? WHERE id = ?',
         )
-        .run(next.enabled ? 1 : 0, next.trustState, next.trustedFingerprint, next.updatedAt, next.id)
+        .run(
+          next.enabled ? 1 : 0,
+          next.trustState,
+          next.trustedFingerprint,
+          next.trustedBinaryDigest,
+          next.updatedAt,
+          next.id,
+        )
       return next
     })
   }

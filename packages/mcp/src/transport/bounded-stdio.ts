@@ -64,6 +64,7 @@ export class BoundedStdioClientTransport implements Transport {
         cwd: this.options.cwd,
         env: { ...this.options.env },
         shell: false,
+        detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.child = child
@@ -234,6 +235,7 @@ export class BoundedStdioClientTransport implements Transport {
       }
 
       if (child.exitCode === null && child.signalCode === null && child.pid) {
+        const pid = child.pid
         await new Promise<void>((resolve) => {
           let finished = false
           const done = () => {
@@ -245,17 +247,33 @@ export class BoundedStdioClientTransport implements Transport {
           child.once('exit', done)
           child.once('close', done)
           try {
-            child.kill('SIGTERM')
+            if (process.platform !== 'win32') {
+              process.kill(-pid, 'SIGTERM')
+            } else {
+              child.kill('SIGTERM')
+            }
           } catch {
-            done()
-            return
+            try {
+              child.kill('SIGTERM')
+            } catch {
+              done()
+              return
+            }
           }
           const killTimer = setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null && child.pid) {
+            if (child.exitCode === null && child.signalCode === null) {
               try {
-                child.kill('SIGKILL')
+                if (process.platform !== 'win32') {
+                  process.kill(-pid, 'SIGKILL')
+                } else {
+                  child.kill('SIGKILL')
+                }
               } catch {
-                // Ignore kill failure.
+                try {
+                  child.kill('SIGKILL')
+                } catch {
+                  // Ignore kill failure.
+                }
               }
             }
             done()

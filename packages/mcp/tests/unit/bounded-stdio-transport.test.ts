@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { BoundedStdioClientTransport, McpTransportError } from '../../src/index.ts'
+import { McpTransportError } from '../../src/index.ts'
+import { BoundedStdioClientTransport } from '../../src/transport/bounded-stdio.ts'
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures')
 
