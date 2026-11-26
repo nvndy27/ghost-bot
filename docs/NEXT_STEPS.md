@@ -3,7 +3,8 @@
 ## Phase 3D.4 — Integrated End-to-End Acceptance
 
 1. Verify combined Memory + Knowledge + MCP production workflows in Electron and daemon regression suites on the integrated branch.
-2. Perform final release-candidate security audit and documentation sign-off before merging to `main`.
+2. Verify Linux AppImage & Fedora RPM packaging builds and smoke launches on the integrated codebase.
+3. Confirm release-candidate security sign-off (noting OS Secret Service keyring stub status for `secretRefs` and `unsupported_native_mcp` for Codex `0.172.0` / opt-in live verification requirements) before merging to `main`.
 
 ## Earlier Phase 3D.3 plan (Completed)
 

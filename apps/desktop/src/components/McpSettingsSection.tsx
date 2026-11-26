@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   AppSettings,
   AppSettingsPatch,
@@ -51,6 +51,8 @@ export function McpSettingsSection({
 
   const [selectedCaps, setSelectedCaps] = useState<McpCapabilitySnapshotDto | null>(null)
   const [previewText, setPreviewText] = useState<string | null>(null)
+  const loadSeqRef = useRef(0)
+  const capsSeqRef = useRef(0)
 
   useEffect(() => {
     if (!botId && defaultBotId) {
@@ -61,15 +63,18 @@ export function McpSettingsSection({
   const loadServers = useCallback(async () => {
     const bridge = window.ghostBot
     if (!bridge) return
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     try {
       const res = await bridge.listMcpServers({ includeUserWide: true, limit: 100 })
+      if (seq !== loadSeqRef.current) return
       setServers(res.servers)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load MCP servers')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [])
 
@@ -169,19 +174,22 @@ export function McpSettingsSection({
   }
 
   const handleInspectCapabilities = async (id: string) => {
+    const seq = ++capsSeqRef.current
     setBusyId(id)
     setError(null)
     setPreviewText(null)
     try {
       const caps = await requireBridge().getMcpCapabilities(id)
+      if (seq !== capsSeqRef.current) return
       setSelectedCaps(caps)
       if (!caps) {
         setNotice('Connect the server first to discover tools, resources, and prompts.')
       }
     } catch (err) {
+      if (seq !== capsSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to inspect MCP capabilities')
     } finally {
-      setBusyId(null)
+      if (seq === capsSeqRef.current) setBusyId(null)
     }
   }
 
@@ -191,7 +199,7 @@ export function McpSettingsSection({
         <div>
           <h2 style={{ margin: 0, fontSize: '17px' }}>Tools &amp; MCP</h2>
           <p className="gb-muted" style={{ margin: '4px 0 0', fontSize: '13px' }}>
-            Local STDIO MCP servers require explicit trust approval, binary digest pinning, and per-call run approval.
+            Local STDIO MCP servers run unsandboxed with your OS user privileges, require explicit trust + binary digest pinning, and are permitted only in Ask Approval mode (blocked in Read-Only, Workspace, and Full Access; native Codex MCP remains disabled).
           </p>
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>

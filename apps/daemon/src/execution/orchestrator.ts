@@ -1442,11 +1442,13 @@ export class RunOrchestrator {
         }
         const mcpBinding = this.dbHandle.sqlite
           .prepare(
-            `SELECT dispatch_state, args_hash
+            `SELECT server_id, config_fingerprint, dispatch_state, args_hash
              FROM mcp_approval_bindings
              WHERE approval_id = ?`,
           )
-          .get(approvalId) as { dispatch_state: string; args_hash: string } | undefined
+          .get(approvalId) as
+          | { server_id: string; config_fingerprint: string; dispatch_state: string; args_hash: string }
+          | undefined
         if (mcpBinding) {
           if (mcpBinding.dispatch_state !== 'pending') {
             throw new DaemonError(
@@ -1461,6 +1463,52 @@ export class RunOrchestrator {
               'MCP approval binding arguments hash mismatch',
               { statusCode: 409 },
             )
+          }
+          if (decision === 'approved') {
+            const srvRow = this.dbHandle.sqlite
+              .prepare(
+                `SELECT s.enabled, s.trust_state, s.config_fingerprint, s.scope_kind, a.archived_at
+                 FROM mcp_servers s
+                 LEFT JOIN agents a ON a.id = s.bot_id
+                 WHERE s.id = ?`,
+              )
+              .get(mcpBinding.server_id) as
+              | {
+                  enabled: number
+                  trust_state: string
+                  config_fingerprint: string
+                  scope_kind: string
+                  archived_at: string | null
+                }
+              | undefined
+            const staleReason = !srvRow
+              ? 'mcp_server_missing'
+              : srvRow.enabled !== 1 || srvRow.trust_state !== 'trusted'
+                ? 'mcp_server_untrusted_or_disabled'
+                : srvRow.config_fingerprint !== mcpBinding.config_fingerprint
+                  ? 'mcp_config_changed'
+                  : srvRow.scope_kind === 'bot' && srvRow.archived_at !== null
+                    ? 'bot_archived'
+                    : null
+            if (staleReason) {
+              this.dbHandle.sqlite
+                .prepare(
+                  `UPDATE approvals SET status = 'revoked', resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+                )
+                .run(now, JSON.stringify({ reason: staleReason }), approvalId)
+              this.dbHandle.sqlite
+                .prepare(
+                  `UPDATE mcp_approval_bindings SET dispatch_state = 'cancelled', updated_at = ? WHERE approval_id = ?`,
+                )
+                .run(now, approvalId)
+              this.eventStore.appendEvent(runId, {
+                eventKey: `approval.revoked:${approvalId}`,
+                type: 'approval.revoked',
+                payload: { approvalId, reason: staleReason },
+                timestamp: now,
+              })
+              return { outcome: 'revoked_generation' as const, isCodex: false, argsHash: '' }
+            }
           }
         }
         if (
@@ -2025,7 +2073,7 @@ export class RunOrchestrator {
         })
 
         const decision = await decisionPromise
-        if (decision === 'cancelled' || finalizeIfCancelled()) {
+        if (finalizeIfCancelled() || decision === 'cancelled') {
           return
         }
 
@@ -2087,10 +2135,11 @@ export class RunOrchestrator {
         })
 
         try {
+          const frozenArgs = JSON.parse(argsJson) as Record<string, unknown>
           const toolResult = await this.mcpService.invokeApprovedTool({
             serverId: plan.mcpTool.serverId,
             toolName: plan.mcpTool.toolName,
-            args: plan.mcpTool.args,
+            args: frozenArgs,
             botId: agentId,
             workspacePath,
             permissionMode,
@@ -2137,7 +2186,13 @@ export class RunOrchestrator {
         } catch (invokeErr) {
           const completedAt = new Date().toISOString()
           const errCode = invokeErr instanceof DaemonError ? invokeErr.code : 'MCP_DISPATCH_UNCERTAIN'
-          const isPreDispatch = errCode === 'MCP_STALE_APPROVAL' || errCode === 'MCP_UNTRUSTED' || errCode === 'MCP_FORBIDDEN' || errCode === 'MCP_DISABLED'
+          const isPreDispatch =
+            errCode === 'MCP_STALE_APPROVAL' ||
+            errCode === 'MCP_UNTRUSTED' ||
+            errCode === 'MCP_FORBIDDEN' ||
+            errCode === 'MCP_DISABLED' ||
+            errCode === 'VALIDATION_ERROR' ||
+            errCode === 'MCP_NOT_FOUND'
           const nextState = isPreDispatch ? 'failed' : 'uncertain'
           const safeMsg = redactSecrets(invokeErr instanceof Error ? invokeErr.message : String(invokeErr))
           this.dbHandle.sqlite
@@ -2210,7 +2265,7 @@ export class RunOrchestrator {
         })
 
         const decision = await decisionPromise
-        if (decision === 'cancelled' || finalizeIfCancelled()) {
+        if (finalizeIfCancelled() || decision === 'cancelled') {
           return
         }
 

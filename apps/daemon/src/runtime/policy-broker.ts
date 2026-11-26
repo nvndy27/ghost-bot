@@ -158,6 +158,12 @@ export function createHostMcpPolicyAdapter(permissionMode: PermissionMode): Host
         reason: `Read-Only mode blocks local STDIO MCP ${action}`,
       }
     }
+    if (permissionMode === 'workspace') {
+      return {
+        allowed: false,
+        reason: `Workspace mode blocks unsandboxed local STDIO MCP ${action} (cannot enforce workspace containment or network isolation)`,
+      }
+    }
     return { allowed: true }
   }
 

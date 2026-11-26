@@ -861,8 +861,29 @@ function registerIpcHandlers(): void {
     })
   })
 
+  function assertBoundedMcpIpcPayload(raw: unknown): void {
+    if (raw === undefined || raw === null) return
+    const serialized = JSON.stringify(raw)
+    if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > 64 * 1024) {
+      throw new Error('MCP IPC payload exceeds maximum size')
+    }
+    const checkShape = (val: unknown, depth: number): void => {
+      if (depth > 12) throw new Error('MCP IPC payload exceeds maximum nesting depth')
+      if (Array.isArray(val)) {
+        if (val.length > 256) throw new Error('MCP IPC payload array exceeds maximum length')
+        for (const item of val) checkShape(item, depth + 1)
+      } else if (val && typeof val === 'object') {
+        const entries = Object.entries(val as Record<string, unknown>)
+        if (entries.length > 128) throw new Error('MCP IPC payload object exceeds maximum keys')
+        for (const [, v] of entries) checkShape(v, depth + 1)
+      }
+    }
+    checkShape(raw, 0)
+  }
+
   ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
     const parsed = ListMcpServersInputSchema.parse(params ?? {})
     const qs = new URLSearchParams()
     if (parsed.scopeKinds?.length) qs.set('scopeKinds', parsed.scopeKinds.join(','))
@@ -876,12 +897,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_REGISTER, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
     const parsed = RegisterMcpServerIpcInputSchema.parse(params)
     return queryDaemon('/mcp/servers', McpServerDtoSchema, { method: 'POST', body: parsed })
   })
 
   ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_UPDATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
     const parsed = UpdateMcpServerIpcInputSchema.parse(params)
     const { id, ...body } = parsed
     return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}`, McpServerDtoSchema, {
@@ -950,6 +973,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_READ_RESOURCE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
     const parsed = ReadMcpResourceInputSchema.parse(params)
     return queryDaemon('/mcp/resources/read', ReadMcpResourceResponseSchema, {
       method: 'POST',
@@ -959,6 +983,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_GET_PROMPT, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
     const parsed = GetMcpPromptInputSchema.parse(params)
     return queryDaemon('/mcp/prompts/get', GetMcpPromptResponseSchema, {
       method: 'POST',

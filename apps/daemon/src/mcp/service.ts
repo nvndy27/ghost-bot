@@ -223,15 +223,19 @@ export class McpService {
       : adapter.evaluateToolInvocation(parsedAuth, server, '')
   }
 
-  private resolveEffectivePermissionMode(server: McpServerConfig): PermissionMode {
+  private resolveEffectivePermissionMode(server: McpServerConfig, explicitBotId?: string): PermissionMode {
     const runOverride = this.activeRunPermissionByServer.get(server.id)
     if (runOverride) return runOverride
 
-    if (server.scope.kind === 'bot') {
+    const targetBotId = server.scope.kind === 'bot' ? server.scope.botId : explicitBotId
+    if (targetBotId) {
       const row = this.db.sqlite
-        .prepare('SELECT permission_mode FROM agents WHERE id = ?')
-        .get(server.scope.botId) as { permission_mode?: string } | undefined
-      if (row?.permission_mode) {
+        .prepare('SELECT permission_mode, archived_at FROM agents WHERE id = ?')
+        .get(targetBotId) as { permission_mode?: string; archived_at?: string | null } | undefined
+      if (!row || row.archived_at !== null) {
+        return 'read-only'
+      }
+      if (row.permission_mode) {
         return row.permission_mode as PermissionMode
       }
     }
@@ -246,9 +250,11 @@ export class McpService {
   }
 
   private assertBotExists(botId: string): void {
-    const row = this.db.sqlite.prepare('SELECT id FROM agents WHERE id = ?').get(botId) as { id?: string } | undefined
+    const row = this.db.sqlite
+      .prepare('SELECT id FROM agents WHERE id = ? AND archived_at IS NULL')
+      .get(botId) as { id?: string } | undefined
     if (!row?.id) {
-      throw new DaemonError('NOT_FOUND', `Bot "${botId}" not found`, { statusCode: 404 })
+      throw new DaemonError('NOT_FOUND', `Active bot "${botId}" not found`, { statusCode: 404 })
     }
   }
 
@@ -483,7 +489,18 @@ export class McpService {
       const auth = this.buildAuthForServer(existing)
       this.capabilitiesCache.delete(existing.id)
       await this.connectionManager.disconnect(existing.id)
-      const deleted = this.registry.delete(auth, existing.id)
+      const now = new Date().toISOString()
+      const deleted = this.db.transaction(() => {
+        this.db.sqlite
+          .prepare(
+            `UPDATE approvals
+             SET status = 'revoked', resolved_at = ?, decision_meta_json = ?
+             WHERE id IN (SELECT approval_id FROM mcp_approval_bindings WHERE server_id = ?)
+               AND status IN ('pending', 'resolving')`,
+          )
+          .run(now, JSON.stringify({ reason: 'mcp_server_deleted' }), existing.id)
+        return this.registry.delete(auth, existing.id)
+      })
       if (!deleted) {
         throw new DaemonError('MCP_NOT_FOUND', 'MCP server not found', { statusCode: 404 })
       }
@@ -535,11 +552,29 @@ export class McpService {
     }
   }
 
+  private assertResourceOrPromptAuthorized(server: McpServerConfig, botId?: string): void {
+    if (botId) {
+      this.assertBotExists(botId)
+      if (server.scope.kind === 'bot' && server.scope.botId !== botId) {
+        throw new DaemonError('MCP_FORBIDDEN', 'MCP server is outside the requested bot scope', { statusCode: 403 })
+      }
+    } else if (server.scope.kind === 'bot') {
+      this.assertBotExists(server.scope.botId)
+    }
+    const mode = this.resolveEffectivePermissionMode(server, botId)
+    const parsedAuth = validateMcpAuthContext(this.buildAuthForServer(server))
+    const decision = this.policyBroker.createMcpPolicyAdapter(mode).evaluateLaunch(parsedAuth, server)
+    if (!decision.allowed) {
+      throw new DaemonError('MCP_FORBIDDEN', decision.reason ?? 'Host policy denied MCP access', { statusCode: 403 })
+    }
+  }
+
   async readResource(rawInput: ReadMcpResourceInput, signal?: AbortSignal): Promise<ReadMcpResourceResponse> {
     try {
       this.assertMcpEnabled()
       const input = ReadMcpResourceInputSchema.parse(rawInput)
       const existing = this.getServerUnscopedForDaemon(input.serverId)
+      this.assertResourceOrPromptAuthorized(existing, input.botId)
       const auth = this.buildAuthForServer(existing, { allowedResources: [input.uri] })
       const info = this.connectionManager.getConnectionInfo(existing.id)
       if (!info || info.state !== 'ready') {
@@ -564,6 +599,7 @@ export class McpService {
       this.assertMcpEnabled()
       const input = GetMcpPromptInputSchema.parse(rawInput)
       const existing = this.getServerUnscopedForDaemon(input.serverId)
+      this.assertResourceOrPromptAuthorized(existing, input.botId)
       const capKey = buildCapabilityKey(existing.id, input.name)
       const auth = this.buildAuthForServer(existing, { allowedPrompts: [capKey] })
       const info = this.connectionManager.getConnectionInfo(existing.id)
@@ -800,6 +836,19 @@ export class McpService {
       .prepare("SELECT id FROM mcp_servers WHERE scope_kind = 'bot' AND bot_id = ?")
       .all(botId) as Array<{ id: string }>
     if (rows.length === 0) return []
+    const now = new Date().toISOString()
+    this.db.sqlite
+      .prepare(
+        `UPDATE approvals
+         SET status = 'revoked', resolved_at = ?, decision_meta_json = ?
+         WHERE id IN (
+           SELECT b.approval_id
+           FROM mcp_approval_bindings b
+           JOIN mcp_servers s ON s.id = b.server_id
+           WHERE s.scope_kind = 'bot' AND s.bot_id = ?
+         ) AND status IN ('pending', 'resolving')`,
+      )
+      .run(now, JSON.stringify({ reason: 'bot_archived' }), botId)
     this.db.sqlite
       .prepare("DELETE FROM mcp_servers WHERE scope_kind = 'bot' AND bot_id = ?")
       .run(botId)

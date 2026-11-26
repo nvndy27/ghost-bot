@@ -1,4 +1,8 @@
+import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+
+const counterIdx = process.argv.indexOf('--counter')
+const COUNTER_FILE = counterIdx >= 0 ? process.argv[counterIdx + 1] : null
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 
@@ -95,6 +99,9 @@ rl.on('line', (line) => {
   if (method === 'tools/call') {
     const name = params?.name
     const args = params?.arguments ?? {}
+    if (COUNTER_FILE) {
+      appendFileSync(COUNTER_FILE, `${String(name)}\n`, 'utf8')
+    }
     if (name === 'echo_tool') {
       const secretSuffix = process.env.TEST_SECRET ? ` [secret:${process.env.TEST_SECRET}]` : ''
       send({
