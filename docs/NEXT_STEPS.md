@@ -1,5 +1,13 @@
 # Next steps
 
+## Current release target — v0.1 Personal & Friends Alpha (scope decision 2026-11-27)
+
+1. Continue existing assigned Provider/Core/security work; preserve the Provider.6 handoff below. Review the stacked PRs #6–#11 and complete required native execution integration and explicitly authorized live acceptance. Do not infer live support from offline tests or jump ahead of the current checkpoint.
+2. After the integration baseline is accepted, agree shared contracts and ownership for two parallel tracks: **Alpha.1 Group Bot** (discussion-first, per-member models, visible private task conversations, summary back to group) and **Alpha.2 Workspace Panel** (preserved Overview/Team Activity, Files/Editor, Changes, Browser/Live Demo, Output).
+3. Keep historical migrations 0001–0013 frozen. Allocate any forward migration, shared IPC and App.tsx changes through a single coordinated owner; independent worktrees, scoped diffs, draft PRs, review before integration. Do not reassign either active agent automatically.
+4. Complete **Alpha.3** security/packaging/acceptance for personal use and friends. An earlier internal native Chat build is permitted after Alpha.0 passes. Fedora GNOME and Ubuntu are available validation targets; Windows may be tested when supported. Document actual support.
+5. Do not begin Terminal Mode, interactive PTY, advanced Council/Bridge/Verify, Companion, cloud, accounts or billing as part of this alpha. See [Roadmap](ROADMAP.md) for exact gates and deferred scope.
+
 ## Provider.6 — Shared OpenAI-Compatible Runtime Integration (Completed Offline / Execution Gated)
 
 1. When explicitly authorized, test live loopback inference against LM Studio or `llama-server` or bounded 2-request live OpenRouter verification per `docs/extensions/provider6-openai-compatible.md`.

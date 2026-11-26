@@ -1,5 +1,14 @@
 # Progress log
 
+## Product scope decision — v0.1 Personal & Friends Alpha
+
+2026-11-27. Owner confirmed the first personal/friends release should add only Group Bot collaboration and the right-hand Workspace Panel to the existing native Chat foundation. Alpha.0–3 and deferred milestones are recorded in [Roadmap](ROADMAP.md) and [Next steps](NEXT_STEPS.md). Planning baseline: Provider.6 `5d57c39`, PR #11; stacked PRs #6–#10 remain subject to their existing review/integration gates.
+
+| State | Evidence |
+|---|---|
+| Not Started | New release gates and Alpha.1 Group Bot / Alpha.2 Workspace Panel implementation are planned; this is not a feature implementation or live acceptance report. |
+| Not Started | Alpha.3 integrated release acceptance. No source code, migrations, runtime gates, agent assignments, repository visibility or license changed by this documentation-only scope decision. No tests or live inference executed for the docs change. |
+
 ## Provider.6 — Shared OpenAI-Compatible Runtime Integration
 
 2026-11-27. Branched `feat/provider6-openai-compatible` from `d13e686` (`feat/provider5-kimi-acp`). Implemented shared OpenAI-compatible transport (`OpenAiCompatibleRuntimeBase`) and three provider runtimes (`lmstudio`, `llamacpp`, `openrouter`), `RuntimePolicyBroker` gates, daemon routes, Electron IPC, and Desktop Settings/`BotEditorModal` UI with zero live inference or paid API spend. See [Provider.6 report](extensions/provider6-openai-compatible.md).
