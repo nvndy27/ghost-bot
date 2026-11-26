@@ -1,0 +1,20 @@
+{
+  "name": "@ghost-bot/computer-use",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/types.ts",
+    "./daemon-contracts": "./src/contracts/daemon-integration.ts",
+    "./coordinates": "./src/validation/coordinates.ts",
+    "./actions": "./src/validation/actions.ts",
+    "./session": "./src/session/session-state-machine.ts",
+    "./simulated": "./src/backends/simulated-backend.ts",
+    "./controller": "./src/controller/action-controller.ts",
+    "./audit": "./src/audit/audit-log.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts"
+  }
+}
