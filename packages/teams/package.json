@@ -9,7 +9,9 @@
     "./security": "./src/security/validation.ts",
     "./repository": "./src/repository/team-repository.ts",
     "./engine": "./src/engine/delegation-engine.ts",
-    "./coordinator": "./src/engine/team-coordinator.ts"
+    "./coordinator": "./src/engine/team-coordinator.ts",
+    "./diagnostics": "./src/engine/team-diagnostics.ts",
+    "./preview": "./src/engine/team-plan-preview.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

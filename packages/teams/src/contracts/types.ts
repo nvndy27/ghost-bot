@@ -236,6 +236,10 @@ export interface PlannedTeamTaskInput {
 export interface TeamTaskPlan {
   summary: string
   tasks: PlannedTeamTaskInput[]
+  estimatedUsage?: {
+    tokensUsed?: number
+    durationMs?: number
+  }
 }
 
 export interface TeamTaskPlanner {
@@ -272,6 +276,9 @@ export interface TeamRunAggregateResult {
   blockedCount: number
   uncertainCount: number
   totalTasks: number
+  providerInferenceCount: number
+  plannerTokensUsed: number
+  synthesizerTokensUsed: number
   totalTokensUsed: number
   totalDurationMs: number
   usageComplete: boolean
@@ -283,5 +290,11 @@ export interface TeamRunAggregateResult {
 }
 
 export interface TeamResultSynthesizer {
-  synthesize(aggregate: TeamRunAggregateResult): Promise<{ summaryText: string }>
+  synthesize(aggregate: TeamRunAggregateResult): Promise<{
+    summaryText: string
+    usage?: {
+      tokensUsed?: number
+      durationMs?: number
+    }
+  }>
 }

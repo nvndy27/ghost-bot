@@ -88,6 +88,13 @@ export function openTeamDatabase(dataDir: string, fileName = 'teams.sqlite'): Te
       .prepare(`SELECT COALESCE(MAX(version), 0) AS ver FROM team_schema_migrations`)
       .get() as { ver: number }
     const currentVersion = Number(appliedRow?.ver ?? 0)
+    const LATEST_SCHEMA_VERSION = 2
+    if (currentVersion > LATEST_SCHEMA_VERSION) {
+      throw new TeamError(
+        'UNSUPPORTED_SCHEMA_VERSION',
+        `Teams database schema version ${currentVersion} is newer than supported version ${LATEST_SCHEMA_VERSION}`,
+      )
+    }
 
     if (currentVersion < 1) {
       sqlite.exec(`

@@ -139,10 +139,14 @@ export class TeamCoordinator {
     const nowIso = new Date(nowMs).toISOString()
 
     return db.transaction(() => {
-      // Re-check idempotency inside transaction
+      // Re-check team archive status and idempotency inside transaction after async planning
+      const freshTeam = this.repository.getTeam(team.id, input.ownerId)
+      if (freshTeam.archivedAt !== null) {
+        throw new TeamError('TEAM_ARCHIVED', 'Team was archived during planning')
+      }
       const raceRow = db.sqlite
         .prepare(`SELECT * FROM team_runs WHERE team_id = ? AND idempotency_key = ?`)
-        .get(team.id, idempotencyKey) as RawTeamRunRow | undefined
+        .get(freshTeam.id, idempotencyKey) as RawTeamRunRow | undefined
       if (raceRow) {
         if (raceRow.goal_hash !== gHash) {
           throw new TeamError(
@@ -156,6 +160,10 @@ export class TeamCoordinator {
           created: false,
         }
       }
+
+      const plannerTokens = Math.max(0, rawPlan.estimatedUsage?.tokensUsed ?? 0)
+      const plannerDuration = Math.max(0, rawPlan.estimatedUsage?.durationMs ?? 0)
+      const plannerUsageReported = rawPlan.estimatedUsage?.tokensUsed !== undefined ? 1 : 0
 
       const { task: rootTask } = this.engine.createRootTask(
         {
@@ -270,14 +278,23 @@ export class TeamCoordinator {
         )
       }
 
-      // Mark root task completed as Chief of Staff planning step (0 tokens)
+      // Mark root task completed as Chief of Staff planning step (recording planner usage if reported)
       db.sqlite
         .prepare(
           `UPDATE team_tasks
-           SET status = 'completed', token_budget = 0, ended_at = ?, updated_at = ?
+           SET status = 'completed', token_budget = ?, tokens_used = ?,
+               duration_used_ms = ?, usage_reported = ?, ended_at = ?, updated_at = ?
            WHERE id = ?`,
         )
-        .run(nowIso, nowIso, rootTask.id)
+        .run(
+          plannerTokens,
+          plannerTokens,
+          plannerDuration,
+          plannerUsageReported,
+          nowIso,
+          nowIso,
+          rootTask.id,
+        )
 
       for (const planned of validatedPlan.tasks) {
         const child = taskByPlanKey.get(planned.planKey)!
@@ -293,8 +310,12 @@ export class TeamCoordinator {
       }
 
       db.sqlite
-        .prepare(`UPDATE team_runs SET tasks_created = ?, updated_at = ? WHERE id = ?`)
-        .run(1 + validatedPlan.tasks.length, nowIso, teamRunId)
+        .prepare(
+          `UPDATE team_runs
+           SET tasks_created = ?, tokens_used = ?, duration_used_ms = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(1 + validatedPlan.tasks.length, plannerTokens, plannerDuration, nowIso, teamRunId)
 
       return {
         run: this.getTeamRun(teamRunId, input.ownerId),
@@ -398,13 +419,19 @@ export class TeamCoordinator {
       if (run.status === 'cancelled' || run.status === 'uncertain') {
         return run
       }
-      const tasks = this.listRunTasks(teamRunId, ownerId).filter((t) => t.planKey !== '__root__')
+      const allTasks = this.listRunTasks(teamRunId, ownerId)
+      const rootTask = allTasks.find((t) => t.planKey === '__root__')
+      const tasks = allTasks.filter((t) => t.planKey !== '__root__')
       const anyActive = tasks.some(
         (t) => t.status === 'queued' || t.status === 'running' || t.status === 'awaiting_approval',
       )
-      const tokensUsed = tasks.reduce((acc, t) => acc + t.tokensUsed, 0)
+      const workerTokens = tasks.reduce((acc, t) => acc + t.tokensUsed, 0)
+      const plannerTokens = rootTask?.tokensUsed ?? 0
+      const priorNonWorkerTokens = Math.max(0, run.tokensUsed - plannerTokens - workerTokens)
+      const tokensUsed = workerTokens + plannerTokens + priorNonWorkerTokens
       const tokensReserved = tasks.reduce((acc, t) => acc + t.tokensReserved, 0)
-      const durationUsed = tasks.reduce((acc, t) => acc + t.durationUsedMs, 0)
+      const durationUsed =
+        tasks.reduce((acc, t) => acc + t.durationUsedMs, 0) + (rootTask?.durationUsedMs ?? 0)
 
       let nextStatus: TeamRunStatus = 'running'
       let endedAt: string | null = null
@@ -520,15 +547,20 @@ export class TeamCoordinator {
 
   collectAggregateResult(teamRunId: string, ownerId: string): TeamRunAggregateResult {
     const run = this.getTeamRun(teamRunId, ownerId)
-    const workerTasks = this.listRunTasks(teamRunId, ownerId).filter((t) => t.planKey !== '__root__')
+    const allTasks = this.listRunTasks(teamRunId, ownerId)
+    const rootTask = allTasks.find((t) => t.planKey === '__root__')
+    const workerTasks = allTasks
+      .filter((t) => t.planKey !== '__root__')
+      .sort((a, b) => a.depth - b.depth || (a.planKey ?? a.id).localeCompare(b.planKey ?? b.id))
 
     let completedCount = 0
     let failedCount = 0
     let cancelledCount = 0
     let blockedCount = 0
     let uncertainCount = 0
-    let totalTokensUsed = 0
-    let totalDurationMs = 0
+    let workerTokensUsed = 0
+    let totalDurationMs = rootTask?.durationUsedMs ?? 0
+    let providerInferenceCount = rootTask?.usageReported && rootTask.tokensUsed > 0 ? 1 : 0
     const unavailableUsageTaskIds: string[] = []
 
     const entries: TeamTaskResultEntry[] = []
@@ -536,6 +568,7 @@ export class TeamCoordinator {
     let truncated = false
 
     for (const t of workerTasks) {
+      providerInferenceCount += t.attempt
       if (t.status === 'completed') completedCount += 1
       else if (t.status === 'blocked') blockedCount += 1
       else if (t.status === 'cancelled' || t.status === 'stopped_by_parent') cancelledCount += 1
@@ -543,7 +576,7 @@ export class TeamCoordinator {
       else if (t.status === 'failed' || t.status === 'budget_exhausted') failedCount += 1
 
       if (t.usageReported) {
-        totalTokensUsed += t.tokensUsed
+        workerTokensUsed += t.tokensUsed
         totalDurationMs += t.durationUsedMs
       } else {
         unavailableUsageTaskIds.push(t.id)
@@ -583,6 +616,12 @@ export class TeamCoordinator {
       })
     }
 
+    const plannerTokensUsed = rootTask?.tokensUsed ?? 0
+    const synthesizerTokensUsed = Math.max(0, run.tokensUsed - workerTokensUsed - plannerTokensUsed)
+    if (synthesizerTokensUsed > 0) {
+      providerInferenceCount += 1
+    }
+    const totalTokensUsed = workerTokensUsed + plannerTokensUsed + synthesizerTokensUsed
     const resultBytes = Buffer.byteLength(JSON.stringify(entries), 'utf8')
     const usageComplete = unavailableUsageTaskIds.length === 0
     const synthesisInputReady = !workerTasks.some(
@@ -600,6 +639,9 @@ export class TeamCoordinator {
       blockedCount,
       uncertainCount,
       totalTasks: workerTasks.length,
+      providerInferenceCount,
+      plannerTokensUsed,
+      synthesizerTokensUsed,
       totalTokensUsed,
       totalDurationMs,
       usageComplete,
@@ -617,28 +659,61 @@ export class TeamCoordinator {
     synthesizer: TeamResultSynthesizer,
     nowMs = Date.now(),
   ): Promise<{ aggregate: TeamRunAggregateResult; summaryText: string }> {
-    const run = this.getTeamRun(teamRunId, ownerId)
-    const aggregate = this.collectAggregateResult(teamRunId, ownerId)
-    const { summaryText } = await synthesizer.synthesize(aggregate)
-    const bounded = truncateUtf8ToByteLimit(summaryText, run.bounds.maxResultBytes)
+    const initialRun = this.getTeamRun(teamRunId, ownerId)
+    if (initialRun.status === 'cancelled' || initialRun.status === 'uncertain') {
+      throw new TeamError(
+        'RUN_NOT_SYNTHESIZABLE',
+        `Cannot synthesize final response for ${initialRun.status} team run`,
+      )
+    }
+    const initialAggregate = this.collectAggregateResult(teamRunId, ownerId)
+    const { summaryText, usage } = await synthesizer.synthesize(initialAggregate)
+    const db = this.repository.getDatabase()
+    const nowIso = new Date(nowMs).toISOString()
 
-    this.repository.postMessage(
-      {
-        teamId: run.teamId,
-        ownerId,
-        authorBotId: run.leadBotId,
-        originatingTaskId: run.rootTaskId,
-        teamRunId: run.id,
-        conversationId: run.conversationId,
-        senderType: 'chief_of_staff',
-        messageType: 'final_response',
-        visibility: 'user_and_cos',
-        content: bounded.text,
-      },
-      nowMs,
-    )
+    return db.transaction(() => {
+      const latestRun = this.getTeamRun(teamRunId, ownerId)
+      if (latestRun.status === 'cancelled' || latestRun.status === 'uncertain') {
+        throw new TeamError(
+          'RUN_NOT_SYNTHESIZABLE',
+          `Team run transitioned to ${latestRun.status} during synthesis`,
+        )
+      }
 
-    return { aggregate, summaryText: bounded.text }
+      const synthTokens = Math.max(0, usage?.tokensUsed ?? 0)
+      const synthDuration = Math.max(0, usage?.durationMs ?? 0)
+      if (synthTokens > 0 || synthDuration > 0) {
+        db.sqlite
+          .prepare(
+            `UPDATE team_runs
+             SET tokens_used = tokens_used + ?, duration_used_ms = duration_used_ms + ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(synthTokens, synthDuration, nowIso, latestRun.id)
+      }
+
+      const bounded = truncateUtf8ToByteLimit(summaryText, latestRun.bounds.maxResultBytes)
+      this.repository.postMessage(
+        {
+          teamId: latestRun.teamId,
+          ownerId,
+          authorBotId: latestRun.leadBotId,
+          originatingTaskId: latestRun.rootTaskId,
+          teamRunId: latestRun.id,
+          conversationId: latestRun.conversationId,
+          senderType: 'chief_of_staff',
+          messageType: 'final_response',
+          visibility: 'user_and_cos',
+          content: bounded.text,
+        },
+        nowMs,
+      )
+
+      return {
+        aggregate: this.collectAggregateResult(teamRunId, ownerId),
+        summaryText: bounded.text,
+      }
+    })
   }
 
   reconcileOnRestart(nowMs = Date.now()): { tasksMarkedUncertain: number; runsMarkedUncertain: number } {

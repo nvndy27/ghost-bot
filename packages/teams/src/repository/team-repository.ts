@@ -247,7 +247,16 @@ export class TeamRepository {
 
     return this.db.transaction(() => {
       const team = this.getTeam(input.teamId, input.ownerId)
-      if (senderType !== 'user' && senderType !== 'system' && !team.memberBotIds.includes(input.authorBotId)) {
+      if (senderType === 'user' && input.authorBotId !== team.ownerId) {
+        throw new TeamError('SENDER_SPOOFING', 'User message authorBotId must match authenticated ownerId')
+      }
+      if (senderType === 'chief_of_staff' && input.authorBotId !== team.leadBotId) {
+        throw new TeamError('SENDER_SPOOFING', 'Chief of Staff message authorBotId must match team leadBotId')
+      }
+      if (senderType === 'system' && input.authorBotId !== 'system') {
+        throw new TeamError('SENDER_SPOOFING', 'System message authorBotId must be "system"')
+      }
+      if (senderType === 'worker' && !team.memberBotIds.includes(input.authorBotId)) {
         throw new TeamError('NON_MEMBER_BOT', `Author "${input.authorBotId}" is not a team member`)
       }
       if (input.targetBotId && !team.memberBotIds.includes(input.targetBotId)) {
@@ -262,7 +271,19 @@ export class TeamRepository {
       if (!taskRow || taskRow.team_id !== team.id || taskRow.owner_id !== input.ownerId) {
         throw new TeamError('TASK_NOT_FOUND', 'Originating task not found in team scope')
       }
+      if (input.teamRunId && taskRow.team_run_id && taskRow.team_run_id !== input.teamRunId) {
+        throw new TeamError('SCOPE_FORBIDDEN', 'Originating task belongs to a different team run')
+      }
       const effectiveRunId = input.teamRunId ?? taskRow.team_run_id ?? null
+
+      if (effectiveRunId) {
+        const runRow = this.db.sqlite
+          .prepare(`SELECT id, team_id, owner_id FROM team_runs WHERE id = ?`)
+          .get(effectiveRunId) as { id: string; team_id: string; owner_id: string } | undefined
+        if (!runRow || runRow.team_id !== team.id || runRow.owner_id !== input.ownerId) {
+          throw new TeamError('SCOPE_FORBIDDEN', 'Team run not found in team/owner scope')
+        }
+      }
 
       if (effectiveRunId) {
         const runMsgCount = this.db.sqlite
@@ -382,5 +403,75 @@ export class TeamRepository {
       )
       .all(...params) as unknown as RawMessageRow[]
     return rows.map((r) => this.rowToMessage(r))
+  }
+
+  /**
+   * Prunes old terminal, confirmed team runs and messages beyond retention limits.
+   * Never deletes active runs, uncertain tasks, tasks with locked reservations, or recent deduplication keys.
+   */
+  pruneCompletedHistory(
+    teamId: string,
+    ownerId: string,
+    options: { retainRuns: number; retainMessages: number },
+  ): { deletedRuns: number; deletedMessages: number } {
+    const retainRuns = Math.max(0, Math.floor(options.retainRuns))
+    const retainMessages = Math.max(0, Math.floor(options.retainMessages))
+
+    return this.db.transaction(() => {
+      const team = this.getTeam(teamId, ownerId)
+
+      const prunableRuns = this.db.sqlite
+        .prepare(
+          `SELECT id FROM team_runs
+           WHERE team_id = ? AND owner_id = ?
+             AND status IN ('completed', 'failed', 'cancelled', 'partial_failure')
+             AND NOT EXISTS (
+               SELECT 1 FROM team_tasks t
+               WHERE t.team_run_id = team_runs.id
+                 AND (t.status IN ('queued', 'running', 'awaiting_approval', 'uncertain')
+                      OR t.reserved_tokens > 0
+                      OR t.termination_confirmed = 0)
+             )
+           ORDER BY created_at DESC`,
+        )
+        .all(team.id, ownerId) as Array<{ id: string }>
+
+      let deletedRuns = 0
+      const runsToDelete = prunableRuns.slice(retainRuns)
+      for (const r of runsToDelete) {
+        // CASCADE deletes team_task_dependencies; delete messages & tasks explicitly for clarity
+        this.db.sqlite.prepare(`DELETE FROM team_messages WHERE team_run_id = ?`).run(r.id)
+        this.db.sqlite.prepare(`DELETE FROM team_tasks WHERE team_run_id = ?`).run(r.id)
+        const res = this.db.sqlite.prepare(`DELETE FROM team_runs WHERE id = ?`).run(r.id)
+        deletedRuns += Number(res.changes)
+      }
+
+      // Prune remaining messages only if they belong to confirmed terminal tasks beyond retainMessages
+      const totalMsgRow = this.db.sqlite
+        .prepare(`SELECT COUNT(*) AS cnt FROM team_messages WHERE team_id = ? AND owner_id = ?`)
+        .get(team.id, ownerId) as { cnt: number }
+      const excess = Math.max(0, Number(totalMsgRow?.cnt ?? 0) - retainMessages)
+      let deletedMessages = 0
+      if (excess > 0) {
+        const res = this.db.sqlite
+          .prepare(
+            `DELETE FROM team_messages
+             WHERE id IN (
+               SELECT m.id FROM team_messages m
+               JOIN team_tasks t ON t.id = m.originating_task_id
+               WHERE m.team_id = ? AND m.owner_id = ?
+                 AND t.status IN ('completed', 'failed', 'cancelled', 'blocked', 'budget_exhausted', 'stopped_by_parent')
+                 AND t.reserved_tokens = 0
+                 AND t.termination_confirmed = 1
+               ORDER BY m.seq ASC
+               LIMIT ?
+             )`,
+          )
+          .run(team.id, ownerId, excess)
+        deletedMessages = Number(res.changes)
+      }
+
+      return { deletedRuns, deletedMessages }
+    })
   }
 }
