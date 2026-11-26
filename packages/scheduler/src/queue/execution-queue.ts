@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   RoutineRecord,
   RoutineScope,
@@ -27,6 +27,21 @@ export interface ExecutionQueueOptions {
 export interface EnqueueOptions {
   triggerSource?: TaskTriggerSource
   occurrenceKeyOverride?: string
+  payloadHash?: string
+  dedupExpiresAt?: string | null
+}
+
+export function computeTaskPayloadHash(routine: RoutineRecord): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        routineRevision: routine.revision,
+        trigger: routine.trigger,
+        timezone: routine.timezone,
+        task: routine.task,
+      }),
+    )
+    .digest('hex')
 }
 
 export class ExecutionQueue {
@@ -52,14 +67,38 @@ export class ExecutionQueue {
     }
     const triggerSource: TaskTriggerSource = options.triggerSource ?? 'schedule'
     const occurrenceKey = options.occurrenceKeyOverride ?? `${routine.id}:${scheduledFor}`
+    const payloadHash = options.payloadHash ?? computeTaskPayloadHash(routine)
     const nowIso = new Date(nowMs).toISOString()
 
     return this.db.transaction(() => {
+      const dedupRow = this.db.sqlite
+        .prepare(
+          `SELECT occurrence_key, payload_hash FROM scheduler_occurrence_dedup WHERE occurrence_key = ?`,
+        )
+        .get(occurrenceKey) as { occurrence_key: string; payload_hash: string | null } | undefined
+
       const existing = this.db.sqlite
         .prepare(`SELECT * FROM scheduler_tasks WHERE occurrence_key = ?`)
         .get(occurrenceKey) as RawTaskRow | undefined
-      if (existing) {
-        return { task: rowToTask(existing), created: false }
+
+      if (dedupRow || existing) {
+        if (
+          triggerSource === 'manual' &&
+          dedupRow?.payload_hash &&
+          dedupRow.payload_hash !== payloadHash
+        ) {
+          throw new SchedulerError(
+            'IDEMPOTENCY_CONFLICT',
+            `Manual idempotency key "${occurrenceKey}" reused with different routine revision or task`,
+          )
+        }
+        if (existing) {
+          return { task: rowToTask(existing), created: false }
+        }
+        throw new SchedulerError(
+          'DUPLICATE_OCCURRENCE',
+          `Occurrence "${occurrenceKey}" was already recorded in durable deduplication ledger`,
+        )
       }
 
       const activeCountRow = this.db.sqlite
@@ -78,12 +117,27 @@ export class ExecutionQueue {
       const id = `tsk_${randomUUID()}`
       this.db.sqlite
         .prepare(
+          `INSERT INTO scheduler_occurrence_dedup (
+            occurrence_key, routine_id, trigger_source, payload_hash, created_at, expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          occurrenceKey,
+          routine.id,
+          triggerSource,
+          payloadHash,
+          nowIso,
+          options.dedupExpiresAt ?? null,
+        )
+
+      this.db.sqlite
+        .prepare(
           `INSERT INTO scheduler_tasks (
             id, routine_id, routine_revision, trigger_source, owner_id, bot_id, occurrence_key, scheduled_for,
             status, attempt, max_attempts, claim_owner, claim_lease_expires_at,
-            uncertain_execution, approval_required, task_snapshot_json,
+            uncertain_execution, approval_required, task_snapshot_json, payload_hash,
             error_code, error_message, started_at, ended_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, 0, 0, ?, NULL, NULL, NULL, NULL, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, 0, 0, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
           id,
@@ -96,6 +150,7 @@ export class ExecutionQueue {
           scheduledFor,
           routine.retryPolicy.maxAttempts,
           JSON.stringify(routine.task),
+          payloadHash,
           nowIso,
           nowIso,
         )
@@ -435,7 +490,8 @@ export class ExecutionQueue {
   }
 
   /**
-   * Prunes old terminal history while NEVER deleting active, quarantined, or uncertain tasks.
+   * Prunes old terminal history while NEVER deleting active, quarantined, or uncertain tasks,
+   * and preserving scheduler_occurrence_dedup so pruned occurrences cannot be re-enqueued.
    */
   pruneCompletedHistory(options: { olderThanIso: string }): number {
     return this.db.transaction(() => {
@@ -448,6 +504,22 @@ export class ExecutionQueue {
              AND ended_at <= ?`,
         )
         .run(options.olderThanIso)
+      return Number(res.changes)
+    })
+  }
+
+  /**
+   * Bounded cleanup of explicitly expired deduplication keys (never deletes active keys).
+   */
+  pruneExpiredDedup(options: { nowIso: string; maxKeepPerRoutine?: number }): number {
+    return this.db.transaction(() => {
+      const res = this.db.sqlite
+        .prepare(
+          `DELETE FROM scheduler_occurrence_dedup
+           WHERE expires_at IS NOT NULL AND expires_at <= ?
+             AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)`,
+        )
+        .run(options.nowIso)
       return Number(res.changes)
     })
   }

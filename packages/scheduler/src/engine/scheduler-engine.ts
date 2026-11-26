@@ -180,6 +180,39 @@ export class SchedulerEngine {
     const claimed = this.queue.claimNext(workerId, leaseMs, this.clock.nowMs())
     if (!claimed) return null
 
+    // Revalidate routine revision & eligibility at the dispatch boundary before calling dispatcher
+    let currentRoutine
+    try {
+      currentRoutine = this.repository.getById(claimed.routineId, {
+        ownerId: claimed.ownerId,
+        botId: claimed.botId,
+      })
+    } catch {
+      return this.queue.failTask(
+        claimed.id,
+        workerId,
+        'ROUTINE_NOT_FOUND',
+        'Routine removed before dispatch.',
+        this.clock.nowMs(),
+      )
+    }
+    if (
+      !currentRoutine.enabled ||
+      currentRoutine.archivedAt !== null ||
+      currentRoutine.ownership !== 'ghost-bot' ||
+      currentRoutine.revision !== claimed.routineRevision
+    ) {
+      return this.queue.failTask(
+        claimed.id,
+        workerId,
+        currentRoutine.revision !== claimed.routineRevision
+          ? 'STALE_ROUTINE_REVISION'
+          : 'ROUTINE_UNAVAILABLE',
+        'Routine state or revision changed between claim and dispatch; aborted before execution.',
+        this.clock.nowMs(),
+      )
+    }
+
     const running = this.queue.markRunning(claimed.id, workerId, this.clock.nowMs())
     const ctx: FutureExecutionAuthorizationContext = {
       routineId: running.routineId,

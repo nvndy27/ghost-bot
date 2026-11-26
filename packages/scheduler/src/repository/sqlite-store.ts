@@ -191,6 +191,30 @@ export function openSchedulerDatabase(
         )
         .run(new Date().toISOString())
     }
+
+    if (!applied.has(3)) {
+      const taskCols = getColumnNames(sqlite, 'scheduler_tasks')
+      if (!taskCols.has('payload_hash')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN payload_hash TEXT;`)
+      }
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS scheduler_occurrence_dedup (
+          occurrence_key TEXT PRIMARY KEY,
+          routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+          trigger_source TEXT NOT NULL,
+          payload_hash TEXT,
+          created_at TEXT NOT NULL,
+          expires_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scheduler_dedup_routine
+          ON scheduler_occurrence_dedup(routine_id, expires_at);
+      `)
+      sqlite
+        .prepare(
+          `INSERT INTO scheduler_schema_migrations (version, name, applied_at) VALUES (3, '0003_scheduler_phase5a3', ?)`,
+        )
+        .run(new Date().toISOString())
+    }
   })
 
   return {

@@ -9,7 +9,12 @@
     "./repository": "./src/repository/routine-repository.ts",
     "./queue": "./src/queue/execution-queue.ts",
     "./engine": "./src/engine/scheduler-engine.ts",
-    "./security": "./src/security/validation.ts"
+    "./security": "./src/security/validation.ts",
+    "./preview": "./src/diagnostics/preview.ts",
+    "./diagnostics": "./src/diagnostics/diagnostics.ts",
+    "./statistics": "./src/diagnostics/statistics.ts",
+    "./simulator": "./src/simulator/dry-run.ts",
+    "./portability": "./src/portability/export-import.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
