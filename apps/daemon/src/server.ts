@@ -326,6 +326,7 @@ export class GhostBotDaemon {
     this.skillsService = new LocalSkillsService(dbHandle)
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
       void this.computerUseService?.revokeByRunId(runId, reason).catch(() => {})
+      void this.terminalService?.revokeByRunId(runId, reason).catch(() => {})
     })
 
     const server = createServer((req, res) => {
@@ -538,7 +539,11 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          sendJson(res, 200, await repo.updateBot(parsed.data))
+          const updatedBot = await repo.updateBot(parsed.data)
+          if (parsed.data.patch.permission === 'read-only' || parsed.data.patch.workspacePath) {
+            await this.terminalService?.revokeByBotId(idCheck.data, 'bot_policy_updated').catch(() => {})
+          }
+          sendJson(res, 200, updatedBot)
           return
         }
         if (req.method === 'DELETE') {
@@ -552,6 +557,7 @@ export class GhostBotDaemon {
               }
             },
           })
+          await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
           }

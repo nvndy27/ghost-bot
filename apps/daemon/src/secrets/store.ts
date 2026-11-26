@@ -7,6 +7,12 @@ export interface SecretStoreStatus {
   locked: boolean
   backend: 'linux-secret-service' | 'memory-test-only' | 'unavailable'
   reason: string | null
+  diagnostics?: {
+    executableAvailable: boolean
+    dbusSessionAvailable: boolean
+    dbusServiceAvailable: boolean
+    collectionAccessible: boolean
+  }
 }
 
 export interface SecretCoordinate {
@@ -121,6 +127,12 @@ export class LinuxSecretServiceStore implements SecretStore {
         locked: false,
         backend: 'unavailable',
         reason: 'Linux Secret Service is only supported on Linux hosts',
+        diagnostics: {
+          executableAvailable: false,
+          dbusSessionAvailable: false,
+          dbusServiceAvailable: false,
+          collectionAccessible: false,
+        },
       }
     }
     if (!this.secretToolPath) {
@@ -129,6 +141,12 @@ export class LinuxSecretServiceStore implements SecretStore {
         locked: false,
         backend: 'unavailable',
         reason: 'secret-tool CLI is not installed; OS Secret Service unavailable',
+        diagnostics: {
+          executableAvailable: false,
+          dbusSessionAvailable: Boolean(process.env.DBUS_SESSION_BUS_ADDRESS),
+          dbusServiceAvailable: false,
+          collectionAccessible: false,
+        },
       }
     }
     if (!process.env.DBUS_SESSION_BUS_ADDRESS) {
@@ -137,56 +155,129 @@ export class LinuxSecretServiceStore implements SecretStore {
         locked: false,
         backend: 'unavailable',
         reason: 'D-Bus user session bus is unavailable; cannot reach OS Secret Service',
+        diagnostics: {
+          executableAvailable: true,
+          dbusSessionAvailable: false,
+          dbusServiceAvailable: false,
+          collectionAccessible: false,
+        },
       }
     }
 
-    if (this.busctlPath) {
-      for (const objectPath of [
-        '/org/freedesktop/secrets/aliases/default',
-        '/org/freedesktop/secrets/collection/login',
-      ]) {
-        try {
-          const out = execFileSync(
-            this.busctlPath,
-            [
-              '--user',
-              'get-property',
-              'org.freedesktop.secrets',
-              objectPath,
-              'org.freedesktop.Secret.Collection',
-              'Locked',
-            ],
-            { stdio: ['ignore', 'pipe', 'pipe'], timeout: 2_000 },
-          )
-            .toString('utf8')
-            .trim()
-          if (out === 'b true') {
-            return {
-              available: false,
-              locked: true,
-              backend: 'linux-secret-service',
-              reason: 'OS Secret Service keyring is locked; unlock your login keyring to access secrets',
-            }
+    if (!this.busctlPath || !fs.existsSync(this.busctlPath)) {
+      return {
+        available: false,
+        locked: false,
+        backend: 'unavailable',
+        reason: 'busctl CLI is not installed; cannot verify OS Secret Service collection state',
+        diagnostics: {
+          executableAvailable: true,
+          dbusSessionAvailable: true,
+          dbusServiceAvailable: false,
+          collectionAccessible: false,
+        },
+      }
+    }
+
+    let serviceReachable = false
+    try {
+      execFileSync(
+        this.busctlPath,
+        [
+          '--user',
+          'call',
+          'org.freedesktop.DBus',
+          '/org/freedesktop/DBus',
+          'org.freedesktop.DBus',
+          'GetNameOwner',
+          's',
+          'org.freedesktop.secrets',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 2_000 },
+      )
+      serviceReachable = true
+    } catch {
+      serviceReachable = false
+    }
+
+    if (!serviceReachable) {
+      return {
+        available: false,
+        locked: false,
+        backend: 'unavailable',
+        reason: 'org.freedesktop.secrets D-Bus service is not running or unreachable',
+        diagnostics: {
+          executableAvailable: true,
+          dbusSessionAvailable: true,
+          dbusServiceAvailable: false,
+          collectionAccessible: false,
+        },
+      }
+    }
+
+    for (const objectPath of [
+      '/org/freedesktop/secrets/aliases/default',
+      '/org/freedesktop/secrets/collection/login',
+    ]) {
+      try {
+        const out = execFileSync(
+          this.busctlPath,
+          [
+            '--user',
+            'get-property',
+            'org.freedesktop.secrets',
+            objectPath,
+            'org.freedesktop.Secret.Collection',
+            'Locked',
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe'], timeout: 2_000 },
+        )
+          .toString('utf8')
+          .trim()
+        if (out === 'b true') {
+          return {
+            available: false,
+            locked: true,
+            backend: 'linux-secret-service',
+            reason: 'OS Secret Service keyring is locked; unlock your login keyring to access secrets',
+            diagnostics: {
+              executableAvailable: true,
+              dbusSessionAvailable: true,
+              dbusServiceAvailable: true,
+              collectionAccessible: true,
+            },
           }
-          if (out === 'b false') {
-            return {
-              available: true,
-              locked: false,
-              backend: 'linux-secret-service',
-              reason: null,
-            }
-          }
-        } catch {
-          // Try next object path or fallback to secret-tool probe below
         }
+        if (out === 'b false') {
+          return {
+            available: true,
+            locked: false,
+            backend: 'linux-secret-service',
+            reason: null,
+            diagnostics: {
+              executableAvailable: true,
+              dbusSessionAvailable: true,
+              dbusServiceAvailable: true,
+              collectionAccessible: true,
+            },
+          }
+        }
+      } catch {
+        // Try next collection object path
       }
     }
 
     return {
-      available: true,
+      available: false,
       locked: false,
-      backend: 'linux-secret-service',
-      reason: null,
+      backend: 'unavailable',
+      reason: 'OS Secret Service default/login collection is inaccessible or missing (fail-closed)',
+      diagnostics: {
+        executableAvailable: true,
+        dbusSessionAvailable: true,
+        dbusServiceAvailable: true,
+        collectionAccessible: false,
+      },
     }
   }
 

@@ -119,6 +119,12 @@ export class ScopedTerminalService {
   private readonly dbHandle: DatabaseHandle
   private readonly botRepo: BotRepository
   private readonly activeProcesses = new Map<string, ActiveProcessEntry>()
+  private readonly startingCommands = new Map<
+    string,
+    { runId: string; botId: string; cancelled: boolean }
+  >()
+  private readonly revokedRuns = new Set<string>()
+  private readonly revokedCommandIds = new Set<string>()
   private readonly bwrapPath: string
 
   constructor(
@@ -238,6 +244,14 @@ export class ScopedTerminalService {
         'TERMINAL_WORKSPACE_CHANGED',
         'Bot workspace changed or was replaced since approval',
         { statusCode: 409 },
+      )
+    }
+
+    if (this.revokedRuns.has(params.runId)) {
+      throw new DaemonError(
+        'TERMINAL_RUN_REVOKED',
+        `Daemon run "${params.runId}" was terminated or revoked`,
+        { statusCode: 403 },
       )
     }
 
@@ -457,6 +471,20 @@ export class ScopedTerminalService {
       )
     }
 
+    // Revalidate after async capability probe in case the run terminated or bot changed mid-flight
+    this.revalidateAuthority({
+      botId: cmd.botId,
+      runId: cmd.runId,
+      expectedWorkspace: cmd.canonicalWorkspace,
+    })
+    if (this.revokedRuns.has(cmd.runId) || this.revokedCommandIds.has(cmd.id)) {
+      throw new DaemonError(
+        'TERMINAL_RUN_REVOKED',
+        'Command authority was revoked before process startup',
+        { statusCode: 409 },
+      )
+    }
+
     // Atomically consume single-use approval
     const consumed = this.dbHandle.sqlite
       .prepare(
@@ -473,11 +501,34 @@ export class ScopedTerminalService {
       )
     }
 
+    this.startingCommands.set(cmd.id, {
+      runId: cmd.runId,
+      botId: cmd.botId,
+      cancelled: false,
+    })
     await this.executeInBwrap(cmd, Math.min(MAX_DURATION_MS, Math.max(100, input.timeoutMs ?? 15_000)))
     return this.getCommand(cmd.id)
   }
 
   private async executeInBwrap(cmd: TerminalCommandDto, timeoutMs: number): Promise<void> {
+    const startEntry = this.startingCommands.get(cmd.id)
+    if (
+      this.revokedRuns.has(cmd.runId) ||
+      this.revokedCommandIds.has(cmd.id) ||
+      startEntry?.cancelled
+    ) {
+      this.startingCommands.delete(cmd.id)
+      const cancelIso = new Date().toISOString()
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE terminal_commands
+           SET status = 'cancelled', termination_confirmed = 1, error_code = 'TERMINAL_RUN_REVOKED',
+               ended_at = COALESCE(ended_at, ?), updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+        )
+        .run(cancelIso, cancelIso, cmd.id)
+      return
+    }
     const bwrapArgs = [
       '--unshare-all',
       '--die-with-parent',
@@ -539,7 +590,12 @@ export class ScopedTerminalService {
     })
 
     const entry: ActiveProcessEntry = { child, cancelRequested: false }
+    this.startingCommands.delete(cmd.id)
     this.activeProcesses.set(cmd.id, entry)
+    if (this.revokedRuns.has(cmd.runId) || this.revokedCommandIds.has(cmd.id)) {
+      entry.cancelRequested = true
+      this.signalProcessTree(child, 'SIGTERM')
+    }
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
@@ -633,7 +689,7 @@ export class ScopedTerminalService {
          SET status = ?, exit_code = ?, signal = ?, timed_out = ?,
              termination_confirmed = ?, stdout_preview = ?, stderr_preview = ?,
              truncated = ?, error_code = ?, ended_at = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'running'`,
       )
       .run(
         finalStatus,
@@ -777,6 +833,89 @@ export class ScopedTerminalService {
         .run(olderThanIso)
       return Number(res.changes)
     })
+  }
+
+  async revokeByRunId(runId: string, reason = 'run_terminated'): Promise<void> {
+    this.revokedRuns.add(runId)
+    const nowIso = new Date().toISOString()
+    const errorCode = `TERMINAL_REVOKED:${reason.slice(0, 48)}`
+
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE terminal_commands
+         SET status = 'cancelled', termination_confirmed = 1, error_code = ?,
+             ended_at = COALESCE(ended_at, ?), updated_at = ?
+         WHERE run_id = ? AND status IN ('awaiting_approval', 'queued')`,
+      )
+      .run(errorCode, nowIso, nowIso, runId)
+
+    for (const [cmdId, startEntry] of this.startingCommands.entries()) {
+      if (startEntry.runId === runId) {
+        startEntry.cancelled = true
+        this.revokedCommandIds.add(cmdId)
+      }
+    }
+
+    const runningRows = this.dbHandle.sqlite
+      .prepare(`SELECT id FROM terminal_commands WHERE run_id = ? AND status = 'running'`)
+      .all(runId) as Array<{ id: string }>
+
+    for (const row of runningRows) {
+      this.revokedCommandIds.add(row.id)
+      if (this.activeProcesses.has(row.id)) {
+        await this.cancelCommand(row.id).catch(() => {})
+      } else if (!this.startingCommands.has(row.id)) {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE terminal_commands
+             SET status = 'uncertain', termination_confirmed = 0, error_code = ?,
+                 ended_at = COALESCE(ended_at, ?), updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(errorCode, nowIso, nowIso, row.id)
+      }
+    }
+  }
+
+  async revokeByBotId(botId: string, reason = 'bot_revoked'): Promise<void> {
+    const nowIso = new Date().toISOString()
+    const errorCode = `TERMINAL_REVOKED:${reason.slice(0, 48)}`
+
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE terminal_commands
+         SET status = 'cancelled', termination_confirmed = 1, error_code = ?,
+             ended_at = COALESCE(ended_at, ?), updated_at = ?
+         WHERE bot_id = ? AND status IN ('awaiting_approval', 'queued')`,
+      )
+      .run(errorCode, nowIso, nowIso, botId)
+
+    for (const [cmdId, startEntry] of this.startingCommands.entries()) {
+      if (startEntry.botId === botId) {
+        startEntry.cancelled = true
+        this.revokedCommandIds.add(cmdId)
+      }
+    }
+
+    const runningRows = this.dbHandle.sqlite
+      .prepare(`SELECT id FROM terminal_commands WHERE bot_id = ? AND status = 'running'`)
+      .all(botId) as Array<{ id: string }>
+
+    for (const row of runningRows) {
+      this.revokedCommandIds.add(row.id)
+      if (this.activeProcesses.has(row.id)) {
+        await this.cancelCommand(row.id).catch(() => {})
+      } else if (!this.startingCommands.has(row.id)) {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE terminal_commands
+             SET status = 'uncertain', termination_confirmed = 0, error_code = ?,
+                 ended_at = COALESCE(ended_at, ?), updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(errorCode, nowIso, nowIso, row.id)
+      }
+    }
   }
 
   async shutdownAll(): Promise<void> {
