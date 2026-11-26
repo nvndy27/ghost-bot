@@ -197,53 +197,65 @@ export class PlaywrightBrowserBackend {
     fs.chmodSync(tempProfileDir, 0o700)
 
     let browser: PwBrowser | null = null
-    let context: PwContext
+    let context: PwContext | null = null
     const launchArgs = [
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
       '--disable-sync',
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
     ]
 
-    if (pw.chromium.launchPersistentContext) {
-      context = await pw.chromium.launchPersistentContext(tempProfileDir, {
-        executablePath,
-        headless: config.headless ?? true,
-        args: launchArgs,
-        viewport,
-        acceptDownloads: false,
-        permissions: [],
-        serviceWorkers: 'block',
-      })
-    } else {
-      browser = await pw.chromium.launch({
-        executablePath,
-        headless: config.headless ?? true,
-        args: launchArgs,
-      })
-      context = await browser.newContext({
-        viewport,
-        acceptDownloads: false,
-        permissions: [],
-        serviceWorkers: 'block',
-      })
-    }
+    try {
+      if (pw.chromium.launchPersistentContext) {
+        context = await pw.chromium.launchPersistentContext(tempProfileDir, {
+          executablePath,
+          headless: config.headless ?? true,
+          chromiumSandbox: true,
+          args: launchArgs,
+          viewport,
+          acceptDownloads: false,
+          permissions: [],
+          serviceWorkers: 'block',
+        })
+      } else {
+        browser = await pw.chromium.launch({
+          executablePath,
+          headless: config.headless ?? true,
+          chromiumSandbox: true,
+          args: launchArgs,
+        })
+        context = await browser.newContext({
+          viewport,
+          acceptDownloads: false,
+          permissions: [],
+          serviceWorkers: 'block',
+        })
+      }
 
-    // Enforce origin allowlist across main frames, subframes, XHR/fetch, and WebSockets
-    await context.route('**/*', async (route) => {
-      const req = route.request()
-      const url = req.url()
-      if (url === 'about:blank') {
-        await route.continue()
-        return
+      // Enforce origin allowlist across main frames, subframes, XHR/fetch, and WebSockets
+      await context.route('**/*', async (route) => {
+        const req = route.request()
+        const url = req.url()
+        if (url === 'about:blank') {
+          await route.continue()
+          return
+        }
+        try {
+          validateBrowserUrl(url, allowedOrigins, { allowWebSocket: true })
+          await route.continue()
+        } catch {
+          await route.abort('blockedbyclient')
+        }
+      })
+    } catch (err) {
+      if (context) await context.close().catch(() => {})
+      if (browser) await browser.close().catch(() => {})
+      if (fs.existsSync(tempProfileDir)) {
+        fs.rmSync(tempProfileDir, { recursive: true, force: true })
       }
-      try {
-        validateBrowserUrl(url, allowedOrigins, { allowWebSocket: true })
-        await route.continue()
-      } catch {
-        await route.abort('blockedbyclient')
-      }
-    })
+      throw err
+    }
 
     const session: InternalBrowserSession = {
       sessionId,
