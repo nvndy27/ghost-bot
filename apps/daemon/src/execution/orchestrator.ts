@@ -2194,7 +2194,7 @@ export class RunOrchestrator {
             errCode === 'VALIDATION_ERROR' ||
             errCode === 'MCP_NOT_FOUND'
           const nextState = isPreDispatch ? 'failed' : 'uncertain'
-          const safeMsg = redactSecrets(invokeErr instanceof Error ? invokeErr.message : String(invokeErr))
+          const _safeMsg = redactSecrets(invokeErr instanceof Error ? invokeErr.message : String(invokeErr))
           this.dbHandle.sqlite
             .prepare(
               `UPDATE mcp_approval_bindings

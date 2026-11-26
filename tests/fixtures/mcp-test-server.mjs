@@ -1,3 +1,4 @@
+/* global process, setTimeout */
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
