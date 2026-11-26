@@ -33,7 +33,7 @@ function mapTeamError(err: unknown): never {
     const status =
       err.code === 'TEAM_NOT_FOUND' || err.code === 'TEAM_RUN_NOT_FOUND' || err.code === 'TASK_NOT_FOUND'
         ? 404
-        : err.code === 'SCOPE_FORBIDDEN'
+        : err.code === 'SCOPE_FORBIDDEN' || err.code === 'NON_MEMBER_BOT'
           ? 403
           : err.code === 'IDEMPOTENCY_CONFLICT'
             ? 409
@@ -248,6 +248,13 @@ export class TeamsService {
         )
       }
 
+      if (input.planner && !this.bridge.isMockMode()) {
+        throw new DaemonError(
+          'LIVE_TEAMS_GATED',
+          'Custom planner callbacks are disabled outside mock mode',
+          { statusCode: 403 },
+        )
+      }
       const planner: TeamTaskPlanner =
         input.planner ??
         ({
@@ -295,6 +302,13 @@ export class TeamsService {
         LOCAL_USER_ID,
         this.bridge,
       )
+      if (synthesizer && !this.bridge.isMockMode()) {
+        throw new DaemonError(
+          'LIVE_TEAMS_GATED',
+          'Custom synthesizer callbacks are disabled outside mock mode',
+          { statusCode: 403 },
+        )
+      }
       if (synthesizer && agg.synthesisInputReady && agg.status !== 'cancelled' && agg.status !== 'uncertain') {
         const res = await this.coordinator.synthesizeFinalResponse(
           teamRunId,
@@ -437,6 +451,16 @@ export class TeamsService {
     options?: { limit?: number; afterSeq?: number; teamRunId?: string; viewerBotId?: string },
   ): TeamMessageRecord[] {
     try {
+      if (options?.viewerBotId) {
+        const viewerBot = this.botRepo.getBot(options.viewerBotId)
+        if (!viewerBot) {
+          throw new DaemonError(
+            'NON_MEMBER_BOT',
+            `Viewer bot "${options.viewerBotId}" was not found or is archived`,
+            { statusCode: 403 },
+          )
+        }
+      }
       return this.repository.listMessages(teamId, LOCAL_USER_ID, options)
     } catch (err) {
       mapTeamError(err)

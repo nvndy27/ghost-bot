@@ -132,7 +132,7 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
         message: `Target bot "${ctx.botId}" not found or archived`,
       }
     }
-    if (bot.permission === 'full-access') {
+    if ((bot.permission as string) === 'full-access') {
       return {
         status: 'failed',
         code: 'AUTONOMOUS_FULL_ACCESS_DENIED',

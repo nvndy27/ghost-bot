@@ -2,9 +2,15 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, it } from 'node:test'
+import {
+  TeamRunApprovalDtoSchema,
+  TeamStartRunResponseDtoSchema,
+} from '../packages/shared-types/ipc.ts'
 import { BotRepository } from '../apps/daemon/src/bots/repository.ts'
 import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
+import { MIGRATIONS } from '../apps/daemon/src/db/migrations.ts'
 import { seedInitialBotsIfNeeded } from '../apps/daemon/src/db/seed.ts'
 import { RunOrchestrator } from '../apps/daemon/src/execution/orchestrator.ts'
 import { RuntimePolicyBroker } from '../apps/daemon/src/runtime/policy-broker.ts'
@@ -334,6 +340,142 @@ describe('Phase 4D.3 Final Teams Production Acceptance', () => {
       assert.equal(rec2.tasksMarkedUncertain, 0)
     } finally {
       db2.close()
+    }
+  })
+
+  it('F1-F5 regressions: in-flight cancel, timeout cancel, planner/synthesizer gate, strict DTOs, viewerBotId auth, legacy NULL leader migration, and aggregate duration budget', async () => {
+    // F4: Legacy v8 database with NULL leader_agent_id (migrated to lead_bot_id = '') upgrades safely in 0009
+    const legacyDir = makeTempDir('ghost-4d3-f4-legacy-')
+    const legacyDbPath = path.join(legacyDir, 'ghost-bot.sqlite')
+    const raw = new DatabaseSync(legacyDbPath)
+    raw.exec('PRAGMA foreign_keys = ON;')
+    raw.exec(
+      `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);`,
+    )
+    for (const m of MIGRATIONS.filter((x) => x.version <= 8)) {
+      if (m.version === 2) raw.exec('PRAGMA foreign_keys = OFF;')
+      raw.exec(m.sql)
+      if (m.version === 2) raw.exec('PRAGMA foreign_keys = ON;')
+      raw.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+        m.version,
+        m.name,
+        '2026-11-26T00:00:00.000Z',
+      )
+    }
+    raw.prepare(`INSERT INTO teams (id, name, leader_agent_id, lead_bot_id) VALUES ('team_null_lead', 'Orphan Lead Team', NULL, '')`).run()
+    raw.close()
+
+    const migratedDb = await openGhostBotDatabase(legacyDir)
+    try {
+      const migratedRow = migratedDb.sqlite
+        .prepare(`SELECT id, archived_at FROM teams WHERE id = 'team_null_lead'`)
+        .get() as { id: string; archived_at: string | null }
+      assert.equal(migratedRow.id, 'team_null_lead')
+      assert.ok(migratedRow.archived_at !== null, 'Orphaned legacy team should be safely archived')
+    } finally {
+      migratedDb.close()
+    }
+
+    // F1: In-flight cancellation before link persistence must NOT falsely confirm, and DISPATCH_TIMEOUT cancels child run
+    const { db, botList, teams, bridge, orchestrator } = await setupHarness('mock')
+    try {
+      const lead = botList[0]!
+      const worker = botList[1] ?? lead
+      const team = teams.createTeam({
+        name: 'F1-F5 Squad',
+        leadBotId: lead.id,
+        memberBotIds: [lead.id, worker.id],
+        bounds: { maxDurationMs: 1200, maxTokens: 5000 },
+      })
+
+      // F4: viewerBotId membership & archival check
+      const outsider = botList.find((b) => b.id !== lead.id && b.id !== worker.id)
+      if (outsider) {
+        assert.throws(() => teams.listMessages(team.id, { viewerBotId: outsider.id }))
+      }
+      assert.throws(() => teams.listMessages(team.id, { viewerBotId: 'bot_missing_archived' }))
+
+      // F3: Strict DTO validation
+      const started = await teams.startTeamRun({
+        teamId: team.id,
+        goal: 'Validate strict DTOs',
+        idempotencyKey: 'f3-dto-1',
+      })
+      const dtoCheck = TeamStartRunResponseDtoSchema.safeParse(started)
+      assert.equal(dtoCheck.success, true)
+      const badApproval = TeamRunApprovalDtoSchema.safeParse({ approvalId: 'a1' })
+      assert.equal(badApproval.success, false)
+
+      // F1: Intercept orchestrator.startRun to simulate concurrent cancelExecution during in-flight child creation
+      const origStartRun = orchestrator.startRun.bind(orchestrator)
+      let releaseStart!: () => void
+      const startBarrier = new Promise<void>((r) => {
+        releaseStart = r
+      })
+      orchestrator.startRun = (async (input: Parameters<typeof origStartRun>[0]) => {
+        await startBarrier
+        return origStartRun(input)
+      }) as typeof origStartRun
+
+      const targetTaskId = started.tasks[0]!.id
+      const dispatchPromise = bridge.dispatch({
+        teamId: team.id,
+        teamRunId: started.run.id,
+        taskId: targetTaskId,
+        ownerId: 'local-user',
+        assignedBotId: worker.id,
+        prompt: 'Inflight test',
+        attempt: 1,
+        depth: 1,
+        remainingDurationMs: 1000,
+        remainingTokenBudget: 500,
+      })
+
+      // Give dispatch a microtask to enter startRun barrier
+      await new Promise((r) => setTimeout(r, 10))
+      const cancelRes = await bridge.cancelExecution({
+        teamId: team.id,
+        teamRunId: started.run.id,
+        taskId: targetTaskId,
+        attempt: 1,
+      })
+      assert.equal(cancelRes.confirmed, false, 'Must NOT falsely confirm while startRun is in flight')
+
+      releaseStart()
+      const outcome = await dispatchPromise
+      assert.equal(outcome.status, 'failed')
+      assert.equal(outcome.code, 'TEAM_RUN_CANCELLED')
+      orchestrator.startRun = origStartRun
+      await new Promise((r) => setTimeout(r, 50))
+    } finally {
+      db.close()
+    }
+
+    // F2: Custom planner/synthesizer callbacks rejected in non-mock mode
+    const liveHarness = await setupHarness('codex')
+    try {
+      const lead = liveHarness.botList[0]!
+      const team = liveHarness.teams.createTeam({
+        name: 'F2 Live Gated',
+        leadBotId: lead.id,
+        memberBotIds: [lead.id],
+      })
+      await assert.rejects(
+        () =>
+          liveHarness.teams.startTeamRun({
+            teamId: team.id,
+            goal: 'Blocked custom planner',
+            idempotencyKey: 'f2-planner-1',
+            planner: {
+              async plan() {
+                return { summary: 'x', tasks: [] }
+              },
+            },
+          }),
+        (err: unknown) => err instanceof Error && (err as Error & { code?: string }).code === 'LIVE_TEAMS_GATED',
+      )
+    } finally {
+      liveHarness.db.close()
     }
   })
 })

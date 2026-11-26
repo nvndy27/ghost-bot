@@ -13,6 +13,7 @@
     "@ghost-bot/mcp": "workspace:*",
     "@ghost-bot/memory": "workspace:*",
     "@ghost-bot/runtime-adapters": "workspace:*",
+    "@ghost-bot/scheduler": "workspace:*",
     "@ghost-bot/shared-types": "workspace:*",
     "@ghost-bot/teams": "workspace:*",
     "drizzle-orm": "^0.45.4",

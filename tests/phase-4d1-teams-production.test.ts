@@ -73,7 +73,7 @@ describe('Phase 4D.1 Production Teams Daemon Integration', () => {
 
     const dbHandle = await openGhostBotDatabase(dir)
     const verRow = dbHandle.sqlite.prepare('SELECT MAX(version) AS ver FROM schema_migrations').get() as { ver: number }
-    assert.equal(Number(verRow.ver), 8)
+    assert.ok(Number(verRow.ver) >= 8)
     // Idempotent re-run
     assert.equal(runMigrations(dbHandle.sqlite), 0)
 

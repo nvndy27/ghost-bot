@@ -119,15 +119,15 @@ async function setupHarness(options: { runtimeMode?: 'mock' | 'codex'; nowMs?: n
 }
 
 describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
-  it('upgrades a v8 database to 0009_scheduler_routines preserving legacy data and FK integrity', async () => {
-    const dir = makeTempDir('ghost-5b-v8-')
+  it('upgrades a v9 database to 0010_scheduler_routines preserving legacy data and FK integrity', async () => {
+    const dir = makeTempDir('ghost-5b-v9-')
     const dbPath = path.join(dir, 'ghost-bot.sqlite')
     const raw = new DatabaseSync(dbPath)
     raw.exec('PRAGMA foreign_keys = ON;')
     raw.exec(
       `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);`,
     )
-    for (const m of MIGRATIONS.filter((x) => x.version <= 8)) {
+    for (const m of MIGRATIONS.filter((x) => x.version <= 9)) {
       if (m.version === 2) raw.exec('PRAGMA foreign_keys = OFF;')
       raw.exec(m.sql)
       if (m.version === 2) raw.exec('PRAGMA foreign_keys = ON;')
@@ -141,7 +141,7 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
     raw
       .prepare(
         `INSERT INTO agents (id, name, description, avatar_json, instructions, runtime_id, model_id, effort, workspace_path, permission_mode, created_at, updated_at)
-         VALUES ('bot_v8', 'Legacy Bot', '', '{}', '', 'mock', 'mock-model', 'medium', ?, 'read-only', ?, ?)`,
+         VALUES ('bot_v9', 'Legacy Bot', '', '{}', '', 'mock', 'mock-model', 'medium', ?, 'read-only', ?, ?)`,
       )
       .run(dir, now, now)
     raw.close()
@@ -151,14 +151,14 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
       const ver = dbHandle.sqlite
         .prepare('SELECT MAX(version) AS ver FROM schema_migrations')
         .get() as { ver: number }
-      assert.equal(Number(ver.ver), 9)
+      assert.equal(Number(ver.ver), 10)
       assert.equal(runMigrations(dbHandle.sqlite), 0)
       const fkViolations = dbHandle.sqlite.prepare('PRAGMA foreign_key_check').all()
       assert.equal(fkViolations.length, 0)
-      const botRow = dbHandle.sqlite.prepare(`SELECT id FROM agents WHERE id = 'bot_v8'`).get() as
+      const botRow = dbHandle.sqlite.prepare(`SELECT id FROM agents WHERE id = 'bot_v9'`).get() as
         | { id: string }
         | undefined
-      assert.equal(botRow?.id, 'bot_v8')
+      assert.equal(botRow?.id, 'bot_v9')
     } finally {
       dbHandle.close()
     }

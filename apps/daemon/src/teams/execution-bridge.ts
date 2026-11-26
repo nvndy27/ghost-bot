@@ -43,9 +43,14 @@ const PERMISSION_RANK: Record<'read-only' | 'ask-approval' | 'workspace', number
 
 export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskDispatcher {
   private readonly deps: TeamsExecutionBridgeDeps
+  private readonly inFlightDispatches = new Map<string, { cancelled: boolean; daemonRunId?: string }>()
 
   constructor(deps: TeamsExecutionBridgeDeps) {
     this.deps = deps
+  }
+
+  isMockMode(): boolean {
+    return this.deps.getRuntimeState().runtimeMode === 'mock'
   }
 
   async revalidateWorkerPolicy(
@@ -223,6 +228,25 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
 
     const sessionId = this.getOrCreateTeamSessionId(ctx.teamRunId, ctx.assignedBotId)
     const startMs = Date.now()
+    const flightKey = `${ctx.taskId}:${ctx.attempt}`
+    const isParentCancelling = () => {
+      const tr = this.deps.dbHandle.sqlite
+        .prepare(`SELECT status FROM team_runs WHERE id = ?`)
+        .get(ctx.teamRunId) as { status: string } | undefined
+      return Boolean(tr && (tr.status === 'cancelling' || tr.status === 'cancelled'))
+    }
+
+    if (isParentCancelling()) {
+      return {
+        status: 'failed',
+        code: 'TEAM_RUN_CANCELLED',
+        message: 'Team run is cancelling or cancelled before dispatch',
+        retryable: false,
+      }
+    }
+
+    const flightState: { cancelled: boolean; daemonRunId?: string } = { cancelled: false }
+    this.inFlightDispatches.set(flightKey, flightState)
 
     try {
       const { run } = await this.deps.orchestrator.startRun({
@@ -230,6 +254,7 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
         text: ctx.prompt,
         idempotencyKey: `team:${ctx.taskId}:attempt:${ctx.attempt}`,
       })
+      flightState.daemonRunId = run.id
 
       const rt = this.deps.getRuntimeState()
       this.deps.dbHandle.sqlite
@@ -251,6 +276,17 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           ctx.attempt,
           new Date().toISOString(),
         )
+
+      if (flightState.cancelled || isParentCancelling()) {
+        this.deps.orchestrator.cancelRun(run.id)
+        return {
+          status: 'failed',
+          code: 'TEAM_RUN_CANCELLED',
+          message: 'Team run was cancelled during child run creation',
+          retryable: false,
+          durationMs: Math.max(1, Date.now() - startMs),
+        }
+      }
 
       // Await child run completion up to remainingDurationMs
       const deadline = startMs + Math.max(500, ctx.remainingDurationMs)
@@ -283,10 +319,7 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           }
         }
         if (latest.status === 'awaiting_approval') {
-          const teamRunRow = this.deps.dbHandle.sqlite
-            .prepare(`SELECT status FROM team_runs WHERE id = ?`)
-            .get(ctx.teamRunId) as { status: string } | undefined
-          if (teamRunRow && (teamRunRow.status === 'cancelling' || teamRunRow.status === 'cancelled')) {
+          if (flightState.cancelled || isParentCancelling()) {
             this.deps.orchestrator.cancelRun(run.id)
             return {
               status: 'failed',
@@ -312,10 +345,12 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
         await new Promise((r) => setTimeout(r, pollMs))
       }
 
+      // Request cancellation on timeout and preserve uncertain outcome
+      this.deps.orchestrator.cancelRun(run.id)
       return {
         status: 'uncertain',
         code: 'DISPATCH_TIMEOUT',
-        message: 'Child daemon run exceeded remaining duration budget',
+        message: 'Child daemon run exceeded remaining duration budget; cancellation requested',
         durationMs: Math.max(1, Date.now() - startMs),
       }
     } catch (err) {
@@ -326,6 +361,8 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
         message: redactSecrets(msg),
         durationMs: Math.max(1, Date.now() - startMs),
       }
+    } finally {
+      this.inFlightDispatches.delete(flightKey)
     }
   }
 
@@ -335,6 +372,25 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
     taskId: string
     attempt: number
   }): Promise<TeamCancellationResult> {
+    const flightKey = `${ctx.taskId}:${ctx.attempt}`
+    const inFlight = this.inFlightDispatches.get(flightKey)
+    if (inFlight) {
+      inFlight.cancelled = true
+      if (inFlight.daemonRunId) {
+        const ack = await this.requestCancellation({
+          teamRunId: ctx.teamRunId ?? '',
+          taskId: ctx.taskId,
+          daemonRunId: inFlight.daemonRunId,
+          providerSessionId: null,
+        })
+        return { confirmed: ack.confirmedStopped, reason: ack.reason ?? undefined }
+      }
+      return {
+        confirmed: false,
+        reason: 'Child run creation in flight; cancellation requested but not yet confirmed',
+      }
+    }
+
     const link = this.deps.dbHandle.sqlite
       .prepare(
         `SELECT daemon_run_id FROM team_execution_links
@@ -343,6 +399,15 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
       )
       .get(ctx.taskId, ctx.attempt) as { daemon_run_id: string } | undefined
     if (!link) {
+      const taskRow = this.deps.dbHandle.sqlite
+        .prepare(`SELECT status FROM team_tasks WHERE id = ?`)
+        .get(ctx.taskId) as { status: string } | undefined
+      if (taskRow && (taskRow.status === 'running' || taskRow.status === 'cancelling')) {
+        return {
+          confirmed: false,
+          reason: 'Active task has no execution link; cancellation unconfirmed',
+        }
+      }
       return { confirmed: true }
     }
     const ack = await this.requestCancellation({

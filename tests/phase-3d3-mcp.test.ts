@@ -82,7 +82,7 @@ test('Phase 3D.3 migration 0007 upgrades populated v6 DB, preserves Memory/Knowl
         .all() as Array<{ version: number }>
       assert.deepEqual(
         versions.map((v) => v.version),
-        [1, 2, 3, 4, 5, 6, 7, 8],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       )
 
       const botRow = handle.sqlite.prepare("SELECT id FROM agents WHERE id = 'bot1'").get() as { id: string }

@@ -363,10 +363,12 @@ export class SchedulerService {
           })
       }
 
-      const bots = this.botRepo.listBots({ includeArchived: true }).bots
+      const botRows = this.dbHandle.sqlite
+        .prepare(`SELECT DISTINCT bot_id FROM scheduler_routines WHERE owner_id = ?`)
+        .all(LOCAL_USER_ID) as Array<{ bot_id: string }>
       const all: Array<RoutineRecord & { targetType: RoutineTargetType; teamId: string | null }> = []
-      for (const bot of bots) {
-        for (const r of this.repository.listByScope(this.scopeForBot(bot.id), {
+      for (const { bot_id: bId } of botRows) {
+        for (const r of this.repository.listByScope(this.scopeForBot(bId), {
           includeArchived: options.includeArchived,
         })) {
           const t = targetRows.get(r.id)

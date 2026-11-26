@@ -584,7 +584,44 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 9,
-    name: '0009_scheduler_routines',
+    name: '0009_teams_legacy_leader_fix',
+    sql: `
+      -- Safely repair or archive legacy Phase 1C teams whose leader_agent_id was NULL (from ON DELETE SET NULL)
+      -- while preserving all historical teams rows.
+      UPDATE teams
+      SET
+        lead_bot_id = COALESCE(
+          (
+            SELECT tm.agent_id
+            FROM team_members tm
+            JOIN agents a ON a.id = tm.agent_id AND a.archived_at IS NULL
+            WHERE tm.team_id = teams.id
+            ORDER BY CASE WHEN tm.role = 'lead' THEN 0 ELSE 1 END, tm.agent_id ASC
+            LIMIT 1
+          ),
+          lead_bot_id
+        ),
+        archived_at = CASE
+          WHEN (
+            SELECT a.id FROM agents a WHERE a.id = teams.lead_bot_id AND a.archived_at IS NULL LIMIT 1
+          ) IS NULL
+          AND (
+            SELECT tm.agent_id
+            FROM team_members tm
+            JOIN agents a ON a.id = tm.agent_id AND a.archived_at IS NULL
+            WHERE tm.team_id = teams.id
+            LIMIT 1
+          ) IS NULL
+          THEN COALESCE(archived_at, CASE WHEN created_at <> '' THEN created_at ELSE '1970-01-01T00:00:00.000Z' END)
+          ELSE archived_at
+        END
+      WHERE lead_bot_id = ''
+         OR lead_bot_id NOT IN (SELECT id FROM agents WHERE archived_at IS NULL);
+    `,
+  },
+  {
+    version: 10,
+    name: '0010_scheduler_routines',
     sql: `
       CREATE TABLE IF NOT EXISTS scheduler_routines (
         id TEXT PRIMARY KEY,

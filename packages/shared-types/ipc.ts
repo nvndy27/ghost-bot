@@ -1390,6 +1390,116 @@ export const TeamRecordDtoSchema = z.object({
   updatedAt: z.string(),
 })
 
+export const TeamPlanPreviewDtoSchema = z.object({
+  valid: z.boolean(),
+  errors: z.array(z.object({ code: z.string(), message: z.string() })),
+  warnings: z.array(z.string()),
+  layers: z.array(
+    z.object({
+      layer: z.number(),
+      planKeys: z.array(z.string()),
+    }),
+  ),
+  dependencies: z.array(
+    z.object({
+      planKey: z.string(),
+      dependsOn: z.array(z.string()),
+    }),
+  ),
+  assignedMembers: z.array(z.string()),
+  estimatedTokenAllocation: z.record(z.string(), z.number()),
+  maxPossibleConcurrency: z.number(),
+  unboundedPeakWidth: z.number(),
+  totalPlannedTasks: z.number(),
+  isEstimateOnly: z.boolean(),
+})
+
+export const TeamRunDtoSchema = z.object({
+  id: z.string(),
+  teamId: z.string(),
+  ownerId: z.string().optional(),
+  goal: z.string(),
+  status: z.string(),
+  tokensUsed: z.number().optional(),
+  durationUsedMs: z.number().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string().optional(),
+  endedAt: z.string().nullable().optional(),
+})
+
+export const TeamTaskDtoSchema = z.object({
+  id: z.string(),
+  teamId: z.string().optional(),
+  teamRunId: z.string().nullable(),
+  planKey: z.string().nullable().optional(),
+  assignedBotId: z.string(),
+  status: z.string(),
+  dependencyState: z.string().optional(),
+  sanitizedFailureReason: z.string().nullable().optional(),
+  tokensUsed: z.number().optional(),
+  durationUsedMs: z.number().optional(),
+})
+
+export const TeamStartRunResponseDtoSchema = z.object({
+  run: TeamRunDtoSchema,
+  tasks: z.array(TeamTaskDtoSchema),
+  created: z.boolean(),
+})
+
+export const TeamDiagnosticsDtoSchema = z.object({
+  teamRunId: z.string(),
+  status: z.string(),
+  uncertainCount: z.number().optional(),
+  cancellationState: z.string().nullable().optional(),
+  quarantineReason: z.string().nullable().optional(),
+})
+
+export const TeamAggregateUsageDtoSchema = z.object({
+  teamRunId: z.string(),
+  teamId: z.string().optional(),
+  rootTaskId: z.string().optional(),
+  status: z.string().optional(),
+  completedCount: z.number().optional(),
+  failedCount: z.number().optional(),
+  cancelledCount: z.number().optional(),
+  blockedCount: z.number().optional(),
+  uncertainCount: z.number().optional(),
+  totalTasks: z.number().optional(),
+  totalTokensUsed: z.number().optional(),
+  totalTokens: z.number().optional(),
+  totalDurationMs: z.number().optional(),
+  unknownUsageCount: z.number().optional(),
+})
+
+export const TeamRunApprovalDtoSchema = z.object({
+  approvalId: z.string(),
+  daemonRunId: z.string(),
+  teamTaskId: z.string(),
+  workerBotId: z.string(),
+  title: z.string(),
+  command: z.string(),
+  permissionMode: z.string(),
+  status: z.string(),
+  expiresAt: z.string(),
+})
+
+export const TeamMessageDtoSchema = z.object({
+  id: z.string(),
+  teamId: z.string(),
+  teamRunId: z.string().nullable().optional(),
+  authorBotId: z.string(),
+  targetBotId: z.string().nullable().optional(),
+  senderType: z.string(),
+  messageType: z.string().optional(),
+  visibility: z.string().optional(),
+  untrusted: z.boolean().optional(),
+  fromBotId: z.string().nullable().optional(),
+  senderRole: z.string().optional(),
+  content: z.string(),
+  seq: z.number().optional(),
+  createdAt: z.string(),
+})
+
 export type TeamRecordDto = z.infer<typeof TeamRecordDtoSchema>
 export type CreateTeamIpcInput = z.infer<typeof CreateTeamIpcInputSchema>
 export type UpdateTeamIpcInput = z.infer<typeof UpdateTeamIpcInputSchema>

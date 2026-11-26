@@ -36,6 +36,14 @@ import {
   TeamIdParamSchema,
   TeamRecordDtoSchema,
   TeamRunIdParamSchema,
+  TeamPlanPreviewDtoSchema,
+  TeamRunDtoSchema,
+  TeamTaskDtoSchema,
+  TeamStartRunResponseDtoSchema,
+  TeamDiagnosticsDtoSchema,
+  TeamAggregateUsageDtoSchema,
+  TeamRunApprovalDtoSchema,
+  TeamMessageDtoSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
   CreateRoutineIpcInputSchema,
@@ -1011,10 +1019,29 @@ function registerIpcHandlers(): void {
     })
   })
 
-  const LooseRecordSchema = z.record(z.string(), z.unknown())
+  function assertBoundedTeamsIpcPayload(raw: unknown): void {
+    if (raw === undefined || raw === null) return
+    const serialized = JSON.stringify(raw)
+    if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > 256 * 1024) {
+      throw new Error('Teams IPC payload exceeds maximum size')
+    }
+    const checkShape = (val: unknown, depth: number): void => {
+      if (depth > 12) throw new Error('Teams IPC payload exceeds maximum nesting depth')
+      if (Array.isArray(val)) {
+        if (val.length > 200) throw new Error('Teams IPC payload array exceeds maximum length')
+        for (const item of val) checkShape(item, depth + 1)
+      } else if (val && typeof val === 'object') {
+        const entries = Object.entries(val as Record<string, unknown>)
+        if (entries.length > 64) throw new Error('Teams IPC payload object exceeds maximum keys')
+        for (const [, v] of entries) checkShape(v, depth + 1)
+      }
+    }
+    checkShape(raw, 0)
+  }
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = ListTeamsInputSchema.parse(params ?? {})
     const qs = new URLSearchParams()
     if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
@@ -1028,12 +1055,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_CREATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = CreateTeamIpcInputSchema.parse(params)
     return queryDaemon('/teams', TeamRecordDtoSchema, { method: 'POST', body: parsed })
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_UPDATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = UpdateTeamIpcInputSchema.parse(params)
     const { teamId, ...body } = parsed
     return queryDaemon(`/teams/${encodeURIComponent(teamId)}`, TeamRecordDtoSchema, {
@@ -1044,6 +1073,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_UPDATE_MEMBERS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = UpdateTeamMembersIpcInputSchema.parse(params)
     return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/members`, TeamRecordDtoSchema, {
       method: 'PATCH',
@@ -1053,6 +1083,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_ARCHIVE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamId } = TeamIdParamSchema.parse(params)
     return queryDaemon(`/teams/${encodeURIComponent(teamId)}/archive`, TeamRecordDtoSchema, {
       method: 'POST',
@@ -1061,8 +1092,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_PREVIEW_PLAN, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = PreviewTeamPlanIpcInputSchema.parse(params)
-    return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/preview`, LooseRecordSchema, {
+    return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/preview`, TeamPlanPreviewDtoSchema, {
       method: 'POST',
       body: { plan: parsed.plan },
     })
@@ -1070,8 +1102,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_START, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = StartTeamRunIpcInputSchema.parse(params)
-    return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/runs`, LooseRecordSchema, {
+    return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/runs`, TeamStartRunResponseDtoSchema, {
       method: 'POST',
       body: {
         goal: parsed.goal,
@@ -1084,59 +1117,69 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamId } = TeamIdParamSchema.parse(params)
     return queryDaemon(
       `/teams/${encodeURIComponent(teamId)}/runs`,
-      z.object({ runs: z.array(LooseRecordSchema) }),
+      z.object({ runs: z.array(TeamRunDtoSchema) }),
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_GET, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
-    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}`, LooseRecordSchema)
+    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}`, TeamRunDtoSchema)
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_CANCEL, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
-    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/cancel`, LooseRecordSchema, {
-      method: 'POST',
-    })
+    return queryDaemon(
+      `/teams/runs/${encodeURIComponent(teamRunId)}/cancel`,
+      z.object({ run: TeamRunDtoSchema }).or(TeamRunDtoSchema),
+      { method: 'POST' },
+    )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_TASKS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
     return queryDaemon(
       `/teams/runs/${encodeURIComponent(teamRunId)}/tasks`,
-      z.object({ tasks: z.array(LooseRecordSchema) }),
+      z.object({ tasks: z.array(TeamTaskDtoSchema) }),
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_DIAGNOSTICS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
-    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/diagnostics`, LooseRecordSchema)
+    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/diagnostics`, TeamDiagnosticsDtoSchema)
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_USAGE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
-    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/usage`, LooseRecordSchema)
+    return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/usage`, TeamAggregateUsageDtoSchema)
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_APPROVALS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
     return queryDaemon(
       `/teams/runs/${encodeURIComponent(teamRunId)}/approvals`,
-      z.object({ approvals: z.array(LooseRecordSchema) }),
+      z.object({ approvals: z.array(TeamRunApprovalDtoSchema) }),
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_MESSAGES_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedTeamsIpcPayload(params)
     const parsed = ListTeamMessagesIpcInputSchema.parse(params)
     const qs = new URLSearchParams()
     if (parsed.teamRunId) qs.set('teamRunId', parsed.teamRunId)
@@ -1145,7 +1188,7 @@ function registerIpcHandlers(): void {
     if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
     return queryDaemon(
       `/teams/${encodeURIComponent(parsed.teamId)}/messages?${qs.toString()}`,
-      z.object({ messages: z.array(LooseRecordSchema) }),
+      z.object({ messages: z.array(TeamMessageDtoSchema) }),
     )
   })
 
