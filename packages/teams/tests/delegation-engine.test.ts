@@ -298,7 +298,8 @@ describe('DelegationEngine', () => {
     const reconciled = engine.reconcileOnRestart()
     assert.equal(reconciled, 1)
     const afterCrash = engine.getTask(crashTask.id, 'owner-1')
-    assert.equal(afterCrash.status, 'failed')
+    assert.equal(afterCrash.status, 'uncertain')
+    assert.equal(afterCrash.terminationConfirmed, false)
     assert.equal(afterCrash.errorCode, 'DAEMON_RESTARTED')
 
     handle.close()

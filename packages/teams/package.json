@@ -5,9 +5,11 @@
   "type": "module",
   "exports": {
     "./contracts": "./src/contracts/types.ts",
+    "./daemon-contracts": "./src/contracts/daemon-integration.ts",
     "./security": "./src/security/validation.ts",
     "./repository": "./src/repository/team-repository.ts",
-    "./engine": "./src/engine/delegation-engine.ts"
+    "./engine": "./src/engine/delegation-engine.ts",
+    "./coordinator": "./src/engine/team-coordinator.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
