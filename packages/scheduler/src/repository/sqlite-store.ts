@@ -15,13 +15,29 @@ export interface SchedulerDatabaseHandle {
  */
 export function createBorrowedSchedulerDatabaseHandle(
   sqlite: DatabaseSync,
-  transaction: <T>(fn: () => T) => T,
+  outerTransaction: <T>(fn: () => T) => T,
   dbPath = ':memory:',
 ): SchedulerDatabaseHandle {
+  let txDepth = 0
   return {
     sqlite,
     dbPath,
-    transaction,
+    transaction<T>(fn: () => T): T {
+      if (txDepth > 0) {
+        txDepth += 1
+        try {
+          return fn()
+        } finally {
+          txDepth -= 1
+        }
+      }
+      txDepth = 1
+      try {
+        return outerTransaction(fn)
+      } finally {
+        txDepth = 0
+      }
+    },
     close() {
       // Borrowed handle: lifecycle owned by @ghost-bot/daemon
     },

@@ -268,7 +268,7 @@ describe('Phase 4D.3 Final Teams Production Acceptance', () => {
         .prepare(`UPDATE team_runs SET status = 'running' WHERE id = ?`)
         .run(teamRunId)
       db.sqlite
-        .prepare(`UPDATE team_tasks SET status = 'running' WHERE id = ?`)
+        .prepare(`UPDATE team_tasks SET status = 'running', attempt = 1 WHERE id = ?`)
         .run(crashTask.id)
 
       const session = sessionRepo.createSession({

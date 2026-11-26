@@ -5,16 +5,16 @@ import type {
   RoutineRecord,
   RoutineScope,
   ScheduledTaskRecord,
-  UpdateRoutineInput,
+  UpdateRoutinePatch,
 } from '@ghost-bot/scheduler/contracts'
 import { createBorrowedSchedulerDatabaseHandle } from '@ghost-bot/scheduler/db'
 import { SchedulerEngine, type TickSummary } from '@ghost-bot/scheduler/engine'
 import { ExecutionQueue } from '@ghost-bot/scheduler/queue'
-import { RoutineRepository } from '@ghost-bot/scheduler/repository'
-import { previewSchedule } from '@ghost-bot/scheduler/preview'
+import { RoutineRepository, rowToTask, type RawTaskRow } from '@ghost-bot/scheduler/repository'
+import { previewRoutineSchedule } from '@ghost-bot/scheduler/preview'
 import { diagnoseRoutine } from '@ghost-bot/scheduler/diagnostics'
-import { computeExecutionStatistics } from '@ghost-bot/scheduler/statistics'
-import { simulateRoutineDryRun } from '@ghost-bot/scheduler/simulator'
+import { getRoutineStatistics } from '@ghost-bot/scheduler/statistics'
+import { runDryRunSimulation } from '@ghost-bot/scheduler/simulator'
 import {
   commitImportRoutines,
   exportRoutines,
@@ -22,7 +22,7 @@ import {
   type ImportConflictPolicy,
 } from '@ghost-bot/scheduler/portability'
 import { NotificationRepository } from '@ghost-bot/scheduler/notifications'
-import { NotificationPolicy, type NotificationPreference } from '@ghost-bot/scheduler/notification-policy'
+import { evaluateNotificationPolicy } from '@ghost-bot/scheduler/notification-policy'
 import { RoutineApprovalCoordinator } from '@ghost-bot/scheduler/approvals'
 import { SchedulerError } from '@ghost-bot/scheduler/security'
 import type { BotRepository } from '../bots/repository.ts'
@@ -57,7 +57,6 @@ export interface SchedulerServiceOptions {
   clock?: Clock
   tickIntervalMs?: number
   maxTasksPerTick?: number
-  notificationPreference?: NotificationPreference
 }
 
 export class SchedulerService {
@@ -68,7 +67,6 @@ export class SchedulerService {
   private readonly queue: ExecutionQueue
   private readonly engine: SchedulerEngine
   private readonly notifications: NotificationRepository
-  private readonly notificationPolicy: NotificationPolicy
   readonly approvals: RoutineApprovalCoordinator
   private dispatcher: DaemonRoutineDispatcher | null = null
   private readonly clock: Clock
@@ -108,16 +106,6 @@ export class SchedulerService {
       clock: this.clock,
     })
     this.notifications = new NotificationRepository(borrowed)
-    this.notificationPolicy = new NotificationPolicy(
-      this.notifications,
-      options.notificationPreference ?? {
-        quietHoursEnabled: false,
-        quietHoursStart: '22:00',
-        quietHoursEnd: '07:00',
-        timezone: 'UTC',
-        maxNotificationsPerHour: 30,
-      },
-    )
     this.approvals = new RoutineApprovalCoordinator(borrowed, {
       notifications: this.notifications,
     })
@@ -152,76 +140,72 @@ export class SchedulerService {
 
   private emitNotificationForTask(task: ScheduledTaskRecord, routine: RoutineRecord): void {
     const nowMs = this.clock.nowMs()
-    if (task.status === 'completed') {
-      this.notificationPolicy.emit(
-        {
-          routineId: routine.id,
-          routineRevision: task.routineRevision,
-          taskId: task.id,
-          occurrenceKey: task.occurrenceKey,
-          ownerId: task.ownerId,
-          botId: task.botId,
-          category: 'routine.completed',
-          severity: 'info',
-          dedupKey: `notif:completed:${task.id}`,
-          summary: `Routine "${routine.name}" completed.`,
-        },
-        nowMs,
-      )
-    } else if (task.status === 'awaiting_approval') {
-      this.notificationPolicy.emit(
-        {
-          routineId: routine.id,
-          routineRevision: task.routineRevision,
-          taskId: task.id,
-          occurrenceKey: task.occurrenceKey,
-          ownerId: task.ownerId,
-          botId: task.botId,
-          category: 'approval.required',
-          severity: 'critical',
-          dedupKey: `notif:approval:${task.id}`,
-          summary: `Routine "${routine.name}" requires approval.`,
-        },
-        nowMs,
-      )
-    } else if (task.status === 'interrupted' && task.uncertainExecution) {
-      this.notificationPolicy.emit(
-        {
-          routineId: routine.id,
-          routineRevision: task.routineRevision,
-          taskId: task.id,
-          occurrenceKey: task.occurrenceKey,
-          ownerId: task.ownerId,
-          botId: task.botId,
-          category: 'execution.uncertain',
-          severity: 'critical',
-          dedupKey: `notif:uncertain:${task.id}`,
-          summary: `Routine "${routine.name}" ended with uncertain execution outcome.`,
-        },
-        nowMs,
-      )
-    } else if (task.status === 'failed') {
-      this.notificationPolicy.emit(
-        {
-          routineId: routine.id,
-          routineRevision: task.routineRevision,
-          taskId: task.id,
-          occurrenceKey: task.occurrenceKey,
-          ownerId: task.ownerId,
-          botId: task.botId,
-          category: 'routine.failed',
-          severity: 'warning',
-          dedupKey: `notif:failed:${task.id}`,
-          summary: `Routine "${routine.name}" failed (${task.errorCode ?? 'FAILED'}).`,
-        },
-        nowMs,
-      )
-    }
+    const category =
+      task.status === 'completed'
+        ? ('routine.completed' as const)
+        : task.status === 'awaiting_approval'
+          ? ('approval.required' as const)
+          : task.status === 'interrupted' && task.uncertainExecution
+            ? ('execution.uncertain' as const)
+            : task.status === 'failed'
+              ? ('routine.failed' as const)
+              : null
+    if (!category) return
+
+    const severity =
+      category === 'approval.required' || category === 'execution.uncertain'
+        ? ('critical' as const)
+        : category === 'routine.failed'
+          ? ('warning' as const)
+          : ('info' as const)
+
+    const scope = { ownerId: task.ownerId, botId: task.botId }
+    const recentCount = this.notifications.list(scope, { limit: 50 }).notifications.length
+    const decision = evaluateNotificationPolicy(
+      {
+        enabledCategories: [
+          'routine.completed',
+          'routine.failed',
+          'approval.required',
+          'execution.uncertain',
+        ],
+        maxPerHour: 30,
+      },
+      category,
+      severity,
+      nowMs,
+      recentCount,
+    )
+
+    const summary =
+      category === 'routine.completed'
+        ? `Routine "${routine.name}" completed.`
+        : category === 'approval.required'
+          ? `Routine "${routine.name}" requires approval.`
+          : category === 'execution.uncertain'
+            ? `Routine "${routine.name}" ended with uncertain execution outcome.`
+            : `Routine "${routine.name}" failed (${task.errorCode ?? 'FAILED'}).`
+
+    this.notifications.create(
+      {
+        routineId: routine.id,
+        routineRevision: task.routineRevision,
+        taskId: task.id,
+        occurrenceKey: task.occurrenceKey,
+        scope,
+        category,
+        severity,
+        dedupKey: `notif:${category}:${task.id}`,
+        summary,
+        deliveryStatus: decision.deliveryStatus,
+      },
+      nowMs,
+    )
   }
 
   reconcileOnStartup(): { interruptedTasks: number; recoveredLinks: number } {
     const recoveredLinks = this.dispatcher ? this.dispatcher.recoverMissingExecutionLinks() : 0
-    const interruptedTasks = this.queue.reconcileOnStartup(this.clock.nowMs())
+    const interruptedTasks = this.queue.reconcileOnRestart(this.clock.nowMs())
     this.reconciled = true
     return { interruptedTasks, recoveredLinks }
   }
@@ -262,7 +246,6 @@ export class SchedulerService {
       }
     }
     const nowMs = this.clock.nowMs()
-    // Clock rollback protection: skip tick if system clock moved backwards
     if (nowMs < this.lastClockMs) {
       return {
         tick: {
@@ -356,8 +339,8 @@ export class SchedulerService {
 
       if (options.botId) {
         return this.repository
-          .listByScope(this.scopeForBot(options.botId), { includeArchived: options.includeArchived })
-          .map((r) => {
+          .list(this.scopeForBot(options.botId), { includeArchived: options.includeArchived })
+          .routines.map((r) => {
             const t = targetRows.get(r.id)
             return { ...r, targetType: t?.target_type ?? 'bot', teamId: t?.team_id ?? null }
           })
@@ -368,9 +351,9 @@ export class SchedulerService {
         .all(LOCAL_USER_ID) as Array<{ bot_id: string }>
       const all: Array<RoutineRecord & { targetType: RoutineTargetType; teamId: string | null }> = []
       for (const { bot_id: bId } of botRows) {
-        for (const r of this.repository.listByScope(this.scopeForBot(bId), {
+        for (const r of this.repository.list(this.scopeForBot(bId), {
           includeArchived: options.includeArchived,
-        })) {
+        }).routines) {
           const t = targetRows.get(r.id)
           all.push({ ...r, targetType: t?.target_type ?? 'bot', teamId: t?.team_id ?? null })
         }
@@ -384,7 +367,7 @@ export class SchedulerService {
   updateRoutine(
     routineId: string,
     botId: string,
-    patch: UpdateRoutineInput & { targetType?: RoutineTargetType; teamId?: string | null },
+    patch: UpdateRoutinePatch & { targetType?: RoutineTargetType; teamId?: string | null },
   ): RoutineRecord & { targetType: RoutineTargetType; teamId: string | null } {
     try {
       const current = this.getRoutine(routineId, botId)
@@ -472,8 +455,17 @@ export class SchedulerService {
 
   listTaskHistory(routineId: string, botId: string, limit = 50): ScheduledTaskRecord[] {
     try {
-      this.repository.getById(routineId, this.scopeForBot(botId))
-      return this.queue.listTasksForRoutine(routineId, this.scopeForBot(botId)).slice(0, limit)
+      const scope = this.scopeForBot(botId)
+      this.repository.getById(routineId, scope)
+      const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)))
+      const rows = this.dbHandle.sqlite
+        .prepare(
+          `SELECT * FROM scheduler_tasks
+           WHERE routine_id = ? AND owner_id = ? AND bot_id = ?
+           ORDER BY created_at DESC LIMIT ?`,
+        )
+        .all(routineId, scope.ownerId, scope.botId, safeLimit) as unknown as RawTaskRow[]
+      return rows.map(rowToTask)
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -482,7 +474,7 @@ export class SchedulerService {
   previewRoutineSchedule(routineId: string, botId: string, count = 5) {
     try {
       const routine = this.repository.getById(routineId, this.scopeForBot(botId))
-      return previewSchedule(routine, { fromMs: this.clock.nowMs(), count })
+      return previewRoutineSchedule(routine, { startAtMs: this.clock.nowMs(), count })
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -490,10 +482,9 @@ export class SchedulerService {
 
   diagnoseRoutine(routineId: string, botId: string) {
     try {
-      const scope = this.scopeForBot(botId)
-      const routine = this.repository.getById(routineId, scope)
-      const tasks = this.queue.listTasksForRoutine(routineId, scope)
-      return diagnoseRoutine(routine, tasks, this.clock.nowMs())
+      return diagnoseRoutine(this.repository, routineId, this.scopeForBot(botId), {
+        nowMs: this.clock.nowMs(),
+      })
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -501,10 +492,7 @@ export class SchedulerService {
 
   getExecutionStatistics(routineId: string, botId: string) {
     try {
-      const scope = this.scopeForBot(botId)
-      this.repository.getById(routineId, scope)
-      const tasks = this.queue.listTasksForRoutine(routineId, scope)
-      return computeExecutionStatistics(tasks)
+      return getRoutineStatistics(this.repository, routineId, this.scopeForBot(botId))
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -513,7 +501,28 @@ export class SchedulerService {
   simulateRoutine(routineId: string, botId: string, steps = 5) {
     try {
       const routine = this.repository.getById(routineId, this.scopeForBot(botId))
-      return simulateRoutineDryRun(routine, { startMs: this.clock.nowMs(), count: steps })
+      return runDryRunSimulation({
+        routines: [
+          {
+            name: routine.name,
+            description: routine.description,
+            ownerId: routine.ownerId,
+            botId: routine.botId,
+            trigger: routine.trigger,
+            timezone: routine.timezone,
+            task: routine.task,
+            enabled: routine.enabled,
+            missedRunPolicy: routine.missedRunPolicy,
+            maxCatchUpRuns: routine.maxCatchUpRuns,
+            concurrencyPolicy: routine.concurrencyPolicy,
+            maxConcurrentRuns: routine.maxConcurrentRuns,
+            retryPolicy: routine.retryPolicy,
+            expiresAt: routine.expiresAt,
+          },
+        ],
+        startMs: this.clock.nowMs(),
+        endMs: this.clock.nowMs() + Math.max(1, steps) * 86_400_000,
+      })
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -521,7 +530,9 @@ export class SchedulerService {
 
   exportRoutines(botId: string) {
     try {
-      return exportRoutines(this.repository, this.scopeForBot(botId), { nowMs: this.clock.nowMs() })
+      const scope = this.scopeForBot(botId)
+      const ids = this.repository.list(scope, { includeArchived: false }).routines.map((r) => r.id)
+      return exportRoutines(this.repository, ids, scope, this.clock.nowMs())
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -530,10 +541,11 @@ export class SchedulerService {
   previewImport(rawBundle: unknown, botId: string, conflictPolicy: ImportConflictPolicy = 'skip') {
     try {
       this.assertTargetValid(botId, 'bot')
+      const rawJson = typeof rawBundle === 'string' ? rawBundle : JSON.stringify(rawBundle)
       return previewImportRoutines(
-        this.repository,
+        rawJson,
         this.scopeForBot(botId),
-        rawBundle,
+        this.repository,
         conflictPolicy,
       )
     } catch (err) {
@@ -544,10 +556,11 @@ export class SchedulerService {
   commitImport(rawBundle: unknown, botId: string, conflictPolicy: ImportConflictPolicy = 'skip') {
     try {
       this.assertTargetValid(botId, 'bot')
+      const rawJson = typeof rawBundle === 'string' ? rawBundle : JSON.stringify(rawBundle)
       return commitImportRoutines(
-        this.repository,
+        rawJson,
         this.scopeForBot(botId),
-        rawBundle,
+        this.repository,
         conflictPolicy,
         this.clock.nowMs(),
       )
@@ -558,10 +571,10 @@ export class SchedulerService {
 
   listNotifications(botId: string, options: { unreadOnly?: boolean; limit?: number } = {}) {
     try {
-      return this.notifications.listByScope(this.scopeForBot(botId), {
+      return this.notifications.list(this.scopeForBot(botId), {
         unreadOnly: options.unreadOnly,
         limit: options.limit,
-      })
+      }).notifications
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -569,7 +582,7 @@ export class SchedulerService {
 
   getUnreadNotificationCount(botId: string): number {
     try {
-      return this.notifications.unreadCount(this.scopeForBot(botId))
+      return this.notifications.countUnread(this.scopeForBot(botId))
     } catch (err) {
       mapSchedulerError(err)
     }
@@ -577,7 +590,7 @@ export class SchedulerService {
 
   markNotificationRead(notificationId: string, botId: string) {
     try {
-      return this.notifications.markRead(notificationId, this.scopeForBot(botId), this.clock.nowMs())
+      return this.notifications.markAsRead(notificationId, this.scopeForBot(botId), this.clock.nowMs())
     } catch (err) {
       mapSchedulerError(err)
     }

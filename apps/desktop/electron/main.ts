@@ -1192,6 +1192,8 @@ function registerIpcHandlers(): void {
     )
   })
 
+  const LooseRecordSchema = z.record(z.string(), z.unknown())
+
   ipcMain.handle(IPC_CHANNELS.ROUTINES_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = ListRoutinesIpcInputSchema.parse(params ?? {})

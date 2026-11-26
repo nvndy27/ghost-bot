@@ -1639,12 +1639,12 @@ export const ListRoutinesIpcInputSchema = z
   .strict()
 
 export const RoutineTriggerInputSchema = z.union([
-  z.object({ kind: z.literal('one_time'), runAt: z.string().min(1).max(64) }).strict(),
+  z.object({ kind: z.literal('one-time'), runAt: z.string().min(1).max(64) }).strict(),
   z
     .object({
       kind: z.literal('interval'),
       intervalMs: z.number().int().min(60_000).max(31_536_000_000),
-      startAt: z.string().min(1).max(64).optional(),
+      anchorAt: z.string().min(1).max(64),
     })
     .strict(),
   z
@@ -1652,6 +1652,7 @@ export const RoutineTriggerInputSchema = z.union([
       kind: z.literal('daily'),
       hour: z.number().int().min(0).max(23),
       minute: z.number().int().min(0).max(59),
+      second: z.number().int().min(0).max(59).optional(),
     })
     .strict(),
   z
@@ -1660,13 +1661,13 @@ export const RoutineTriggerInputSchema = z.union([
       daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7),
       hour: z.number().int().min(0).max(23),
       minute: z.number().int().min(0).max(59),
+      second: z.number().int().min(0).max(59).optional(),
     })
     .strict(),
   z.object({ kind: z.literal('cron'), expression: z.string().min(5).max(120) }).strict(),
   z
     .object({
       kind: z.literal('event'),
-      source: z.string().min(1).max(64),
       eventType: z.string().min(1).max(120),
     })
     .strict(),
@@ -1684,13 +1685,13 @@ export const CreateRoutineIpcInputSchema = z
     task: z
       .object({
         prompt: z.string().min(1).max(16_384),
-        kind: z.enum(['prompt', 'team_goal']).optional(),
+        idempotent: z.boolean().optional(),
       })
       .strict(),
     enabled: z.boolean().optional(),
-    missedRunPolicy: z.enum(['skip', 'run_once', 'catch_up_bounded']).optional(),
+    missedRunPolicy: z.enum(['skip', 'run-once', 'bounded-catch-up']).optional(),
     maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
-    concurrencyPolicy: z.enum(['forbid', 'allow_bounded', 'replace']).optional(),
+    concurrencyPolicy: z.enum(['forbid', 'allow-bounded']).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
     expiresAt: z.string().min(1).max(64).nullable().optional(),
   })
@@ -1709,13 +1710,13 @@ export const UpdateRoutineIpcInputSchema = z
     task: z
       .object({
         prompt: z.string().min(1).max(16_384),
-        kind: z.enum(['prompt', 'team_goal']).optional(),
+        idempotent: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    missedRunPolicy: z.enum(['skip', 'run_once', 'catch_up_bounded']).optional(),
+    missedRunPolicy: z.enum(['skip', 'run-once', 'bounded-catch-up']).optional(),
     maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
-    concurrencyPolicy: z.enum(['forbid', 'allow_bounded', 'replace']).optional(),
+    concurrencyPolicy: z.enum(['forbid', 'allow-bounded']).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
     expiresAt: z.string().min(1).max(64).nullable().optional(),
   })

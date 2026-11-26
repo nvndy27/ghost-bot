@@ -44,6 +44,9 @@ importers:
       '@ghost-bot/runtime-adapters':
         specifier: workspace:*
         version: link:../../packages/runtime-adapters
+      '@ghost-bot/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@ghost-bot/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

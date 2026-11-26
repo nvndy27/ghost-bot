@@ -183,9 +183,9 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
         name: 'Bot Interval Check',
         botId: lead.id,
         targetType: 'bot',
-        trigger: { kind: 'interval', intervalMs: 60_000 },
+        trigger: { kind: 'interval', intervalMs: 60_000, anchorAt: '2026-11-26T12:00:00.000Z' },
         timezone: 'UTC',
-        task: { prompt: 'Check daily notes' },
+        task: { prompt: 'Check daily notes', idempotent: false },
         enabled: true,
       })
 
@@ -195,9 +195,9 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
         botId: lead.id,
         targetType: 'team',
         teamId: team.id,
-        trigger: { kind: 'interval', intervalMs: 60_000 },
+        trigger: { kind: 'interval', intervalMs: 60_000, anchorAt: '2026-11-26T12:00:00.000Z' },
         timezone: 'UTC',
-        task: { prompt: 'Coordinate team summary', kind: 'team_goal' },
+        task: { prompt: 'Coordinate team summary', idempotent: false },
         enabled: true,
       })
 
@@ -206,9 +206,9 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
         name: 'OpenClaw External',
         botId: lead.id,
         ownership: 'openclaw',
-        trigger: { kind: 'interval', intervalMs: 60_000 },
+        trigger: { kind: 'interval', intervalMs: 60_000, anchorAt: '2026-11-26T12:00:00.000Z' },
         timezone: 'UTC',
-        task: { prompt: 'Should never run in ghost-bot' },
+        task: { prompt: 'Should never run in ghost-bot', idempotent: false },
         enabled: true,
       })
 
@@ -260,7 +260,7 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
         botId: lead.id,
         trigger: { kind: 'cron', expression: '*/5 * * * *' },
         timezone: 'America/New_York',
-        task: { prompt: 'Run live check' },
+        task: { prompt: 'Run live check', idempotent: false },
         enabled: true,
       })
 
@@ -275,11 +275,10 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
       scheduler.updateRoutine(routine.id, lead.id, { description: 'rev 2' })
       assert.throws(() => scheduler.triggerManual(routine.id, lead.id, 'idem-key-1'))
 
-      // Run cycle dispatches m1, detects STALE_ROUTINE_REVISION because routine updated after enqueue!
+      // Updating routine cancels stale-revision queued tasks before dispatch
       await scheduler.runCycle()
       const t1 = scheduler.getTask(m1.task.id, lead.id)
-      assert.equal(t1.status, 'failed')
-      assert.equal(t1.errorCode, 'STALE_ROUTINE_REVISION')
+      assert.equal(t1.status, 'cancelled')
 
       // Trigger at rev 2 and verify live mode fails closed with AUTONOMOUS_LIVE_EXECUTION_GATED
       const m3 = scheduler.triggerManual(routine.id, lead.id, 'idem-key-2')
@@ -321,9 +320,9 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
       const routine = scheduler.createRoutine({
         name: 'Crash Recovery Routine',
         botId: lead.id,
-        trigger: { kind: 'interval', intervalMs: 60_000 },
+        trigger: { kind: 'interval', intervalMs: 60_000, anchorAt: '2026-11-26T12:00:00.000Z' },
         timezone: 'UTC',
-        task: { prompt: 'Run crash test' },
+        task: { prompt: 'Run crash test', idempotent: false },
         enabled: true,
       })
       const trig = scheduler.triggerManual(routine.id, lead.id, 'crash-sched-1')

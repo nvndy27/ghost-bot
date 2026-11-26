@@ -1384,7 +1384,18 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          sendJson(res, 201, schedulerService.createRoutine(parsed.data))
+          sendJson(
+            res,
+            201,
+            schedulerService.createRoutine({
+              ...parsed.data,
+              timezone: parsed.data.timezone ?? 'UTC',
+              task: {
+                prompt: parsed.data.task.prompt,
+                idempotent: parsed.data.task.idempotent ?? false,
+              },
+            }),
+          )
           return
         }
 
@@ -1546,8 +1557,15 @@ export class GhostBotDaemon {
                 statusCode: 400,
               })
             }
-            const { routineId: id, botId, ...patch } = parsed.data
-            sendJson(res, 200, schedulerService.updateRoutine(id, botId, patch))
+            const { routineId: id, botId, task, ...restPatch } = parsed.data
+            sendJson(
+              res,
+              200,
+              schedulerService.updateRoutine(id, botId, {
+                ...restPatch,
+                ...(task ? { task: { prompt: task.prompt, idempotent: task.idempotent ?? false } } : {}),
+              }),
+            )
             return
           }
         }

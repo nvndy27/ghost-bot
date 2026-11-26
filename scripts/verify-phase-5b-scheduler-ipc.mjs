@@ -66,7 +66,7 @@ try {
       routineId,
       listedCount: listed.routines.length,
       previewCount: Array.isArray(preview.occurrences) ? preview.occurrences.length : 0,
-      simCount: Array.isArray(sim.runs) ? sim.runs.length : 0,
+      simOk: sim.simulatedOnly === true && typeof sim.expectedOccurrences === 'number',
       trigCreated: Boolean(trig.created),
       historyCount: history.tasks.length,
       notifIsArray: Array.isArray(notifs.notifications),
@@ -80,7 +80,7 @@ try {
   assert.ok(result.routineId.length > 0)
   assert.ok(result.listedCount >= 1)
   assert.equal(result.previewCount, 3)
-  assert.equal(result.simCount, 2)
+  assert.equal(result.simOk, true)
   assert.equal(result.trigCreated, true)
   assert.equal(result.historyCount, 1)
   assert.equal(result.notifIsArray, true)
