@@ -294,16 +294,16 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
         .prepare(
           `INSERT INTO scheduler_occurrence_dedup (
             occurrence_key, routine_id, trigger_source, scheduled_for, payload_hash, created_at, expires_at
-          ) VALUES ('occ_sched_1', ?, 'schedule', '2026-11-26T12:15:00.000Z', 'h1', '2026-11-26T12:00:00.000Z', '2026-11-26T12:05:00.000Z'),
+          ) VALUES ('occ_sched_1', ?, 'schedule', '2026-11-26T11:55:00.000Z', 'h1', '2026-11-26T11:50:00.000Z', '2026-11-26T12:05:00.000Z'),
                    ('occ_manual_1', ?, 'manual', '2026-11-26T13:00:00.000Z', 'h2', '2026-11-26T12:00:00.000Z', '2026-11-26T12:05:00.000Z')`,
         )
         .run(routine.id, routine.id)
       const pruned = q.pruneExpiredDedup({ nowIso: '2026-11-26T12:10:00.000Z' })
-      assert.equal(pruned, 2)
+      assert.equal(pruned, 1)
       const wmRow = db.sqlite
         .prepare(`SELECT dedup_watermark_at FROM scheduler_routines WHERE id = ?`)
         .get(routine.id) as { dedup_watermark_at: string | null }
-      assert.equal(wmRow.dedup_watermark_at, '2026-11-26T12:15:00.000Z')
+      assert.equal(wmRow.dedup_watermark_at, '2026-11-26T11:55:00.000Z')
 
       // Suppress unused warning
       assert.ok(clock.nowMs() > 0 && dispatcher)

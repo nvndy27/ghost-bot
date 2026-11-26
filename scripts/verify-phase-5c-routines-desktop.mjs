@@ -84,6 +84,9 @@ try {
     await page.waitForSelector('text=Valid: true', { timeout: 5000 })
     await page.getByRole('button', { name: 'Confirm import' }).click()
     await page.waitForSelector('text=Imported 1 routine(s) (disabled by default).', { timeout: 5000 })
+    const enableCount = await routinesSection.getByRole('button', { name: 'Enable', exact: true }).count()
+    assert.ok(enableCount >= 2, `Expected imported routine disabled by default (Enable count >= 2), got ${enableCount}`)
+    await page.waitForSelector('text=Dismissal does not approve, deny, or cancel tasks.', { timeout: 5000 })
 
     await page.getByRole('button', { name: 'Appearance', exact: true }).click()
     await page.getByLabel('Theme').selectOption('dark')

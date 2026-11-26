@@ -57,6 +57,8 @@ export interface SchedulerServiceOptions {
   clock?: Clock
   tickIntervalMs?: number
   maxTasksPerTick?: number
+  historyRetentionMs?: number
+  maintenanceIntervalMs?: number
 }
 
 export class SchedulerService {
@@ -72,12 +74,15 @@ export class SchedulerService {
   private readonly clock: Clock
   private readonly tickIntervalMs: number
   private readonly maxTasksPerTick: number
+  private readonly historyRetentionMs: number
+  private readonly maintenanceIntervalMs: number
 
   private timer: ReturnType<typeof setInterval> | null = null
   private cycleInFlight = false
   private shuttingDown = false
   private reconciled = false
   private lastClockMs: number
+  private lastMaintenanceMs = 0
 
   constructor(
     dbHandle: DatabaseHandle,
@@ -91,6 +96,8 @@ export class SchedulerService {
     this.clock = options.clock ?? { nowMs: () => Date.now() }
     this.tickIntervalMs = Math.max(50, Math.min(300_000, options.tickIntervalMs ?? 5_000))
     this.maxTasksPerTick = Math.max(1, Math.min(20, options.maxTasksPerTick ?? 4))
+    this.historyRetentionMs = Math.max(60_000, options.historyRetentionMs ?? 30 * 24 * 60 * 60 * 1_000)
+    this.maintenanceIntervalMs = Math.max(1_000, options.maintenanceIntervalMs ?? 60 * 60 * 1_000)
     this.lastClockMs = this.clock.nowMs()
 
     const borrowed = createBorrowedSchedulerDatabaseHandle(
@@ -203,6 +210,20 @@ export class SchedulerService {
     )
   }
 
+  runMaintenance(nowMs = this.clock.nowMs()): {
+    prunedHistory: number
+    prunedDedup: number
+    prunedNotifications: number
+  } {
+    const olderThanIso = new Date(Math.max(0, nowMs - this.historyRetentionMs)).toISOString()
+    const nowIso = new Date(nowMs).toISOString()
+    const prunedHistory = this.queue.pruneCompletedHistory({ olderThanIso })
+    const prunedDedup = this.queue.pruneExpiredDedup({ nowIso })
+    const prunedNotifications = this.notifications.pruneExpired(nowIso)
+    this.lastMaintenanceMs = nowMs
+    return { prunedHistory, prunedDedup, prunedNotifications }
+  }
+
   reconcileOnStartup(): { interruptedTasks: number; recoveredLinks: number } {
     const recoveredLinks = this.dispatcher ? this.dispatcher.recoverMissingExecutionLinks() : 0
     const interruptedTasks = this.queue.reconcileOnRestart(this.clock.nowMs())
@@ -261,6 +282,8 @@ export class SchedulerService {
     this.lastClockMs = nowMs
     this.cycleInFlight = true
     try {
+      this.approvals.expireAwaitingApprovals(nowMs)
+      this.syncContinuedTasks(nowMs)
       const tick = this.engine.tick()
       let dispatched = 0
       if (this.dispatcher && !this.shuttingDown) {
@@ -279,6 +302,9 @@ export class SchedulerService {
             // ignore notification if routine was archived mid-flight
           }
         }
+      }
+      if (!this.shuttingDown && nowMs - this.lastMaintenanceMs >= this.maintenanceIntervalMs) {
+        this.runMaintenance(nowMs)
       }
       return { tick, dispatched }
     } finally {
@@ -516,6 +542,116 @@ export class SchedulerService {
          WHERE scheduler_task_id = ? AND daemon_approval_id = ?`,
       )
       .run(res.approvalState, new Date(nowMs).toISOString(), link.scheduler_task_id, daemonApprovalId)
+
+    if (res.applied && res.reason === 'AUTHORIZED_CONTINUATION') {
+      this.syncContinuedTasks(nowMs)
+    } else if (res.applied && res.reason === 'ROUTINE_UNAVAILABLE_ON_CONTINUATION' && this.dispatcher) {
+      void this.dispatcher.cancelTaskExecution(link.scheduler_task_id, {
+        ownerId: link.owner_id,
+        botId: link.bot_id,
+      })
+    }
+  }
+
+  syncContinuedTasks(nowMs = this.clock.nowMs()): number {
+    const rows = this.dbHandle.sqlite
+      .prepare(
+        `SELECT t.id, t.routine_id, t.routine_revision, t.occurrence_key, t.owner_id, t.bot_id,
+                t.daemon_run_id, r.status AS run_status, r.error_json AS run_error_json
+         FROM scheduler_tasks t
+         JOIN runs r ON r.id = t.daemon_run_id
+         WHERE t.status = 'running'
+           AND t.approval_state = 'authorized.continuation'
+           AND t.daemon_run_id IS NOT NULL`,
+      )
+      .all() as Array<{
+      id: string
+      routine_id: string
+      routine_revision: number
+      occurrence_key: string
+      owner_id: string
+      bot_id: string
+      daemon_run_id: string
+      run_status: string
+      run_error_json: string | null
+    }>
+
+    let synced = 0
+    const nowIso = new Date(nowMs).toISOString()
+    for (const row of rows) {
+      if (row.run_status === 'completed') {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE scheduler_tasks
+             SET status = 'completed', claim_owner = NULL, claim_lease_expires_at = NULL,
+                 ended_at = ?, updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(nowIso, nowIso, row.id)
+        synced += 1
+      } else if (row.run_status === 'failed' || row.run_status === 'cancelled') {
+        const nextStatus = row.run_status === 'cancelled' ? 'cancelled' : 'failed'
+        let parsedErr: { code?: string; message?: string } | null = null
+        if (row.run_error_json) {
+          try {
+            parsedErr = JSON.parse(row.run_error_json) as { code?: string; message?: string }
+          } catch {
+            parsedErr = null
+          }
+        }
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE scheduler_tasks
+             SET status = ?, claim_owner = NULL, claim_lease_expires_at = NULL,
+                 error_code = ?, error_message = ?, ended_at = ?, updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(
+            nextStatus,
+            parsedErr?.code ?? (nextStatus === 'cancelled' ? 'RUN_CANCELLED' : 'RUN_FAILED'),
+            parsedErr?.message ?? `Continued run ended with status "${row.run_status}"`,
+            nowIso,
+            nowIso,
+            row.id,
+          )
+        synced += 1
+      } else if (row.run_status === 'awaiting_approval') {
+        const pendingApp = this.dbHandle.sqlite
+          .prepare(
+            `SELECT id, action_type, action_summary, expires_at
+             FROM approvals
+             WHERE run_id = ? AND status = 'pending'
+             ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get(row.daemon_run_id) as
+          | { id: string; action_type: string; action_summary: string; expires_at: string }
+          | undefined
+        if (pendingApp) {
+          this.approvals.bindApprovalRequest({
+            routineId: row.routine_id,
+            routineRevision: row.routine_revision,
+            occurrenceKey: row.occurrence_key,
+            taskId: row.id,
+            scope: { ownerId: row.owner_id, botId: row.bot_id },
+            daemonRunId: row.daemon_run_id,
+            daemonApprovalId: pendingApp.id,
+            expiresAt: pendingApp.expires_at,
+            requirePolicyRevalidation: true,
+            sanitizedActionSummary: `${pendingApp.action_type}: ${pendingApp.action_summary}`,
+          })
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE scheduler_tasks
+               SET status = 'awaiting_approval', claim_owner = NULL, claim_lease_expires_at = NULL,
+                   updated_at = ?
+               WHERE id = ? AND status = 'running'`,
+            )
+            .run(nowIso, row.id)
+          synced += 1
+        }
+      }
+    }
+    return synced
   }
 
   async cancelTask(taskId: string, botId: string): Promise<ScheduledTaskRecord> {
@@ -524,9 +660,9 @@ export class SchedulerService {
       if (this.dispatcher) {
         const res = await this.dispatcher.cancelTaskExecution(taskId, scope)
         if (!res.confirmed) {
-          return this.queue.markUncertainInterrupted(
+          return this.queue.markUncertainCancellation(
             taskId,
-            'daemon-scheduler',
+            scope,
             'CANCELLATION_UNCONFIRMED',
             'External cancellation could not be confirmed',
             this.clock.nowMs(),

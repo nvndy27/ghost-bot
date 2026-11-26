@@ -75,13 +75,25 @@ export class SchedulerEngine {
 
       db.transaction(() => {
         for (const scheduledFor of evalRes.dueOccurrences) {
-          const res = this.queue.enqueueOccurrence(routine, scheduledFor, nowMs, {
-            triggerSource: 'schedule',
-          })
-          if (res.created) {
-            enqueuedTasks += 1
-          } else {
-            duplicatesSuppressed += 1
+          try {
+            const res = this.queue.enqueueOccurrence(routine, scheduledFor, nowMs, {
+              triggerSource: 'schedule',
+            })
+            if (res.created) {
+              enqueuedTasks += 1
+            } else {
+              duplicatesSuppressed += 1
+            }
+          } catch (err) {
+            if (
+              err instanceof SchedulerError &&
+              (err.code === 'STALE_OCCURRENCE_BEFORE_WATERMARK' ||
+                err.code === 'DUPLICATE_OCCURRENCE')
+            ) {
+              duplicatesSuppressed += 1
+              continue
+            }
+            throw err
           }
         }
 
@@ -169,13 +181,21 @@ export class SchedulerEngine {
       if (!matchesEventTrigger(routine.trigger, envelope)) continue
 
       matchedRoutines += 1
-      const res = this.queue.enqueueOccurrence(routine, envelope.timestamp, nowMs, {
-        triggerSource: 'event',
-        occurrenceKeyOverride: `event:${routine.id}:${envelope.trustedSource}:${envelope.eventId}`,
-      })
-      tasks.push(res.task)
-      if (res.created) enqueuedTasks += 1
-      else duplicatesSuppressed += 1
+      try {
+        const res = this.queue.enqueueOccurrence(routine, envelope.timestamp, nowMs, {
+          triggerSource: 'event',
+          occurrenceKeyOverride: `event:${routine.id}:${envelope.trustedSource}:${envelope.eventId}`,
+        })
+        tasks.push(res.task)
+        if (res.created) enqueuedTasks += 1
+        else duplicatesSuppressed += 1
+      } catch (err) {
+        if (err instanceof SchedulerError && err.code === 'DUPLICATE_OCCURRENCE') {
+          duplicatesSuppressed += 1
+          continue
+        }
+        throw err
+      }
     }
 
     return { matchedRoutines, enqueuedTasks, duplicatesSuppressed, tasks }
@@ -243,36 +263,57 @@ export class SchedulerEngine {
     try {
       const outcome = await dispatcher.dispatch(ctx)
       const nowMs = this.clock.nowMs()
-      if (outcome.status === 'completed') {
-        return this.queue.completeTask(running.id, workerId, nowMs)
-      }
-      if (outcome.status === 'awaiting_approval') {
-        return this.queue.markAwaitingApproval(running.id, workerId, nowMs)
-      }
-      if (outcome.status === 'unknown') {
-        return this.queue.markUncertainInterrupted(
+      try {
+        if (outcome.status === 'completed') {
+          return this.queue.completeTask(running.id, workerId, nowMs)
+        }
+        if (outcome.status === 'awaiting_approval') {
+          return this.queue.markAwaitingApproval(running.id, workerId, nowMs)
+        }
+        if (outcome.status === 'unknown') {
+          return this.queue.markUncertainInterrupted(
+            running.id,
+            workerId,
+            'DISPATCH_OUTCOME_UNKNOWN',
+            redactSchedulerSecrets(outcome.reason),
+            nowMs,
+          )
+        }
+        return this.queue.failTask(
           running.id,
           workerId,
-          'DISPATCH_OUTCOME_UNKNOWN',
-          redactSchedulerSecrets(outcome.reason),
+          outcome.code,
+          redactSchedulerSecrets(outcome.message),
           nowMs,
         )
+      } catch (stateErr) {
+        if (
+          stateErr instanceof SchedulerError &&
+          (stateErr.code === 'TERMINAL_STATE_IMMUTABLE' || stateErr.code === 'CLAIM_MISMATCH')
+        ) {
+          // Late callback or claim lost to cancellation/reclaim: preserve authoritative task state.
+          return this.queue.getTask(running.id)
+        }
+        throw stateErr
       }
-      return this.queue.failTask(
-        running.id,
-        workerId,
-        outcome.code,
-        redactSchedulerSecrets(outcome.message),
-        nowMs,
-      )
     } catch (err) {
-      return this.queue.failTask(
-        running.id,
-        workerId,
-        'DISPATCH_ERROR',
-        redactSchedulerSecrets(err instanceof Error ? err.message : 'Dispatch error'),
-        this.clock.nowMs(),
-      )
+      try {
+        return this.queue.failTask(
+          running.id,
+          workerId,
+          'DISPATCH_ERROR',
+          redactSchedulerSecrets(err instanceof Error ? err.message : 'Dispatch error'),
+          this.clock.nowMs(),
+        )
+      } catch (stateErr) {
+        if (
+          stateErr instanceof SchedulerError &&
+          (stateErr.code === 'TERMINAL_STATE_IMMUTABLE' || stateErr.code === 'CLAIM_MISMATCH')
+        ) {
+          return this.queue.getTask(running.id)
+        }
+        throw stateErr
+      }
     }
   }
 }

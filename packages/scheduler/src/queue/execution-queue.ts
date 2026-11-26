@@ -71,7 +71,7 @@ export class ExecutionQueue {
     const nowIso = new Date(nowMs).toISOString()
 
     return this.db.transaction(() => {
-      if (triggerSource === 'schedule' || triggerSource === 'event') {
+      if (triggerSource === 'schedule') {
         const wmRow = this.db.sqlite
           .prepare(`SELECT dedup_watermark_at FROM scheduler_routines WHERE id = ?`)
           .get(routine.id) as { dedup_watermark_at: string | null } | undefined
@@ -525,18 +525,50 @@ export class ExecutionQueue {
   }
 
   /**
-   * Prunes old terminal history while NEVER deleting active, quarantined, or uncertain tasks,
-   * and preserving scheduler_occurrence_dedup so pruned occurrences cannot be re-enqueued.
+   * Prunes old terminal history while NEVER deleting active, quarantined, uncertain,
+   * or execution/approval-linked tasks, and preserving scheduler_occurrence_dedup so
+   * pruned occurrences cannot be re-enqueued.
    */
   pruneCompletedHistory(options: { olderThanIso: string }): number {
     return this.db.transaction(() => {
+      const tables = new Set(
+        (
+          this.db.sqlite
+            .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .all() as Array<{ name: string }>
+        ).map((r) => r.name),
+      )
+      const linkGuard = tables.has('scheduler_execution_links') && tables.has('runs')
+        ? `AND id NOT IN (
+             SELECT l.scheduler_task_id FROM scheduler_execution_links l
+             JOIN runs r ON r.id = l.daemon_run_id
+             WHERE r.status IN ('queued', 'starting', 'running', 'awaiting_approval', 'cancelling')
+           )`
+        : ''
+      const teamLinkGuard = tables.has('scheduler_execution_links') && tables.has('team_runs')
+        ? `AND id NOT IN (
+             SELECT l.scheduler_task_id FROM scheduler_execution_links l
+             JOIN team_runs tr ON tr.id = l.team_run_id
+             WHERE tr.status IN ('queued', 'running', 'uncertain')
+           )`
+        : ''
+      const approvalGuard = tables.has('scheduler_approval_links') && tables.has('approvals')
+        ? `AND id NOT IN (
+             SELECT al.scheduler_task_id FROM scheduler_approval_links al
+             JOIN approvals a ON a.id = al.daemon_approval_id
+             WHERE a.status = 'pending'
+           )`
+        : ''
       const res = this.db.sqlite
         .prepare(
           `DELETE FROM scheduler_tasks
            WHERE status IN ('completed', 'failed', 'cancelled', 'expired')
              AND uncertain_execution = 0
              AND ended_at IS NOT NULL
-             AND ended_at <= ?`,
+             AND ended_at <= ?
+             ${linkGuard}
+             ${teamLinkGuard}
+             ${approvalGuard}`,
         )
         .run(options.olderThanIso)
       return Number(res.changes)
@@ -544,8 +576,11 @@ export class ExecutionQueue {
   }
 
   /**
-   * Bounded cleanup of expired deduplication keys with durable watermark advancement
-   * so pruned schedule/event timestamps cannot be re-enqueued after expiration.
+   * Bounded cleanup of expired 'schedule' deduplication keys with durable watermark advancement.
+   * - Never prunes 'manual' or 'event' deduplication keys so manual idempotency-key reuse
+   *   and out-of-order / replayed events remain permanently protected.
+   * - Advances dedup_watermark_at only up to the pruned 'schedule' occurrences that precede
+   *   any remaining scheduled task or unexpired schedule dedup record for the same routine.
    */
   pruneExpiredDedup(options: { nowIso: string; maxKeepPerRoutine?: number }): number {
     return this.db.transaction(() => {
@@ -555,22 +590,67 @@ export class ExecutionQueue {
         }>
       ).some((c) => c.name === 'scheduled_for')
 
-      // Advance dedup_watermark_at only for scheduled/event occurrences using occurrence timestamp
-      const tsExpr = hasScheduledForCol
-        ? `MAX(COALESCE(scheduled_for, created_at))`
-        : `MAX(created_at)`
-      const expiringTasks = this.db.sqlite
+      const occExpr = hasScheduledForCol ? `COALESCE(scheduled_for, created_at)` : `created_at`
+      const candidates = this.db.sqlite
         .prepare(
-          `SELECT routine_id, ${tsExpr} AS max_occ
+          `SELECT occurrence_key, routine_id, ${occExpr} AS occ_ts
            FROM scheduler_occurrence_dedup
-           WHERE expires_at IS NOT NULL AND expires_at <= ?
-             AND trigger_source IN ('schedule', 'event')
-             AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)
+           WHERE trigger_source = 'schedule'
+             AND expires_at IS NOT NULL AND expires_at <= ?
+             AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)`,
+        )
+        .all(options.nowIso) as Array<{ occurrence_key: string; routine_id: string; occ_ts: string }>
+
+      if (candidates.length === 0) return 0
+
+      // Compute minimum retained schedule timestamp per routine so watermark never skips ahead
+      // of still-retained or active scheduled occurrences.
+      const retainedMinByRoutine = new Map<string, string>()
+      const activeRows = this.db.sqlite
+        .prepare(
+          `SELECT routine_id, MIN(scheduled_for) AS min_ts
+           FROM scheduler_tasks
+           WHERE trigger_source = 'schedule'
            GROUP BY routine_id`,
         )
-        .all(options.nowIso) as Array<{ routine_id: string; max_occ: string }>
+        .all() as Array<{ routine_id: string; min_ts: string | null }>
+      for (const row of activeRows) {
+        if (row.min_ts) retainedMinByRoutine.set(row.routine_id, row.min_ts)
+      }
 
-      for (const row of expiringTasks) {
+      const unexpiredRows = this.db.sqlite
+        .prepare(
+          `SELECT routine_id, MIN(${occExpr}) AS min_ts
+           FROM scheduler_occurrence_dedup
+           WHERE trigger_source = 'schedule'
+             AND (expires_at IS NULL OR expires_at > ?)
+           GROUP BY routine_id`,
+        )
+        .all(options.nowIso) as Array<{ routine_id: string; min_ts: string | null }>
+      for (const row of unexpiredRows) {
+        if (!row.min_ts) continue
+        const prev = retainedMinByRoutine.get(row.routine_id)
+        if (!prev || row.min_ts < prev) {
+          retainedMinByRoutine.set(row.routine_id, row.min_ts)
+        }
+      }
+
+      const maxSafeByRoutine = new Map<string, string>()
+      const keysToDelete: string[] = []
+      for (const c of candidates) {
+        const retainedMin = retainedMinByRoutine.get(c.routine_id)
+        if (retainedMin && c.occ_ts >= retainedMin) {
+          // Keep this dedup row until earlier retained schedule slots are also pruned
+          continue
+        }
+        keysToDelete.push(c.occurrence_key)
+        const prevMax = maxSafeByRoutine.get(c.routine_id)
+        if (!prevMax || c.occ_ts > prevMax) {
+          maxSafeByRoutine.set(c.routine_id, c.occ_ts)
+        }
+      }
+
+      for (const [routineId, maxOcc] of maxSafeByRoutine.entries()) {
         this.db.sqlite
           .prepare(
             `UPDATE scheduler_routines
@@ -580,17 +660,17 @@ export class ExecutionQueue {
              END
              WHERE id = ?`,
           )
-          .run(row.max_occ, row.max_occ, row.routine_id)
+          .run(maxOcc, maxOcc, routineId)
       }
 
-      const res = this.db.sqlite
-        .prepare(
-          `DELETE FROM scheduler_occurrence_dedup
-           WHERE expires_at IS NOT NULL AND expires_at <= ?
-             AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)`,
-        )
-        .run(options.nowIso)
-      return Number(res.changes)
+      let deleted = 0
+      const delStmt = this.db.sqlite.prepare(
+        `DELETE FROM scheduler_occurrence_dedup WHERE occurrence_key = ?`,
+      )
+      for (const key of keysToDelete) {
+        deleted += Number(delStmt.run(key).changes)
+      }
+      return deleted
     })
   }
 
@@ -628,10 +708,45 @@ export class ExecutionQueue {
            WHERE id = ?`,
         )
         .run(errorCode, errorMessage, nowIso, nowIso, taskId)
+      return this.getTask(taskId)
+    })
+  }
+
+  /**
+   * Marks any non-terminal scoped task interrupted with uncertainExecution = true
+   * when external cancellation cannot be confirmed (even if awaiting_approval / unowned).
+   */
+  markUncertainCancellation(
+    taskId: string,
+    scope: RoutineScope,
+    errorCode: string,
+    errorMessage: string,
+    nowMs = Date.now(),
+  ): ScheduledTaskRecord {
+    const nowIso = new Date(nowMs).toISOString()
+    return this.db.transaction(() => {
+      const task = this.getTask(taskId, scope)
+      if (isTerminalTaskStatus(task.status)) {
+        throw new SchedulerError('TERMINAL_STATE_IMMUTABLE', `Task "${taskId}" is already ${task.status}`)
+      }
+      this.db.sqlite
+        .prepare(
+          `UPDATE scheduler_tasks
+           SET status = 'interrupted',
+               uncertain_execution = 1,
+               claim_owner = NULL,
+               claim_lease_expires_at = NULL,
+               error_code = ?,
+               error_message = ?,
+               ended_at = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(errorCode, errorMessage, nowIso, nowIso, taskId)
       this.db.sqlite
         .prepare(`UPDATE scheduler_routines SET last_task_status = 'interrupted', updated_at = ? WHERE id = ?`)
         .run(nowIso, task.routineId)
-      return this.getTask(taskId)
+      return this.getTask(taskId, scope)
     })
   }
 }

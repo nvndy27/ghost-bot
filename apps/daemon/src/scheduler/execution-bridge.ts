@@ -191,6 +191,17 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
             idempotencyKey: `sched:${ctx.taskId}:attempt:${taskRow.attempt}`,
             autoExecute: true,
           })
+          if (
+            started.run.teamId !== team.id ||
+            started.run.leadBotId !== ctx.botId ||
+            started.run.ownerId !== ctx.ownerId
+          ) {
+            return {
+              status: 'failed',
+              code: 'EXECUTION_IDENTITY_MISMATCH',
+              message: 'Team run identity mismatch against routine target',
+            }
+          }
           flightState.teamRunId = started.run.id
           this.deps.dbHandle.sqlite
             .prepare(
@@ -216,7 +227,17 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
             )
 
           if (flightState.cancelled) {
-            await this.deps.teamsService.cancelTeamRun(started.run.id)
+            const cancelRes = await this.deps.teamsService.cancelTeamRun(started.run.id).catch(() => null)
+            const confirmed =
+              cancelRes?.run.status === 'cancelled' ||
+              cancelRes?.run.status === 'completed' ||
+              cancelRes?.run.status === 'failed'
+            if (!confirmed) {
+              return {
+                status: 'unknown',
+                reason: 'Cancellation requested during team run creation; termination unconfirmed',
+              }
+            }
             return {
               status: 'failed',
               code: 'ROUTINE_TASK_CANCELLED',
@@ -226,7 +247,17 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
 
           while (Date.now() < deadline) {
             if (flightState.cancelled) {
-              await this.deps.teamsService.cancelTeamRun(started.run.id)
+              const cancelRes = await this.deps.teamsService.cancelTeamRun(started.run.id).catch(() => null)
+              const confirmed =
+                cancelRes?.run.status === 'cancelled' ||
+                cancelRes?.run.status === 'completed' ||
+                cancelRes?.run.status === 'failed'
+              if (!confirmed) {
+                return {
+                  status: 'unknown',
+                  reason: 'Cancellation requested during team execution; termination unconfirmed',
+                }
+              }
               return {
                 status: 'failed',
                 code: 'ROUTINE_TASK_CANCELLED',
@@ -269,7 +300,18 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
           text: ctx.untrustedTask.prompt,
           idempotencyKey: `sched:${ctx.taskId}:attempt:${taskRow.attempt}`,
         })
+        if (
+          (run.agentId && run.agentId !== ctx.botId) ||
+          (run.sessionId && run.sessionId !== sessionId)
+        ) {
+          return {
+            status: 'failed',
+            code: 'EXECUTION_IDENTITY_MISMATCH',
+            message: 'Child run identity mismatch against routine target or session',
+          }
+        }
         flightState.daemonRunId = run.id
+        const effectiveRuntimeId = run.runtimeId ?? rt.runtimeMode
 
         this.deps.dbHandle.sqlite
           .prepare(
@@ -288,14 +330,33 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
             ctx.botId,
             sessionId,
             run.id,
-            rt.runtimeMode,
+            effectiveRuntimeId,
             accountId,
             taskRow.attempt,
             new Date().toISOString(),
           )
 
+        this.deps.dbHandle.sqlite
+          .prepare(`UPDATE scheduler_tasks SET daemon_run_id = ? WHERE id = ?`)
+          .run(run.id, ctx.taskId)
+
         if (flightState.cancelled) {
-          this.deps.orchestrator.cancelRun(run.id)
+          let confirmed = false
+          try {
+            const cancelRes = this.deps.orchestrator.cancelRun(run.id)
+            confirmed =
+              cancelRes.run.status === 'cancelled' ||
+              cancelRes.run.status === 'completed' ||
+              cancelRes.run.status === 'failed'
+          } catch {
+            confirmed = false
+          }
+          if (!confirmed) {
+            return {
+              status: 'unknown',
+              reason: 'Cancellation requested during child run creation; termination unconfirmed',
+            }
+          }
           return {
             status: 'failed',
             code: 'ROUTINE_TASK_CANCELLED',
@@ -305,7 +366,22 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
 
         while (Date.now() < deadline) {
           if (flightState.cancelled) {
-            this.deps.orchestrator.cancelRun(run.id)
+            let confirmed = false
+            try {
+              const cancelRes = this.deps.orchestrator.cancelRun(run.id)
+              confirmed =
+                cancelRes.run.status === 'cancelled' ||
+                cancelRes.run.status === 'completed' ||
+                cancelRes.run.status === 'failed'
+            } catch {
+              confirmed = false
+            }
+            if (!confirmed) {
+              return {
+                status: 'unknown',
+                reason: 'Cancellation requested during execution; termination unconfirmed',
+              }
+            }
             return {
               status: 'failed',
               code: 'ROUTINE_TASK_CANCELLED',
@@ -493,7 +569,193 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
       if (info.changes > 0) recovered += 1
     }
 
+    // Also recover crash-window orphan team_runs created with sched:<taskId>:attempt:<n>
+    const orphanTeamRuns = this.deps.dbHandle.sqlite
+      .prepare(
+        `SELECT tr.id AS team_run_id, tr.team_id, tr.owner_id, tr.lead_bot_id,
+                tr.idempotency_key, tr.created_at AS run_created_at
+         FROM team_runs tr
+         LEFT JOIN scheduler_execution_links l ON l.team_run_id = tr.id
+         WHERE l.id IS NULL
+           AND tr.idempotency_key LIKE 'sched:%:attempt:%'`,
+      )
+      .all() as Array<{
+      team_run_id: string
+      team_id: string
+      owner_id: string
+      lead_bot_id: string
+      idempotency_key: string
+      run_created_at: string
+    }>
+
+    if (orphanTeamRuns.length > 0) {
+      const insertTeamLink = this.deps.dbHandle.sqlite.prepare(
+        `INSERT OR IGNORE INTO scheduler_execution_links (
+          id, routine_id, routine_revision, occurrence_key, scheduler_task_id,
+          target_type, bot_id, team_id, session_id, daemon_run_id, team_run_id,
+          runtime_id, account_id, attempt, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'team', ?, ?, NULL, NULL, ?, 'mock', 'mock-account', ?, ?)`,
+      )
+
+      for (const row of orphanTeamRuns) {
+        const keyMatch = /^sched:([^:]+):attempt:(\d+)$/.exec(row.idempotency_key)
+        if (!keyMatch) continue
+        const taskId = keyMatch[1]!
+        const attempt = Number(keyMatch[2]!)
+
+        const authRow = this.deps.dbHandle.sqlite
+          .prepare(
+            `SELECT t.id, t.routine_id, t.routine_revision, t.occurrence_key, t.owner_id,
+                    t.bot_id, t.attempt, t.status, t.created_at AS task_created_at,
+                    r.target_type, r.team_id, r.archived_at
+             FROM scheduler_tasks t
+             JOIN scheduler_routines r ON r.id = t.routine_id
+             WHERE t.id = ? AND r.team_id = ?`,
+          )
+          .get(taskId, row.team_id) as
+          | {
+              id: string
+              routine_id: string
+              routine_revision: number
+              occurrence_key: string
+              owner_id: string
+              bot_id: string
+              attempt: number
+              status: string
+              task_created_at: string
+              target_type: string
+              team_id: string | null
+              archived_at: string | null
+            }
+          | undefined
+
+        if (!authRow) continue
+        if (authRow.archived_at !== null || authRow.target_type !== 'team') continue
+        if (authRow.owner_id !== row.owner_id || authRow.bot_id !== row.lead_bot_id) continue
+        if (authRow.attempt !== attempt) continue
+        if (!['running', 'awaiting_approval', 'claimed'].includes(authRow.status)) continue
+        if (row.run_created_at < authRow.task_created_at) continue
+
+        const info = insertTeamLink.run(
+          `sexec_trec_${row.team_run_id}`,
+          authRow.routine_id,
+          authRow.routine_revision,
+          authRow.occurrence_key,
+          authRow.id,
+          authRow.bot_id,
+          row.team_id,
+          row.team_run_id,
+          attempt,
+          new Date().toISOString(),
+        )
+        if (info.changes > 0) recovered += 1
+      }
+    }
+
     return recovered
+  }
+
+  verifyExecutionIdentity(taskId: string, scope: RoutineScope): {
+    routineId: string
+    routineRevision: number
+    occurrenceKey: string
+    botId: string
+    teamId: string | null
+    runtimeId: string
+    accountId: string
+    attempt: number
+  } {
+    const row = this.deps.dbHandle.sqlite
+      .prepare(
+        `SELECT l.routine_id, l.routine_revision, l.occurrence_key, l.target_type,
+                l.bot_id, l.team_id, l.daemon_run_id, l.team_run_id, l.runtime_id,
+                l.account_id, l.attempt,
+                t.routine_id AS task_routine_id, t.routine_revision AS task_revision,
+                t.occurrence_key AS task_occ, t.bot_id AS task_bot_id,
+                t.attempt AS task_attempt, t.owner_id AS task_owner_id
+         FROM scheduler_execution_links l
+         JOIN scheduler_tasks t ON t.id = l.scheduler_task_id
+         WHERE l.scheduler_task_id = ? AND t.owner_id = ? AND t.bot_id = ?
+         ORDER BY l.attempt DESC LIMIT 1`,
+      )
+      .get(taskId, scope.ownerId, scope.botId) as
+      | {
+          routine_id: string
+          routine_revision: number
+          occurrence_key: string
+          target_type: string
+          bot_id: string
+          team_id: string | null
+          daemon_run_id: string | null
+          team_run_id: string | null
+          runtime_id: string
+          account_id: string
+          attempt: number
+          task_routine_id: string
+          task_revision: number
+          task_occ: string
+          task_bot_id: string
+          task_attempt: number
+          task_owner_id: string
+        }
+      | undefined
+
+    if (!row) {
+      throw new DaemonError('EXECUTION_IDENTITY_NOT_FOUND', `No execution link found for task "${taskId}"`, {
+        statusCode: 404,
+      })
+    }
+    if (
+      row.routine_id !== row.task_routine_id ||
+      row.routine_revision !== row.task_revision ||
+      row.occurrence_key !== row.task_occ ||
+      row.bot_id !== row.task_bot_id ||
+      row.attempt !== row.task_attempt ||
+      !row.runtime_id ||
+      !row.account_id
+    ) {
+      throw new DaemonError('EXECUTION_IDENTITY_MISMATCH', 'Execution link identity does not match task', {
+        statusCode: 409,
+      })
+    }
+
+    if (row.target_type === 'bot' && row.daemon_run_id) {
+      const runRow = this.deps.dbHandle.sqlite
+        .prepare(`SELECT agent_id, runtime_id FROM runs WHERE id = ?`)
+        .get(row.daemon_run_id) as { agent_id: string; runtime_id: string } | undefined
+      if (!runRow || runRow.agent_id !== row.bot_id || runRow.runtime_id !== row.runtime_id) {
+        throw new DaemonError('EXECUTION_IDENTITY_MISMATCH', 'Underlying daemon run identity mismatch', {
+          statusCode: 409,
+        })
+      }
+    } else if (row.target_type === 'team' && row.team_run_id) {
+      const activeRuntimeMode = this.deps.getRuntimeState().runtimeMode
+      const trRow = this.deps.dbHandle.sqlite
+        .prepare(`SELECT team_id, owner_id, lead_bot_id FROM team_runs WHERE id = ?`)
+        .get(row.team_run_id) as { team_id: string; owner_id: string; lead_bot_id: string } | undefined
+      if (
+        !trRow ||
+        trRow.team_id !== row.team_id ||
+        trRow.owner_id !== row.task_owner_id ||
+        trRow.lead_bot_id !== row.bot_id ||
+        row.runtime_id !== activeRuntimeMode
+      ) {
+        throw new DaemonError('EXECUTION_IDENTITY_MISMATCH', 'Underlying team run identity mismatch', {
+          statusCode: 409,
+        })
+      }
+    }
+
+    return {
+      routineId: row.routine_id,
+      routineRevision: row.routine_revision,
+      occurrenceKey: row.occurrence_key,
+      botId: row.bot_id,
+      teamId: row.team_id,
+      runtimeId: row.runtime_id,
+      accountId: row.account_id,
+      attempt: row.attempt,
+    }
   }
 
   async cancelTaskExecution(taskId: string, scope: RoutineScope): Promise<{ confirmed: boolean }> {
@@ -541,18 +803,31 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
     }
 
     if (link.target_type === 'team' && link.team_run_id) {
-      const res = await this.deps.teamsService.cancelTeamRun(link.team_run_id)
-      return { confirmed: res.run.status === 'cancelled' || res.run.status === 'completed' }
-    }
-    if (link.daemon_run_id) {
-      const res = this.deps.orchestrator.cancelRun(link.daemon_run_id)
-      return {
-        confirmed:
-          res.run.status === 'cancelled' ||
-          res.run.status === 'completed' ||
-          res.run.status === 'failed',
+      try {
+        const res = await this.deps.teamsService.cancelTeamRun(link.team_run_id)
+        return {
+          confirmed:
+            res.run.status === 'cancelled' ||
+            res.run.status === 'completed' ||
+            res.run.status === 'failed',
+        }
+      } catch {
+        return { confirmed: false }
       }
     }
-    return { confirmed: true }
+    if (link.daemon_run_id) {
+      try {
+        const res = this.deps.orchestrator.cancelRun(link.daemon_run_id)
+        return {
+          confirmed:
+            res.run.status === 'cancelled' ||
+            res.run.status === 'completed' ||
+            res.run.status === 'failed',
+        }
+      } catch {
+        return { confirmed: false }
+      }
+    }
+    return { confirmed: false }
   }
 }
