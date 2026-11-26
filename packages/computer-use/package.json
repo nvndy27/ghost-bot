@@ -17,6 +17,7 @@
     "./audit": "./src/audit/audit-log.ts",
     "./browser-policy": "./src/browser/network-policy.ts",
     "./browser": "./src/browser/playwright-browser-backend.ts",
+    "./isolated-browser": "./src/browser/bwrap-browser-worker.ts",
     "./isolation": "./src/isolation/bwrap-isolation-worker.ts"
   },
   "dependencies": {

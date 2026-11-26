@@ -34,6 +34,27 @@ export interface IsolatedWorkerResult {
   workspaceCleaned: boolean
 }
 
+export function getMinimalEtcBinds(): string[] {
+  const candidates = [
+    '/etc/ld.so.cache',
+    '/etc/ld.so.conf',
+    '/etc/ld.so.conf.d',
+    '/etc/nsswitch.conf',
+    '/etc/ssl',
+    '/etc/pki',
+    '/etc/fonts',
+    '/etc/alternatives',
+    '/etc/localtime',
+  ]
+  const args: string[] = []
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      args.push('--ro-bind', p, p)
+    }
+  }
+  return args
+}
+
 /**
  * Unprivileged OS-level isolation runner using bubblewrap (--unshare-all, --cap-drop ALL).
  * Never mounts $HOME, host credentials, host Wayland/X11 sockets, or Docker/Podman sockets.
@@ -119,9 +140,7 @@ export class BubblewrapIsolationRunner {
         '--ro-bind',
         '/usr',
         '/usr',
-        '--ro-bind',
-        '/etc',
-        '/etc',
+        ...getMinimalEtcBinds(),
         '--symlink',
         'usr/lib64',
         '/lib64',
