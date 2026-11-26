@@ -74,6 +74,7 @@ export const IPC_CHANNELS = {
   SKILLS_APPROVE_TRUST: 'ghost:skills:approve-trust',
   SKILLS_REVOKE_TRUST: 'ghost:skills:revoke-trust',
   SKILLS_SET_ENABLED: 'ghost:skills:set-enabled',
+  OPENCLAW_STATUS: 'ghost:openclaw:status',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1691,6 +1692,42 @@ export const SetSkillEnabledInputSchema = z
   })
   .strict()
 
+export const OpenClawStatusDtoSchema = z.object({
+  available: z.boolean(),
+  gatewayUrl: z.string(),
+  runtimeVersion: z.string().nullable(),
+  supportedVersion: z.boolean(),
+  hostDesktopEnabled: z.boolean(),
+  pluginsLoaded: z.array(z.string()),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  authDetail: z.string(),
+  detail: z.string(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    resume: z.boolean(),
+    approvals: z.boolean(),
+    usage: z.boolean(),
+    sandbox: z.boolean(),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      efforts: z.array(z.string()),
+    }),
+  ),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.boolean(),
+    workspaceAllowed: z.boolean(),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type OpenClawStatusDto = z.infer<typeof OpenClawStatusDtoSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1765,6 +1802,7 @@ export interface GhostBotBridge {
   approveLocalSkillTrust(skillId: string): Promise<LocalSkillDto>
   revokeLocalSkillTrust(skillId: string): Promise<LocalSkillDto>
   setLocalSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<LocalSkillDto>
+  getOpenClawStatus(): Promise<OpenClawStatusDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

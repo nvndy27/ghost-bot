@@ -60,6 +60,7 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw'>('mock-offline')
   const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
   const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
   const [permission, setPermission] = useState<'read-only' | 'ask-approval' | 'workspace'>(
@@ -80,6 +81,11 @@ export function BotEditorModal({
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
       setInstructions(initialBot.instructions)
+      setRuntimeId(
+        initialBot.runtimeId === 'codex' || initialBot.runtimeId === 'openclaw'
+          ? initialBot.runtimeId
+          : 'mock-offline',
+      )
       setModelId(initialBot.modelId)
       setEffort(
         initialBot.effort === 'low' || initialBot.effort === 'high' ? initialBot.effort : 'medium',
@@ -190,7 +196,7 @@ export function BotEditorModal({
           description: description.trim(),
           instructions: instructions.trim(),
           avatar,
-          runtimeId: 'mock-offline',
+          runtimeId,
           modelId,
           effort,
           workspacePath: workspacePath.trim(),
@@ -204,6 +210,7 @@ export function BotEditorModal({
             description: description.trim(),
             instructions: instructions.trim(),
             avatar,
+            runtimeId,
             modelId,
             effort,
             workspacePath: workspacePath.trim(),
@@ -508,7 +515,23 @@ export function BotEditorModal({
             />
           </label>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
+            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
+              <span>Runtime</span>
+              <select
+                data-testid="bot-runtime-select"
+                value={runtimeId}
+                onChange={(e) => {
+                  setDirty(true)
+                  setRuntimeId(e.target.value as 'mock-offline' | 'codex' | 'openclaw')
+                }}
+              >
+                <option value="mock-offline">Mock Offline</option>
+                <option value="codex">Codex (ChatGPT)</option>
+                <option value="openclaw">OpenClaw Gateway</option>
+              </select>
+            </label>
+
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
               <span>Model (mock)</span>
               <select

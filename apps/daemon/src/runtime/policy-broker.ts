@@ -27,6 +27,10 @@ export interface PolicyAuthorizationInput {
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
   canonicalWorkspace: string | null
+  openClawVersion?: string | null
+  openClawExecutionAuthorized?: boolean
+  openClawLoopbackVerified?: boolean
+  openClawSandboxVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -67,12 +71,14 @@ export class RuntimePolicyBroker {
     }
 
     if (input.runtimeMode === 'openclaw') {
-      return {
-        allowed: false,
-        reason:
-          'OpenClaw live execution is gated until Gateway sandbox and upstream billing enforcement are verified',
-        verifiedModes: [],
-      }
+      return this.authorizeOpenClawExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        openClawVersion: input.openClawVersion ?? null,
+        openClawExecutionAuthorized: input.openClawExecutionAuthorized ?? false,
+        openClawLoopbackVerified: input.openClawLoopbackVerified ?? false,
+        openClawSandboxVerified: input.openClawSandboxVerified ?? false,
+      })
     }
 
     if (input.runtimeMode === 'ollama') {
@@ -132,6 +138,66 @@ export class RuntimePolicyBroker {
    */
   authorizeLiveExecution(input: PolicyAuthorizationInput): PolicyAuthorizationDecision {
     return this.authorize(input)
+  }
+
+  authorizeOpenClawExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    openClawVersion: string | null
+    openClawExecutionAuthorized: boolean
+    openClawLoopbackVerified: boolean
+    openClawSandboxVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reason: 'Full Access is disabled for OpenClaw Gateway execution',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openClawExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'OpenClaw live execution is gated until Gateway sandbox, billing, and explicit user authorization are verified',
+        verifiedModes: [],
+      }
+    }
+    if (input.openClawVersion !== '2026.11.8') {
+      return {
+        allowed: false,
+        reason: `OpenClaw Gateway version "${input.openClawVersion ?? 'unknown'}" is not verified for execution`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.openClawLoopbackVerified) {
+      return {
+        allowed: false,
+        reason: 'OpenClaw Gateway must be verified on loopback (ws://127.0.0.1 / localhost / ::1)',
+        verifiedModes: [],
+      }
+    }
+    if (input.requestedPermission !== 'read-only' && !input.openClawSandboxVerified) {
+      return {
+        allowed: false,
+        reason: `OpenClaw Gateway sandbox/approval enforcement is not verified for "${input.requestedPermission}" mode`,
+        verifiedModes: ['read-only'],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: ['read-only'],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded OpenClaw Gateway execution',
+      verifiedModes: input.openClawSandboxVerified
+        ? ['read-only', 'ask-approval', 'workspace']
+        : ['read-only'],
+    }
   }
 
   /**

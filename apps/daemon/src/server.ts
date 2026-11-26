@@ -435,6 +435,11 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/openclaw/status') {
+        sendJson(res, 200, await this.runtimeRegistry.getOpenClawStatus())
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/runtime/snapshot') {
         const refresh = url.searchParams.get('refresh') === '1'
         const snap = await this.runtimeRegistry.getSnapshot(refresh)

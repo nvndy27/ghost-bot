@@ -5,6 +5,7 @@ import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
+import { RuntimePolicyBroker } from './policy-broker.ts'
 import type {
   ProviderSummary,
   RuntimeLifecycleState,
@@ -247,6 +248,65 @@ export class RuntimeRegistry {
       this.inFlight = null
     })
     return this.inFlight
+  }
+
+  async getOpenClawStatus(): Promise<import('@ghost-bot/shared-types/ipc').OpenClawStatusDto> {
+    const openclaw = this.options.openclawAdapter ?? new OpenClawGatewayAdapter({ timeoutMs: 2000 })
+    const [summary, caps] = await Promise.all([
+      openclaw.inspectGateway(),
+      openclaw.capabilities().catch(() => ({
+        streaming: false,
+        cancellation: false,
+        resume: false,
+        approvals: false,
+        usage: false,
+        sandbox: false,
+        models: [],
+      })),
+    ])
+    const models = summary.available ? caps.models : []
+
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOpenClawExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      openClawVersion: summary.runtimeVersion,
+      openClawExecutionAuthorized: false,
+      openClawLoopbackVerified: summary.available,
+      openClawSandboxVerified: false,
+    })
+
+    return {
+      available: summary.available,
+      gatewayUrl: summary.gatewayUrl,
+      runtimeVersion: summary.runtimeVersion,
+      supportedVersion: summary.supportedVersion,
+      hostDesktopEnabled: summary.hostDesktopEnabled,
+      pluginsLoaded: summary.pluginsLoaded,
+      authStatus: summary.authState.status,
+      authDetail: summary.authState.detail ?? '',
+      detail: summary.detail,
+      capabilities: {
+        streaming: caps.streaming,
+        cancellation: caps.cancellation,
+        resume: caps.resume,
+        approvals: caps.approvals,
+        usage: caps.usage,
+        sandbox: caps.sandbox,
+      },
+      models: models.slice(0, 100).map((m) => ({
+        id: m.id,
+        label: m.label,
+        efforts: m.efforts,
+      })),
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
   }
 
   async listProviders(): Promise<ProviderSummary[]> {

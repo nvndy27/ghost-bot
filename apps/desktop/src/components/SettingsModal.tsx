@@ -90,6 +90,9 @@ export function SettingsModal({
   const [refreshing, setRefreshing] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [openClawStatus, setOpenClawStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OpenClawStatusDto | null
+  >(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -97,6 +100,15 @@ export function SettingsModal({
     if (initialSection) setActiveSection(initialSection)
     setConfirmReset(false)
     setErrorMsg(null)
+    if (window.ghostBot?.getOpenClawStatus) {
+      void window.ghostBot
+        .getOpenClawStatus()
+        .then(setOpenClawStatus)
+        .catch((err: unknown) => {
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load OpenClaw status')
+          setOpenClawStatus(null)
+        })
+    }
   }, [open, initialSection])
 
   useModalDialog(open, modalRef, onClose)
@@ -411,6 +423,46 @@ export function SettingsModal({
                     <span className="gb-badge">{p.status}</span>
                   </div>
                 ))}
+
+                {openClawStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="openclaw-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        OpenClaw Gateway {openClawStatus.runtimeVersion ?? '(not detected)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="openclaw-auth-badge">
+                        {openClawStatus.available ? openClawStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{openClawStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>URL: {openClawStatus.gatewayUrl}</span>
+                      <span>Version verified: {openClawStatus.supportedVersion ? 'yes' : 'no'}</span>
+                      <span>Host desktop: {openClawStatus.hostDesktopEnabled ? 'enabled' : 'disabled'}</span>
+                      <span>Models: {openClawStatus.models.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        streaming: {openClawStatus.capabilities.streaming ? 'on' : 'off'}
+                      </span>
+                      <span className="gb-badge">
+                        sandbox: {openClawStatus.capabilities.sandbox ? 'verified' : 'unverified'}
+                      </span>
+                      <span className="gb-badge">
+                        usage: {openClawStatus.capabilities.usage ? 'reported' : 'unavailable'}
+                      </span>
+                    </div>
+                    {openClawStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="openclaw-gated-reason">
+                        Execution gate: {openClawStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -436,6 +488,25 @@ export function SettingsModal({
                       </small>
                     </div>
                   ))
+                )}
+
+                {openClawStatus && openClawStatus.models.length > 0 && (
+                  <div style={{ marginTop: '14px' }}>
+                    <h3 style={{ margin: '0 0 8px', fontSize: '14px' }}>
+                      OpenClaw Gateway Models ({openClawStatus.models.length})
+                    </h3>
+                    {openClawStatus.models.slice(0, 20).map((m) => (
+                      <div key={m.id} className="gb-setting-row">
+                        <div>
+                          <div>{m.label}</div>
+                          <small className="gb-muted">ID: {m.id}</small>
+                        </div>
+                        <small className="gb-muted">
+                          Efforts: {m.efforts.join(', ') || 'none'}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 {runtimeSnapshot &&

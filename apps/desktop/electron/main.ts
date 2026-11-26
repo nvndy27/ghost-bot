@@ -96,6 +96,7 @@ import {
   DiscoverLocalSkillsInputSchema,
   SkillIdParamSchema,
   SetSkillEnabledInputSchema,
+  OpenClawStatusDtoSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1202,6 +1203,11 @@ function registerIpcHandlers(): void {
         body: { enabled: parsed.enabled },
       },
     )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.OPENCLAW_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/openclaw/status', OpenClawStatusDtoSchema, { timeoutMs: 12_000 })
   })
 
   function assertBoundedTeamsIpcPayload(raw: unknown): void {
