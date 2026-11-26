@@ -129,7 +129,7 @@ test('Migration 0003 upgrades Phase 1D database cleanly and preserves existing d
       const versionRow = dbHandle.sqlite
         .prepare('SELECT MAX(version) AS v FROM schema_migrations')
         .get() as { v: number }
-      assert.equal(Number(versionRow.v), 12)
+      assert.equal(Number(versionRow.v), 13)
 
       const sessionRepo = new SessionRepository(dbHandle)
       const list = sessionRepo.listSessions('chief')

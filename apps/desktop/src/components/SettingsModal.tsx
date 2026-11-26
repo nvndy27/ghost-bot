@@ -13,6 +13,7 @@ import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/works
 import { BotAvatar } from './BotAvatar.tsx'
 import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
 import { McpSettingsSection } from './McpSettingsSection.tsx'
+import { LocalSkillsSettingsSection } from './LocalSkillsSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
 import { ComputerUseSettingsSection } from './ComputerUseSettingsSection.tsx'
@@ -773,12 +774,15 @@ export function SettingsModal({
             )}
 
             {activeSection === 'tools' && (
-              <McpSettingsSection
-                settings={settings}
-                bots={bots}
-                activeBotId={activeBotId}
-                onUpdateSettings={onUpdateSettings}
-              />
+              <>
+                <McpSettingsSection
+                  settings={settings}
+                  bots={bots}
+                  activeBotId={activeBotId}
+                  onUpdateSettings={onUpdateSettings}
+                />
+                <LocalSkillsSettingsSection />
+              </>
             )}
 
             {activeSection === 'routines' && (

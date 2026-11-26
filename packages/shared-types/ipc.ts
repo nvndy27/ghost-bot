@@ -64,6 +64,16 @@ export const IPC_CHANNELS = {
   MCP_SERVER_SECRETS_LIST: 'ghost:mcp:servers:secrets:list',
   MCP_SERVER_SECRETS_SET: 'ghost:mcp:servers:secrets:set',
   MCP_SERVER_SECRETS_DELETE: 'ghost:mcp:servers:secrets:delete',
+  TERMINAL_CAPABILITIES: 'ghost:terminal:capabilities',
+  TERMINAL_COMMANDS_LIST: 'ghost:terminal:commands:list',
+  TERMINAL_COMMAND_REQUEST: 'ghost:terminal:commands:request',
+  TERMINAL_COMMAND_RESOLVE: 'ghost:terminal:commands:resolve',
+  TERMINAL_COMMAND_CANCEL: 'ghost:terminal:commands:cancel',
+  SKILLS_LIST: 'ghost:skills:list',
+  SKILLS_DISCOVER: 'ghost:skills:discover',
+  SKILLS_APPROVE_TRUST: 'ghost:skills:approve-trust',
+  SKILLS_REVOKE_TRUST: 'ghost:skills:revoke-trust',
+  SKILLS_SET_ENABLED: 'ghost:skills:set-enabled',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1571,6 +1581,116 @@ export const DeleteMcpServerSecretInputSchema = z
 
 export type DeleteMcpServerSecretInput = z.infer<typeof DeleteMcpServerSecretInputSchema>
 
+export const TerminalCapabilitiesDtoSchema = z.object({
+  bubblewrapAvailable: z.boolean(),
+  interactivePtySupported: z.literal(false),
+  hostUnisolatedFallbackAllowed: z.literal(false),
+  maxOutputBytes: z.number().int(),
+  maxDurationMs: z.number().int(),
+  maxConcurrentCommands: z.number().int(),
+  notes: z.array(z.string()),
+})
+
+export type TerminalCapabilitiesDto = z.infer<typeof TerminalCapabilitiesDtoSchema>
+
+export const TerminalCommandDtoSchema = z.object({
+  id: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  runId: z.string(),
+  canonicalWorkspace: z.string(),
+  executable: z.string(),
+  args: z.array(z.string()),
+  permissionMode: z.string(),
+  policyId: z.string(),
+  commandHash: z.string(),
+  status: z.enum(['awaiting_approval', 'queued', 'running', 'completed', 'failed', 'cancelled', 'uncertain']),
+  exitCode: z.number().int().nullable(),
+  signal: z.string().nullable(),
+  timedOut: z.boolean(),
+  terminationConfirmed: z.boolean().nullable(),
+  stdoutPreview: z.string(),
+  stderrPreview: z.string(),
+  truncated: z.boolean(),
+  replayAllowed: z.literal(false),
+  errorCode: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+  updatedAt: z.string(),
+})
+
+export type TerminalCommandDto = z.infer<typeof TerminalCommandDtoSchema>
+
+export const RequestTerminalCommandInputSchema = z
+  .object({
+    botId: BotIdSchema,
+    runId: z.string().min(1).max(128).optional(),
+    executable: z.string().min(1).max(1024),
+    args: z.array(z.string().max(4096)).max(64).default([]),
+    ttlMs: z.number().int().min(5000).max(300000).optional(),
+  })
+  .strict()
+
+export type RequestTerminalCommandInput = z.infer<typeof RequestTerminalCommandInputSchema>
+
+export const ResolveTerminalCommandInputSchema = z
+  .object({
+    commandId: McpIpcIdSchema,
+    decision: z.enum(['approved', 'denied']),
+    timeoutMs: z.number().int().min(100).max(60000).optional(),
+    expectedCommandHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  })
+  .strict()
+
+export type ResolveTerminalCommandInput = z.infer<typeof ResolveTerminalCommandInputSchema>
+
+export const TerminalCommandIdParamSchema = z.object({ commandId: McpIpcIdSchema }).strict()
+
+export const ListTerminalCommandsInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+
+export const LocalSkillDtoSchema = z.object({
+  id: z.string(),
+  ownerId: z.string(),
+  sourceRoot: z.string(),
+  sourcePath: z.string(),
+  name: z.string(),
+  description: z.string(),
+  manifest: z.object({ name: z.string(), description: z.string() }),
+  contentFingerprint: z.string(),
+  trustedFingerprint: z.string().nullable(),
+  trustState: z.enum(['untrusted', 'trusted', 'revoked', 'invalid']),
+  enabled: z.boolean(),
+  validationError: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type LocalSkillDto = z.infer<typeof LocalSkillDtoSchema>
+
+export const DiscoverLocalSkillsInputSchema = z
+  .object({
+    roots: z.array(z.string().min(1).max(1024)).min(1).max(16),
+  })
+  .strict()
+
+export type DiscoverLocalSkillsInput = z.infer<typeof DiscoverLocalSkillsInputSchema>
+
+export const SkillIdParamSchema = z.object({ skillId: McpIpcIdSchema }).strict()
+
+export const SetSkillEnabledInputSchema = z
+  .object({
+    skillId: McpIpcIdSchema,
+    enabled: z.boolean(),
+  })
+  .strict()
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1635,6 +1755,16 @@ export interface GhostBotBridge {
   listMcpServerSecrets(serverId: string): Promise<ListMcpServerSecretsResponse>
   setMcpServerSecret(input: SetMcpServerSecretInput): Promise<McpServerDto>
   deleteMcpServerSecret(input: DeleteMcpServerSecretInput): Promise<McpServerDto>
+  getTerminalCapabilities(): Promise<TerminalCapabilitiesDto>
+  listTerminalCommands(input?: { botId?: string; limit?: number }): Promise<{ commands: TerminalCommandDto[] }>
+  requestTerminalCommand(input: RequestTerminalCommandInput): Promise<TerminalCommandDto>
+  resolveTerminalCommand(input: ResolveTerminalCommandInput): Promise<TerminalCommandDto>
+  cancelTerminalCommand(commandId: string): Promise<TerminalCommandDto>
+  listLocalSkills(): Promise<{ skills: LocalSkillDto[] }>
+  discoverLocalSkills(input: DiscoverLocalSkillsInput): Promise<{ skills: LocalSkillDto[] }>
+  approveLocalSkillTrust(skillId: string): Promise<LocalSkillDto>
+  revokeLocalSkillTrust(skillId: string): Promise<LocalSkillDto>
+  setLocalSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<LocalSkillDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

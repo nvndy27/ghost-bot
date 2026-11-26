@@ -86,6 +86,16 @@ import {
   ListMcpServerSecretsResponseSchema,
   SetMcpServerSecretInputSchema,
   DeleteMcpServerSecretInputSchema,
+  TerminalCapabilitiesDtoSchema,
+  TerminalCommandDtoSchema,
+  RequestTerminalCommandInputSchema,
+  ResolveTerminalCommandInputSchema,
+  TerminalCommandIdParamSchema,
+  ListTerminalCommandsInputSchema,
+  LocalSkillDtoSchema,
+  DiscoverLocalSkillsInputSchema,
+  SkillIdParamSchema,
+  SetSkillEnabledInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1095,6 +1105,101 @@ function registerIpcHandlers(): void {
       McpServerDtoSchema,
       {
         method: 'DELETE',
+      },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_CAPABILITIES, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/terminal/capabilities', TerminalCapabilitiesDtoSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_COMMANDS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListTerminalCommandsInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
+    return queryDaemon(
+      `/terminal/commands?${qs.toString()}`,
+      z.object({ commands: z.array(TerminalCommandDtoSchema) }),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_COMMAND_REQUEST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
+    const parsed = RequestTerminalCommandInputSchema.parse(params)
+    return queryDaemon('/terminal/commands/request', TerminalCommandDtoSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_COMMAND_RESOLVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
+    const parsed = ResolveTerminalCommandInputSchema.parse(params)
+    return queryDaemon(
+      `/terminal/commands/${encodeURIComponent(parsed.commandId)}/resolve`,
+      TerminalCommandDtoSchema,
+      {
+        method: 'POST',
+        body: parsed,
+      },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TERMINAL_COMMAND_CANCEL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { commandId } = TerminalCommandIdParamSchema.parse(params)
+    return queryDaemon(
+      `/terminal/commands/${encodeURIComponent(commandId)}/cancel`,
+      TerminalCommandDtoSchema,
+      { method: 'POST' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SKILLS_LIST, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/skills', z.object({ skills: z.array(LocalSkillDtoSchema) }))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SKILLS_DISCOVER, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
+    const parsed = DiscoverLocalSkillsInputSchema.parse(params)
+    return queryDaemon('/skills/discover', z.object({ skills: z.array(LocalSkillDtoSchema) }), {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SKILLS_APPROVE_TRUST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { skillId } = SkillIdParamSchema.parse(params)
+    return queryDaemon(`/skills/${encodeURIComponent(skillId)}/trust`, LocalSkillDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SKILLS_REVOKE_TRUST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { skillId } = SkillIdParamSchema.parse(params)
+    return queryDaemon(`/skills/${encodeURIComponent(skillId)}/revoke-trust`, LocalSkillDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SKILLS_SET_ENABLED, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetSkillEnabledInputSchema.parse(params)
+    return queryDaemon(
+      `/skills/${encodeURIComponent(parsed.skillId)}/enabled`,
+      LocalSkillDtoSchema,
+      {
+        method: 'POST',
+        body: { enabled: parsed.enabled },
       },
     )
   })

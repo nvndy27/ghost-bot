@@ -55,10 +55,17 @@ import {
   SearchMemoriesIpcInputSchema,
   SessionIdSchema,
   DeleteMcpServerSecretInputSchema,
+  DiscoverLocalSkillsInputSchema,
+  ListTerminalCommandsInputSchema,
+  RequestTerminalCommandInputSchema,
+  ResolveTerminalCommandInputSchema,
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
   SetMcpServerEnabledInputSchema,
   SetMcpServerSecretInputSchema,
+  SetSkillEnabledInputSchema,
+  SkillIdParamSchema,
+  TerminalCommandIdParamSchema,
   StartRunInputSchema,
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
@@ -92,6 +99,8 @@ import { SettingsRepository } from './settings/repository.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
+import { ScopedTerminalService } from './terminal/service.ts'
+import { LocalSkillsService } from './skills/service.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -161,6 +170,8 @@ export class GhostBotDaemon {
   private teamsService: TeamsService | null = null
   private schedulerService: SchedulerService | null = null
   private computerUseService: ComputerUseService | null = null
+  private terminalService: ScopedTerminalService | null = null
+  private skillsService: LocalSkillsService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -310,6 +321,9 @@ export class GhostBotDaemon {
 
     this.computerUseService = new ComputerUseService(dbHandle, this.botRepo, policyBroker)
     this.computerUseService.reconcileOnStartup()
+    this.terminalService = new ScopedTerminalService(dbHandle, this.botRepo)
+    this.terminalService.reconcileOnStartup()
+    this.skillsService = new LocalSkillsService(dbHandle)
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
       void this.computerUseService?.revokeByRunId(runId, reason).catch(() => {})
     })
@@ -345,6 +359,11 @@ export class GhostBotDaemon {
   }
 
   async stop(): Promise<void> {
+    if (this.terminalService) {
+      await this.terminalService.shutdownAll()
+      this.terminalService = null
+    }
+    this.skillsService = null
     if (this.computerUseService) {
       await this.computerUseService.shutdownAll()
       this.computerUseService = null
@@ -1686,6 +1705,115 @@ export class GhostBotDaemon {
               : schedulerService.dismissNotification(parsed.data.notificationId, parsed.data.botId),
           )
           return
+        }
+      }
+
+      if (this.terminalService) {
+        const termService = this.terminalService
+        if (req.method === 'GET' && url.pathname === '/terminal/capabilities') {
+          sendJson(res, 200, await termService.getCapabilities())
+          return
+        }
+        if (req.method === 'GET' && url.pathname === '/terminal/commands') {
+          const limitRaw = url.searchParams.get('limit')
+          const parsed = ListTerminalCommandsInputSchema.safeParse({
+            ...(url.searchParams.has('botId') ? { botId: url.searchParams.get('botId') ?? undefined } : {}),
+            ...(limitRaw ? { limit: Number(limitRaw) } : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid terminal commands query', { statusCode: 400 })
+          }
+          sendJson(res, 200, { commands: termService.listCommands(parsed.data.botId, parsed.data.limit) })
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/terminal/commands/request') {
+          const body = await readJsonBody(req)
+          const parsed = RequestTerminalCommandInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid terminal command payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 201, termService.requestCommandApproval(parsed.data))
+          return
+        }
+        const termActionMatch = /^\/terminal\/commands\/([^/]+)\/(resolve|cancel)$/.exec(url.pathname)
+        if (termActionMatch && req.method === 'POST') {
+          const idCheck = TerminalCommandIdParamSchema.safeParse({
+            commandId: decodeURIComponent(termActionMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid terminal command identifier', { statusCode: 400 })
+          }
+          if (termActionMatch[2] === 'resolve') {
+            const body = await readJsonBody(req)
+            const parsed = ResolveTerminalCommandInputSchema.safeParse({
+              ...(body && typeof body === 'object' ? body : {}),
+              commandId: idCheck.data.commandId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid resolve payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, await termService.resolveCommandApproval(parsed.data))
+            return
+          }
+          if (termActionMatch[2] === 'cancel') {
+            sendJson(res, 200, await termService.cancelCommand(idCheck.data.commandId))
+            return
+          }
+        }
+      }
+
+      if (this.skillsService) {
+        const skillsService = this.skillsService
+        if (req.method === 'GET' && url.pathname === '/skills') {
+          sendJson(res, 200, { skills: skillsService.listSkills() })
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/skills/discover') {
+          const body = await readJsonBody(req)
+          const parsed = DiscoverLocalSkillsInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid skill discovery payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, { skills: skillsService.discoverSkills(parsed.data.roots) })
+          return
+        }
+        const skillActionMatch = /^\/skills\/([^/]+)\/(trust|revoke-trust|enabled)$/.exec(url.pathname)
+        if (skillActionMatch && req.method === 'POST') {
+          const idCheck = SkillIdParamSchema.safeParse({
+            skillId: decodeURIComponent(skillActionMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid skill identifier', { statusCode: 400 })
+          }
+          const action = skillActionMatch[2]
+          if (action === 'trust') {
+            sendJson(res, 200, skillsService.approveTrust(idCheck.data.skillId))
+            return
+          }
+          if (action === 'revoke-trust') {
+            sendJson(res, 200, skillsService.revokeTrust(idCheck.data.skillId))
+            return
+          }
+          if (action === 'enabled') {
+            const body = await readJsonBody(req)
+            const parsed = SetSkillEnabledInputSchema.safeParse({
+              ...(body && typeof body === 'object' ? body : {}),
+              skillId: idCheck.data.skillId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid enabled payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, skillsService.setEnabled(parsed.data.skillId, parsed.data.enabled))
+            return
+          }
         }
       }
 

@@ -26,6 +26,7 @@ import { BotEditorModal } from './components/BotEditorModal.tsx'
 import { ChatComposer } from './components/ChatComposer.tsx'
 import { ChatHeader } from './components/ChatHeader.tsx'
 import { ComputerUseLiveViewerModal } from './components/ComputerUseLiveViewerModal.tsx'
+import { ScopedTerminalModal } from './components/ScopedTerminalModal.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
 import { LeftSidebar } from './components/LeftSidebar.tsx'
 import { MessageList } from './components/MessageList.tsx'
@@ -125,6 +126,7 @@ export function App() {
   const hasBridge = typeof window !== 'undefined' && Boolean(window.ghostBot)
   const [liveViewerOpen, setLiveViewerOpen] = useState(false)
   const [liveViewerSessionId, setLiveViewerSessionId] = useState<string | null>(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (hasBridge) return DEFAULT_APP_SETTINGS
     return {
@@ -1587,6 +1589,7 @@ export function App() {
                     }
                   : undefined
               }
+              onOpenTerminal={hasBridge ? () => setTerminalOpen(true) : undefined}
               onRefreshUsage={() => void handleRefreshRuntime()}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
@@ -1625,6 +1628,12 @@ export function App() {
         open={liveViewerOpen}
         initialSessionId={liveViewerSessionId}
         onClose={() => setLiveViewerOpen(false)}
+      />
+      <ScopedTerminalModal
+        open={terminalOpen}
+        bots={bots}
+        activeBotId={activeBotId}
+        onClose={() => setTerminalOpen(false)}
       />
       <BotEditorModal
         open={botEditor.open}

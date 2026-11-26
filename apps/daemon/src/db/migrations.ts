@@ -846,6 +846,61 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_cu_ledger_session ON cu_action_ledger(cu_session_id, created_at);
     `,
   },
+  {
+    version: 13,
+    name: '0013_terminal_and_skills',
+    sql: `
+      CREATE TABLE IF NOT EXISTS terminal_commands (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE RESTRICT,
+        canonical_workspace TEXT NOT NULL,
+        executable TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        permission_mode TEXT NOT NULL,
+        policy_id TEXT NOT NULL,
+        command_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        signal TEXT,
+        timed_out INTEGER NOT NULL DEFAULT 0,
+        termination_confirmed INTEGER,
+        stdout_preview TEXT NOT NULL DEFAULT '',
+        stderr_preview TEXT NOT NULL DEFAULT '',
+        truncated INTEGER NOT NULL DEFAULT 0,
+        replay_allowed INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        ended_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_terminal_commands_bot_created ON terminal_commands(bot_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_terminal_commands_status ON terminal_commands(status);
+
+      CREATE TABLE IF NOT EXISTS local_skills (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        source_path TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        content_fingerprint TEXT NOT NULL,
+        trusted_fingerprint TEXT,
+        trust_state TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        validation_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_local_skills_owner ON local_skills(owner_id, name);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

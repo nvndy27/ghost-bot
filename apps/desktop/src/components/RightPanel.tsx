@@ -12,6 +12,7 @@ export interface RightPanelProps {
   unreadRoutineNotifications?: number
   onOpenRoutines?: () => void
   onOpenComputerUse?: () => void
+  onOpenTerminal?: () => void
   onRefreshUsage?: () => void
   onReconnectRuntime?: () => void
   onCollapse: () => void
@@ -27,6 +28,7 @@ export function RightPanel({
   unreadRoutineNotifications = 0,
   onOpenRoutines,
   onOpenComputerUse,
+  onOpenTerminal,
   onRefreshUsage,
   onReconnectRuntime,
   onCollapse,
@@ -179,10 +181,22 @@ export function RightPanel({
           MOCK_TOOLS.map((tool) => (
             <div
               key={tool.id}
-              style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}
             >
-              <span>{tool.name}</span>
-              <span className="gb-badge">{tool.note}</span>
+              <span>{tool.kind === 'terminal' && onOpenTerminal ? 'Scoped Terminal' : tool.name}</span>
+              {tool.kind === 'terminal' && onOpenTerminal ? (
+                <button
+                  type="button"
+                  className="gb-btn-outline"
+                  data-testid="open-scoped-terminal-btn"
+                  style={{ fontSize: 11, padding: '2px 8px' }}
+                  onClick={onOpenTerminal}
+                >
+                  Open
+                </button>
+              ) : (
+                <span className="gb-badge">{tool.note}</span>
+              )}
             </div>
           ))
         ) : (
