@@ -74,6 +74,17 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
     }
 
     const rt = this.deps.getRuntimeState()
+    if (rt.runtimeMode !== 'mock') {
+      // Live multi-agent Teams execution remains gated until separately verified.
+      return {
+        allowed: false,
+        reasonCode: 'LIVE_TEAMS_GATED',
+        resolvedPermissionMode: 'read-only',
+        runtimeId: rt.runtimeMode,
+        accountId: rt.accountId,
+      }
+    }
+
     if (rt.runtimeMode === 'mock') {
       return {
         allowed: true,
@@ -272,11 +283,9 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           }
         }
         if (latest.status === 'awaiting_approval') {
-          return {
-            status: 'awaiting_approval',
-            durationMs: Math.max(1, Date.now() - startMs),
-            reason: 'Child daemon run awaiting approval',
-          }
+          // Wait for user approval resolution or cancellation up to deadline
+          await new Promise((r) => setTimeout(r, pollMs))
+          continue
         }
         if (latest.status === 'failed' || latest.status === 'cancelled') {
           return {

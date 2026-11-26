@@ -62,15 +62,18 @@ export const IPC_CHANNELS = {
   MCP_SERVERS_GET_PROMPT: 'ghost:mcp:servers:get-prompt',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
+  TEAMS_UPDATE: 'ghost:teams:update',
   TEAMS_UPDATE_MEMBERS: 'ghost:teams:update-members',
   TEAMS_ARCHIVE: 'ghost:teams:archive',
   TEAMS_PREVIEW_PLAN: 'ghost:teams:preview-plan',
   TEAMS_RUN_START: 'ghost:teams:runs:start',
+  TEAMS_RUN_LIST: 'ghost:teams:runs:list',
   TEAMS_RUN_GET: 'ghost:teams:runs:get',
   TEAMS_RUN_CANCEL: 'ghost:teams:runs:cancel',
   TEAMS_RUN_TASKS: 'ghost:teams:runs:tasks',
   TEAMS_RUN_DIAGNOSTICS: 'ghost:teams:runs:diagnostics',
   TEAMS_RUN_USAGE: 'ghost:teams:runs:usage',
+  TEAMS_RUN_APPROVALS: 'ghost:teams:runs:approvals',
   TEAMS_MESSAGES_LIST: 'ghost:teams:messages:list',
 } as const
 
@@ -1285,6 +1288,17 @@ export const CreateTeamIpcInputSchema = z
   })
   .strict()
 
+export const UpdateTeamIpcInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    name: z.string().min(1).max(120).optional(),
+    description: z.string().max(1000).optional(),
+    leadBotId: BotIdSchema.optional(),
+    memberBotIds: z.array(BotIdSchema).min(1).max(12).optional(),
+    bounds: TeamBoundsInputSchema.optional(),
+  })
+  .strict()
+
 export const UpdateTeamMembersIpcInputSchema = z
   .object({
     teamId: TeamIpcIdSchema,
@@ -1326,6 +1340,7 @@ export const StartTeamRunIpcInputSchema = z
     goal: z.string().min(1).max(16_384),
     idempotencyKey: z.string().min(1).max(128),
     plan: TeamPlanInputSchema.optional(),
+    autoExecute: z.boolean().optional(),
   })
   .strict()
 
@@ -1355,6 +1370,7 @@ export const TeamRecordDtoSchema = z.object({
 
 export type TeamRecordDto = z.infer<typeof TeamRecordDtoSchema>
 export type CreateTeamIpcInput = z.infer<typeof CreateTeamIpcInputSchema>
+export type UpdateTeamIpcInput = z.infer<typeof UpdateTeamIpcInputSchema>
 export type UpdateTeamMembersIpcInput = z.infer<typeof UpdateTeamMembersIpcInputSchema>
 export type PreviewTeamPlanIpcInput = z.infer<typeof PreviewTeamPlanIpcInputSchema>
 export type StartTeamRunIpcInput = z.infer<typeof StartTeamRunIpcInputSchema>
@@ -1422,15 +1438,18 @@ export interface GhostBotBridge {
   getMcpPrompt(input: GetMcpPromptInput): Promise<GetMcpPromptResponse>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
+  updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>
   updateTeamMembers(input: UpdateTeamMembersIpcInput): Promise<TeamRecordDto>
   archiveTeam(teamId: string): Promise<TeamRecordDto>
   previewTeamPlan(input: PreviewTeamPlanIpcInput): Promise<Record<string, unknown>>
   startTeamRun(input: StartTeamRunIpcInput): Promise<Record<string, unknown>>
+  listTeamRuns(teamId: string): Promise<{ runs: Array<Record<string, unknown>> }>
   getTeamRun(teamRunId: string): Promise<Record<string, unknown>>
   cancelTeamRun(teamRunId: string): Promise<Record<string, unknown>>
   listTeamRunTasks(teamRunId: string): Promise<{ tasks: Array<Record<string, unknown>> }>
   getTeamDiagnostics(teamRunId: string): Promise<Record<string, unknown>>
   getTeamAggregateUsage(teamRunId: string): Promise<Record<string, unknown>>
+  listTeamRunApprovals(teamRunId: string): Promise<{ approvals: Array<Record<string, unknown>> }>
   listTeamMessages(input: ListTeamMessagesIpcInput): Promise<{ messages: Array<Record<string, unknown>> }>
 }
 

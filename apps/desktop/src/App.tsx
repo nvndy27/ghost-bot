@@ -7,6 +7,7 @@ import type {
   AppSettingsPatch,
   BotRecord,
   CreateBotInput,
+  CreateTeamIpcInput,
   DaemonHealthResponse,
   GhostBotBridge,
   PersistedMessage,
@@ -15,7 +16,9 @@ import type {
   RuntimeSnapshot,
   SessionInspectionResponse,
   SessionRecord,
+  TeamRecordDto,
   UpdateBotInput,
+  UpdateTeamIpcInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { BotEditorModal } from './components/BotEditorModal.tsx'
@@ -26,6 +29,9 @@ import { LeftSidebar } from './components/LeftSidebar.tsx'
 import { MessageList } from './components/MessageList.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { SettingsModal } from './components/SettingsModal.tsx'
+import { TeamEditorModal } from './components/TeamEditorModal.tsx'
+import { TeamRightPanel } from './components/TeamRightPanel.tsx'
+import { TeamWorkspaceView } from './components/TeamWorkspaceView.tsx'
 import { INITIAL_MOCK_BOTS, INITIAL_MOCK_MESSAGES } from './data/mockWorkspace.ts'
 import {
   loadUiPreferences,
@@ -158,6 +164,29 @@ export function App() {
   const prefs: UiPreferences = settings.appearance
   const isMockMode = health === null || health.runtimeMode === 'mock'
   const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0] ?? null
+  const [teams, setTeams] = useState<TeamRecordDto[]>([])
+  const [teamsLoaded, setTeamsLoaded] = useState(false)
+  const [teamsError, setTeamsError] = useState<string | null>(null)
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(null)
+  const [teamEditor, setTeamEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
+    open: false,
+    mode: 'create',
+  })
+  const [teamRuns, setTeamRuns] = useState<Array<Record<string, unknown>>>([])
+  const [activeTeamRunId, setActiveTeamRunId] = useState<string | null>(null)
+  const [activeTeamRun, setActiveTeamRun] = useState<Record<string, unknown> | null>(null)
+  const [teamTasks, setTeamTasks] = useState<Array<Record<string, unknown>>>([])
+  const [teamApprovals, setTeamApprovals] = useState<Array<Record<string, unknown>>>([])
+  const [teamMessages, setTeamMessages] = useState<Array<Record<string, unknown>>>([])
+  const [teamDiagnostics, setTeamDiagnostics] = useState<Record<string, unknown> | null>(null)
+  const [teamAggregateUsage, setTeamAggregateUsage] = useState<Record<string, unknown> | null>(null)
+  const [teamPlanPreview, setTeamPlanPreview] = useState<Record<string, unknown> | null>(null)
+  const [teamPlanPreviewError, setTeamPlanPreviewError] = useState<string | null>(null)
+  const [teamRunError, setTeamRunError] = useState<string | null>(null)
+  const [startingTeamRun, setStartingTeamRun] = useState(false)
+  const [cancellingTeamRun, setCancellingTeamRun] = useState(false)
+  const teamRequestSeqRef = useRef(0)
+  const activeTeam = teams.find((t) => t.id === activeTeamId) ?? null
   const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
   const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
   const activeSessionRun = activeSessionId ? (activeRunBySession[activeSessionId] ?? null) : null
@@ -207,10 +236,22 @@ export function App() {
             : (botsRes.bots[0]?.id ?? null),
         )
         setBotsLoaded(true)
+        bridge
+          .listTeams()
+          .then((res) => {
+            setTeams(res.teams)
+            setTeamsError(null)
+            setTeamsLoaded(true)
+          })
+          .catch((err: unknown) => {
+            setTeamsError(err instanceof Error ? err.message : 'Failed to load teams')
+            setTeamsLoaded(true)
+          })
       })
       .catch((err: unknown) => {
         setBannerError(err instanceof Error ? err.message : 'Failed to load workspace state')
         setBotsLoaded(true)
+        setTeamsLoaded(true)
       })
   }, [])
 
@@ -565,7 +606,213 @@ export function App() {
       }
     }
 
+  const refreshTeams = async () => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    try {
+      const res = await bridge.listTeams()
+      setTeams(res.teams)
+      setTeamsError(null)
+    } catch (err) {
+      setTeamsError(err instanceof Error ? err.message : 'Failed to load teams')
+    }
+  }
+
+  const loadTeamWorkspace = async (teamId: string, preferredRunId?: string | null) => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    const reqSeq = ++teamRequestSeqRef.current
+    try {
+      const runsRes = await bridge.listTeamRuns(teamId)
+      if (reqSeq !== teamRequestSeqRef.current) return
+      const runs = runsRes.runs
+      setTeamRuns(runs)
+      const chosenRunId =
+        (preferredRunId && runs.some((r) => r.id === preferredRunId) ? preferredRunId : null) ??
+        (typeof runs[0]?.id === 'string' ? runs[0].id : null)
+      setActiveTeamRunId(chosenRunId)
+      if (!chosenRunId) {
+        setActiveTeamRun(null)
+        setTeamTasks([])
+        setTeamApprovals([])
+        setTeamMessages([])
+        setTeamDiagnostics(null)
+        setTeamAggregateUsage(null)
+        return
+      }
+      const [runObj, tasksRes, approvalsRes, messagesRes, diagObj, usageObj] = await Promise.all([
+        bridge.getTeamRun(chosenRunId),
+        bridge.listTeamRunTasks(chosenRunId),
+        bridge.listTeamRunApprovals(chosenRunId),
+        bridge.listTeamMessages({ teamId, teamRunId: chosenRunId, limit: 100 }),
+        bridge.getTeamDiagnostics(chosenRunId).catch(() => null),
+        bridge.getTeamAggregateUsage(chosenRunId).catch(() => null),
+      ])
+      if (reqSeq !== teamRequestSeqRef.current) return
+      setActiveTeamRun(runObj)
+      setTeamTasks(tasksRes.tasks)
+      setTeamApprovals(approvalsRes.approvals)
+      setTeamMessages(messagesRes.messages)
+      setTeamDiagnostics(diagObj)
+      setTeamAggregateUsage(usageObj)
+    } catch (err) {
+      if (reqSeq !== teamRequestSeqRef.current) return
+      setTeamRunError(err instanceof Error ? err.message : 'Failed to load team workspace')
+    }
+  }
+
+  useEffect(() => {
+    if (!activeTeamId || !activeTeamRunId || !activeTeamRun) return
+    const status = typeof activeTeamRun.status === 'string' ? activeTeamRun.status : ''
+    const isActive =
+      status === 'pending' ||
+      status === 'queued' ||
+      status === 'running' ||
+      status === 'awaiting_approval' ||
+      status === 'cancelling'
+    if (!isActive) return
+    const timer = window.setTimeout(() => {
+      void loadTeamWorkspace(activeTeamId, activeTeamRunId)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [activeTeamId, activeTeamRunId, activeTeamRun])
+
+  const buildDefaultTeamPlan = (team: TeamRecordDto, goal: string) => {
+    const workers = team.memberBotIds.filter((id) => id !== team.leadBotId)
+    if (workers.length === 0) {
+      return {
+        summary: `Single-lead plan for ${team.name}`,
+        tasks: [
+          {
+            planKey: 'lead_task',
+            assignedBotId: team.leadBotId,
+            prompt: goal,
+          },
+        ],
+      }
+    }
+    const firstWorker = workers[0]
+    return {
+      summary: `Coordinated plan for ${team.name}`,
+      tasks: [
+        {
+          planKey: 'worker_research',
+          assignedBotId: firstWorker,
+          prompt: `Investigate and prepare findings for: ${goal}`,
+        },
+        {
+          planKey: 'lead_synthesis',
+          assignedBotId: team.leadBotId,
+          prompt: `Synthesize worker findings into final response for: ${goal}`,
+          dependsOn: ['worker_research'],
+        },
+      ],
+    }
+  }
+
+  const handleSelectTeam = (teamId: string) => {
+    setActiveTeamId(teamId)
+    setTeamPlanPreview(null)
+    setTeamPlanPreviewError(null)
+    setTeamRunError(null)
+    void loadTeamWorkspace(teamId)
+  }
+
+  const handleCreateTeam = async (input: CreateTeamIpcInput) => {
+    const bridge = window.ghostBot
+    if (!bridge) throw new Error('Desktop bridge unavailable')
+    const created = await bridge.createTeam(input)
+    await refreshTeams()
+    handleSelectTeam(created.id)
+  }
+
+  const handleEditTeam = async (input: UpdateTeamIpcInput) => {
+    const bridge = window.ghostBot
+    if (!bridge) throw new Error('Desktop bridge unavailable')
+    const updated = await bridge.updateTeam(input)
+    await refreshTeams()
+    setActiveTeamId(updated.id)
+    void loadTeamWorkspace(updated.id, activeTeamRunId)
+  }
+
+  const handleArchiveTeam = async (teamId: string) => {
+    const bridge = window.ghostBot
+    if (!bridge) throw new Error('Desktop bridge unavailable')
+    await bridge.archiveTeam(teamId)
+    await refreshTeams()
+    if (activeTeamId === teamId) {
+      setActiveTeamId(null)
+    }
+  }
+
+  const handlePreviewTeamPlan = async (goal: string) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeTeam) return
+    setTeamPlanPreviewError(null)
+    try {
+      const plan = buildDefaultTeamPlan(activeTeam, goal)
+      const preview = await bridge.previewTeamPlan({ teamId: activeTeam.id, plan })
+      setTeamPlanPreview(preview)
+    } catch (err) {
+      setTeamPlanPreviewError(err instanceof Error ? err.message : 'Failed to preview DAG plan')
+    }
+  }
+
+  const handleStartTeamRun = async (goal: string) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeTeam || startingTeamRun) return
+    setStartingTeamRun(true)
+    setTeamRunError(null)
+    try {
+      const plan = buildDefaultTeamPlan(activeTeam, goal)
+      const started = await bridge.startTeamRun({
+        teamId: activeTeam.id,
+        goal,
+        idempotencyKey: `ui-${activeTeam.id}-${Date.now()}`,
+        plan,
+        autoExecute: true,
+      })
+      const runObj =
+        started.run && typeof started.run === 'object'
+          ? (started.run as Record<string, unknown>)
+          : started
+      const runId = typeof runObj.id === 'string' ? runObj.id : null
+      await loadTeamWorkspace(activeTeam.id, runId)
+    } catch (err) {
+      setTeamRunError(err instanceof Error ? err.message : 'Failed to start team run')
+    } finally {
+      setStartingTeamRun(false)
+    }
+  }
+
+  const handleCancelTeamRun = async (teamRunId: string) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeTeam || cancellingTeamRun) return
+    setCancellingTeamRun(true)
+    setTeamRunError(null)
+    try {
+      await bridge.cancelTeamRun(teamRunId)
+      await loadTeamWorkspace(activeTeam.id, teamRunId)
+    } catch (err) {
+      setTeamRunError(err instanceof Error ? err.message : 'Failed to cancel team run')
+    } finally {
+      setCancellingTeamRun(false)
+    }
+  }
+
+  const handleResolveTeamApproval = async (
+    runId: string,
+    approvalId: string,
+    decision: 'approved' | 'denied',
+  ) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeTeam) return
+    await bridge.resolveApproval({ runId, approvalId, decision })
+    await loadTeamWorkspace(activeTeam.id, activeTeamRunId)
+  }
+
   const handleSelectBot = (id: string) => {
+    setActiveTeamId(null)
     setActiveBotId(id)
     const bridge = window.ghostBot
     if (bridge) {
@@ -1022,11 +1269,17 @@ export function App() {
           <LeftSidebar
             width={prefs.leftWidth}
             bots={bots}
-            activeBotId={activeBot?.id ?? null}
+            activeBotId={activeTeam ? null : (activeBot?.id ?? null)}
+            teams={teams}
+            activeTeamId={activeTeam?.id ?? null}
+            teamsLoading={hasBridge && !teamsLoaded}
+            teamsError={teamsError}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             onSelectBot={handleSelectBot}
+            onSelectTeam={handleSelectTeam}
             onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
+            onCreateTeam={() => setTeamEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
             onCollapse={() => updateAppearance({ leftCollapsed: true })}
             isMockMode={isMockMode}
@@ -1044,19 +1297,48 @@ export function App() {
       )}
 
       <main className="gb-center">
-        <ChatHeader
-          bot={activeBot}
-          leftCollapsed={prefs.leftCollapsed}
-          rightCollapsed={prefs.rightCollapsed}
-          isMockMode={isMockMode}
-          sessions={hasBridge ? activeBotSessions : undefined}
-          activeSessionId={hasBridge ? activeSessionId : undefined}
-          onSelectSession={hasBridge ? (sid) => void handleSelectSession(sid) : undefined}
-          onNewChat={hasBridge ? () => void handleNewChat() : undefined}
-          onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
-          onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
-          onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
-        />
+        {activeTeam ? (
+          <TeamWorkspaceView
+            team={activeTeam}
+            bots={bots}
+            runs={teamRuns}
+            activeRun={activeTeamRun}
+            tasks={teamTasks}
+            approvals={teamApprovals}
+            messages={teamMessages}
+            diagnostics={teamDiagnostics}
+            planPreview={teamPlanPreview}
+            planPreviewError={teamPlanPreviewError}
+            runError={teamRunError}
+            isMockMode={isMockMode}
+            startingRun={startingTeamRun}
+            cancellingRun={cancellingTeamRun}
+            leftCollapsed={prefs.leftCollapsed}
+            rightCollapsed={prefs.rightCollapsed}
+            onSelectRun={(teamRunId) => void loadTeamWorkspace(activeTeam.id, teamRunId)}
+            onPreviewPlan={handlePreviewTeamPlan}
+            onStartRun={handleStartTeamRun}
+            onCancelRun={handleCancelTeamRun}
+            onResolveApproval={handleResolveTeamApproval}
+            onEditTeam={() => setTeamEditor({ open: true, mode: 'edit' })}
+            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
+          />
+        ) : (
+          <>
+            <ChatHeader
+              bot={activeBot}
+              leftCollapsed={prefs.leftCollapsed}
+              rightCollapsed={prefs.rightCollapsed}
+              isMockMode={isMockMode}
+              sessions={hasBridge ? activeBotSessions : undefined}
+              activeSessionId={hasBridge ? activeSessionId : undefined}
+              onSelectSession={hasBridge ? (sid) => void handleSelectSession(sid) : undefined}
+              onNewChat={hasBridge ? () => void handleNewChat() : undefined}
+              onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
+              onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+              onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
+            />
 
         {bannerError && (
           <div
@@ -1210,6 +1492,8 @@ export function App() {
             </button>
           </div>
         )}
+          </>
+        )}
       </main>
 
       {!prefs.rightCollapsed && (
@@ -1223,16 +1507,31 @@ export function App() {
             onMouseDown={startResize('right')}
             onKeyDown={handleResizeKeyDown('right')}
           />
-          <RightPanel
-            width={prefs.rightWidth}
-            bot={activeBot}
-            activeTasks={latestTools}
-            runtimeSnapshot={runtimeSnapshot}
-            isMockMode={isMockMode}
-            onRefreshUsage={() => void handleRefreshRuntime()}
-            onReconnectRuntime={() => void handleReconnectRuntime()}
-            onCollapse={() => updateAppearance({ rightCollapsed: true })}
-          />
+          {activeTeam ? (
+            <TeamRightPanel
+              width={prefs.rightWidth}
+              team={activeTeam}
+              bots={bots}
+              activeRun={activeTeamRun}
+              tasks={teamTasks}
+              diagnostics={teamDiagnostics}
+              aggregateUsage={teamAggregateUsage}
+              isMockMode={isMockMode}
+              onRefresh={() => void loadTeamWorkspace(activeTeam.id, activeTeamRunId)}
+              onCollapse={() => updateAppearance({ rightCollapsed: true })}
+            />
+          ) : (
+            <RightPanel
+              width={prefs.rightWidth}
+              bot={activeBot}
+              activeTasks={latestTools}
+              runtimeSnapshot={runtimeSnapshot}
+              isMockMode={isMockMode}
+              onRefreshUsage={() => void handleRefreshRuntime()}
+              onReconnectRuntime={() => void handleReconnectRuntime()}
+              onCollapse={() => updateAppearance({ rightCollapsed: true })}
+            />
+          )}
         </>
       )}
 
@@ -1263,6 +1562,16 @@ export function App() {
         onImportSvg={handleImportSvg}
         onPickWorkspace={handlePickWorkspace}
         onClose={() => setBotEditor((prev) => ({ ...prev, open: false }))}
+      />
+      <TeamEditorModal
+        open={teamEditor.open}
+        mode={teamEditor.mode}
+        initialTeam={teamEditor.mode === 'edit' ? activeTeam : null}
+        bots={bots}
+        onSaveCreate={handleCreateTeam}
+        onSaveEdit={handleEditTeam}
+        onArchive={handleArchiveTeam}
+        onClose={() => setTeamEditor((prev) => ({ ...prev, open: false }))}
       />
     </div>
   )

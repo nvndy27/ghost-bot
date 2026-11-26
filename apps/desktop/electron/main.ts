@@ -36,6 +36,7 @@ import {
   TeamIdParamSchema,
   TeamRecordDtoSchema,
   TeamRunIdParamSchema,
+  UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
@@ -1021,6 +1022,16 @@ function registerIpcHandlers(): void {
     return queryDaemon('/teams', TeamRecordDtoSchema, { method: 'POST', body: parsed })
   })
 
+  ipcMain.handle(IPC_CHANNELS.TEAMS_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = UpdateTeamIpcInputSchema.parse(params)
+    const { teamId, ...body } = parsed
+    return queryDaemon(`/teams/${encodeURIComponent(teamId)}`, TeamRecordDtoSchema, {
+      method: 'PATCH',
+      body,
+    })
+  })
+
   ipcMain.handle(IPC_CHANNELS.TEAMS_UPDATE_MEMBERS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = UpdateTeamMembersIpcInputSchema.parse(params)
@@ -1052,8 +1063,22 @@ function registerIpcHandlers(): void {
     const parsed = StartTeamRunIpcInputSchema.parse(params)
     return queryDaemon(`/teams/${encodeURIComponent(parsed.teamId)}/runs`, LooseRecordSchema, {
       method: 'POST',
-      body: { goal: parsed.goal, idempotencyKey: parsed.idempotencyKey, plan: parsed.plan },
+      body: {
+        goal: parsed.goal,
+        idempotencyKey: parsed.idempotencyKey,
+        plan: parsed.plan,
+        autoExecute: parsed.autoExecute,
+      },
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { teamId } = TeamIdParamSchema.parse(params)
+    return queryDaemon(
+      `/teams/${encodeURIComponent(teamId)}/runs`,
+      z.object({ runs: z.array(LooseRecordSchema) }),
+    )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_GET, async (event, params) => {
@@ -1089,6 +1114,15 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const { teamRunId } = TeamRunIdParamSchema.parse(params)
     return queryDaemon(`/teams/runs/${encodeURIComponent(teamRunId)}/usage`, LooseRecordSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAMS_RUN_APPROVALS, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { teamRunId } = TeamRunIdParamSchema.parse(params)
+    return queryDaemon(
+      `/teams/runs/${encodeURIComponent(teamRunId)}/approvals`,
+      z.object({ approvals: z.array(LooseRecordSchema) }),
+    )
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_MESSAGES_LIST, async (event, params) => {

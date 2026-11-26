@@ -48,6 +48,7 @@ import {
   UpdateKnowledgeDocInputSchema,
   UpdateMcpServerIpcInputSchema,
   UpdateMemoryIpcInputSchema,
+  UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
@@ -1223,6 +1224,10 @@ export class GhostBotDaemon {
             sendJson(res, 200, teamsService.previewPlan(parsed.data.teamId, parsed.data.plan))
             return
           }
+          if (action === 'runs' && req.method === 'GET') {
+            sendJson(res, 200, { runs: teamsService.listRunsForTeam(idCheck.data.teamId) })
+            return
+          }
           if (action === 'runs' && req.method === 'POST') {
             const body = await readJsonBody(req)
             const parsed = StartTeamRunIpcInputSchema.safeParse({
@@ -1255,7 +1260,27 @@ export class GhostBotDaemon {
           }
         }
 
-        const teamRunSubMatch = /^\/teams\/runs\/([^/]+)\/(cancel|tasks|diagnostics|usage)$/.exec(url.pathname)
+        const teamSingleMatch = /^\/teams\/([^/]+)$/.exec(url.pathname)
+        if (teamSingleMatch && teamSingleMatch[1] !== 'runs' && req.method === 'PATCH') {
+          const idCheck = TeamIdParamSchema.safeParse({ teamId: decodeURIComponent(teamSingleMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid team identifier', { statusCode: 400 })
+          }
+          const body = await readJsonBody(req)
+          const parsed = UpdateTeamIpcInputSchema.safeParse({
+            teamId: idCheck.data.teamId,
+            ...(body && typeof body === 'object' ? body : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid team update payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, teamsService.updateTeam(parsed.data))
+          return
+        }
+
+        const teamRunSubMatch = /^\/teams\/runs\/([^/]+)\/(cancel|tasks|diagnostics|usage|approvals)$/.exec(url.pathname)
         if (teamRunSubMatch) {
           const idCheck = TeamRunIdParamSchema.safeParse({ teamRunId: decodeURIComponent(teamRunSubMatch[1]) })
           if (!idCheck.success) {
@@ -1276,6 +1301,10 @@ export class GhostBotDaemon {
           }
           if (action === 'usage' && req.method === 'GET') {
             sendJson(res, 200, teamsService.getAggregateUsage(idCheck.data.teamRunId))
+            return
+          }
+          if (action === 'approvals' && req.method === 'GET') {
+            sendJson(res, 200, { approvals: teamsService.listPendingApprovalsForRun(idCheck.data.teamRunId) })
             return
           }
         }

@@ -47,6 +47,9 @@ importers:
       '@ghost-bot/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@ghost-bot/teams':
+        specifier: workspace:*
+        version: link:../../packages/teams
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4
