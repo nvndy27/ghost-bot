@@ -240,6 +240,9 @@ async function startDaemon(): Promise<void> {
       GHOST_BOT_DAEMON_TOKEN: daemonToken,
       GHOST_BOT_DAEMON_SOCKET: daemonSocketPath,
       GHOST_BOT_RUNTIME_MODE: runtimeMode,
+      ...(process.env.GHOST_CU_ENABLE_TEST_FIXTURE === '1'
+        ? { GHOST_CU_ENABLE_TEST_FIXTURE: '1' }
+        : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -1601,6 +1604,27 @@ function registerIpcHandlers(): void {
       `/computer-use/sessions/${encodeURIComponent(sessionId)}/emergency-stop`,
       z.object({ session: ComputerUseSessionDtoSchema, confirmed: z.boolean() }),
       { method: 'POST', body: reason ? { reason } : {} },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_TEST_FIXTURE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    if (process.env.GHOST_CU_ENABLE_TEST_FIXTURE !== '1') {
+      throw new Error('Test fixture endpoint is disabled')
+    }
+    assertBoundedComputerUseIpcPayload(params)
+    const parsed = z
+      .object({
+        sessionId: z.string().min(1).max(128),
+        routes: z.record(z.string().max(128), z.string().max(16_384)),
+        port: z.number().int().min(0).max(65535).optional(),
+      })
+      .strict()
+      .parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(parsed.sessionId)}/test-fixture`,
+      z.object({ baseUrl: z.string().url() }),
+      { method: 'POST', body: { routes: parsed.routes, port: parsed.port ?? 0 } },
     )
   })
 }

@@ -19,6 +19,7 @@ import type { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
 const MAX_OBSERVATION_BYTES = 2 * 1024 * 1024
 const MAX_VIEWER_FPS = 2
 const DEFAULT_APPROVAL_TTL_MS = 120_000
+const PERMITTED_CU_RUN_STATES = new Set(['queued', 'running', 'awaiting_approval'])
 
 export interface ComputerUseCapabilitiesDto {
   browser: BrowserCapabilities
@@ -110,6 +111,10 @@ interface ActiveWorkerEntry {
   lastFrameAtMs: number
   backpressureDropCount: number
   inFlightActionId: string | null
+  starting: boolean
+  stopRequested: boolean
+  observeInFlight: Promise<ComputerUseObservationDto> | null
+  lastObservationDto: ComputerUseObservationDto | null
 }
 
 function hashActionPayload(action: BrowserAction): string {
@@ -192,7 +197,7 @@ export class ComputerUseService {
 
   async createSession(input: {
     botId: string
-    runId: string
+    runId?: string
     explicitConsent: boolean
     inheritedFromTeamOrRoutine?: boolean
     allowObservation: boolean
@@ -209,17 +214,6 @@ export class ComputerUseService {
       })
     }
 
-    const runRow = this.dbHandle.sqlite
-      .prepare(`SELECT id, agent_id, status FROM runs WHERE id = ?`)
-      .get(input.runId) as { id: string; agent_id: string; status: string } | undefined
-    if (!runRow || runRow.agent_id !== input.botId) {
-      throw new DaemonError(
-        'CU_RUN_MISMATCH',
-        `Authoritative daemon run "${input.runId}" not found for bot "${input.botId}"`,
-        { statusCode: 403 },
-      )
-    }
-
     const decision = this.policyBroker.evaluateComputerUsePolicy({
       requestedPermission: bot.permission,
       explicitConsent: input.explicitConsent,
@@ -231,6 +225,45 @@ export class ComputerUseService {
     })
     if (!decision.allowed) {
       throw new DaemonError(decision.reasonCode, decision.reason, { statusCode: 403 })
+    }
+
+    let authoritativeRunId = input.runId
+    if (authoritativeRunId) {
+      this.revalidateAuthority({
+        botId: input.botId,
+        runId: authoritativeRunId,
+        allowObservation: decision.allowObservation,
+        allowNavigation: decision.allowNavigation,
+        allowInteraction: decision.allowInteraction,
+      })
+    } else {
+      // Create a daemon-authored session + run row bound to this bot for interactive UI sessions
+      const nowRunIso = new Date().toISOString()
+      const sessId = `sess_cu_${randomUUID()}`
+      authoritativeRunId = `run_cu_${randomUUID()}`
+      this.dbHandle.sqlite
+        .prepare(
+          `INSERT INTO sessions (id, agent_id, account_id, runtime_id, external_session_id, title, created_at, updated_at, archived_at)
+           VALUES (?, ?, 'local', ?, NULL, 'Computer Use Session', ?, ?, NULL)`,
+        )
+        .run(sessId, input.botId, bot.runtimeId, nowRunIso, nowRunIso)
+      this.dbHandle.sqlite
+        .prepare(
+          `INSERT INTO runs (id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, config_snapshot_json, status, started_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'running', ?, ?)`,
+        )
+        .run(
+          authoritativeRunId,
+          sessId,
+          input.botId,
+          `cu:${authoritativeRunId}`,
+          bot.runtimeId,
+          bot.modelId,
+          bot.effort,
+          bot.permission,
+          nowRunIso,
+          nowRunIso,
+        )
     }
 
     const sessionId = `cus_${randomUUID()}`
@@ -249,7 +282,7 @@ export class ComputerUseService {
         sessionId,
         LOCAL_USER_ID,
         input.botId,
-        input.runId,
+        authoritativeRunId,
         decision.allowObservation ? 1 : 0,
         decision.allowNavigation ? 1 : 0,
         decision.allowInteraction ? 1 : 0,
@@ -259,8 +292,41 @@ export class ComputerUseService {
       )
 
     const worker = this.createWorker()
+    const entry: ActiveWorkerEntry = {
+      worker,
+      activeTabId: '',
+      tabGenerations: new Map(),
+      latestObservations: new Map(),
+      frameSeq: 0,
+      lastFrameAtMs: 0,
+      backpressureDropCount: 0,
+      inFlightActionId: null,
+      starting: true,
+      stopRequested: false,
+      observeInFlight: null,
+      lastObservationDto: null,
+    }
+    this.workers.set(sessionId, entry)
+
     try {
       await worker.start()
+      if (entry.stopRequested) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Emergency stop requested during worker startup', {
+          statusCode: 409,
+        })
+      }
+      try {
+        this.revalidateAuthority({
+          botId: input.botId,
+          runId: authoritativeRunId,
+          allowObservation: decision.allowObservation,
+          allowNavigation: decision.allowNavigation,
+          allowInteraction: decision.allowInteraction,
+        })
+      } catch (authErr) {
+        entry.stopRequested = true
+        throw authErr
+      }
       const created = await worker.createSession({
         sessionId,
         scope: {
@@ -281,19 +347,44 @@ export class ComputerUseService {
           statusCode: 500,
         })
       }
+      if (entry.stopRequested) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Emergency stop requested during browser launch', {
+          statusCode: 409,
+        })
+      }
+      try {
+        this.revalidateAuthority({
+          botId: input.botId,
+          runId: authoritativeRunId,
+          allowObservation: decision.allowObservation,
+          allowNavigation: decision.allowNavigation,
+          allowInteraction: decision.allowInteraction,
+        })
+      } catch (authErr) {
+        entry.stopRequested = true
+        throw authErr
+      }
       const tab = await worker.openTab(sessionId, LOCAL_USER_ID, input.botId)
-      const tabGenerations = new Map<string, number>([[tab.tabId, tab.navigationGeneration]])
-
-      this.workers.set(sessionId, {
-        worker,
-        activeTabId: tab.tabId,
-        tabGenerations,
-        latestObservations: new Map(),
-        frameSeq: 0,
-        lastFrameAtMs: 0,
-        backpressureDropCount: 0,
-        inFlightActionId: null,
-      })
+      if (entry.stopRequested) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Emergency stop requested during tab open', {
+          statusCode: 409,
+        })
+      }
+      try {
+        this.revalidateAuthority({
+          botId: input.botId,
+          runId: authoritativeRunId,
+          allowObservation: decision.allowObservation,
+          allowNavigation: decision.allowNavigation,
+          allowInteraction: decision.allowInteraction,
+        })
+      } catch (authErr) {
+        entry.stopRequested = true
+        throw authErr
+      }
+      entry.activeTabId = tab.tabId
+      entry.tabGenerations.set(tab.tabId, tab.navigationGeneration)
+      entry.starting = false
 
       const activeIso = new Date().toISOString()
       this.dbHandle.sqlite
@@ -305,7 +396,7 @@ export class ComputerUseService {
       this.appendLedger({
         cuSessionId: sessionId,
         botId: input.botId,
-        runId: input.runId,
+        runId: authoritativeRunId,
         tabId: tab.tabId,
         actionKind: 'session.created',
         outcomeStatus: 'completed',
@@ -314,21 +405,35 @@ export class ComputerUseService {
 
       return this.getSession(sessionId)
     } catch (err) {
-      await worker.emergencyStop().catch(() => {})
-      const failIso = new Date().toISOString()
-      this.dbHandle.sqlite
-        .prepare(`UPDATE cu_sessions SET state = 'failed', updated_at = ?, closed_at = ? WHERE id = ?`)
-        .run(failIso, failIso, sessionId)
-      this.appendLedger({
-        cuSessionId: sessionId,
-        botId: input.botId,
-        runId: input.runId,
-        actionKind: 'session.failed',
-        outcomeStatus: 'failed',
-        sanitizedSummary: redactSecrets(err instanceof Error ? err.message : 'Worker startup failed'),
-        errorCode: 'CU_WORKER_START_FAILED',
-      })
+      this.workers.delete(sessionId)
+      const stopRes = await worker.emergencyStop().catch(() => ({ confirmed: false }))
+      if (entry.stopRequested) {
+        const stopIso = new Date().toISOString()
+        const nextState = stopRes.confirmed ? 'emergency_stopped' : 'interrupted'
+        this.dbHandle.sqlite
+          .prepare(`UPDATE cu_sessions SET state = ?, updated_at = ?, closed_at = COALESCE(closed_at, ?) WHERE id = ?`)
+          .run(nextState, stopIso, stopIso, sessionId)
+      } else {
+        const failIso = new Date().toISOString()
+        this.dbHandle.sqlite
+          .prepare(`UPDATE cu_sessions SET state = 'failed', updated_at = ?, closed_at = ? WHERE id = ?`)
+          .run(failIso, failIso, sessionId)
+        this.appendLedger({
+          cuSessionId: sessionId,
+          botId: input.botId,
+          runId: authoritativeRunId,
+          actionKind: 'session.failed',
+          outcomeStatus: 'failed',
+          sanitizedSummary: redactSecrets(err instanceof Error ? err.message : 'Worker startup failed'),
+          errorCode: 'CU_WORKER_START_FAILED',
+        })
+      }
       if (err instanceof DaemonError) throw err
+      if (entry.stopRequested) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Emergency stop requested during worker startup', {
+          statusCode: 409,
+        })
+      }
       throw new DaemonError(
         'CU_WORKER_START_FAILED',
         redactSecrets(err instanceof Error ? err.message : 'Failed to start isolated browser worker'),
@@ -381,82 +486,144 @@ export class ComputerUseService {
         statusCode: 409,
       })
     }
-
-    const targetTabId = tabId ?? entry.activeTabId
-    let obs: BrowserObservation
     try {
-      obs = await entry.worker.observeTab(sessionId, session.ownerId, session.botId, targetTabId)
-    } catch (err) {
-      await this.handleWorkerDisconnect(sessionId, err)
-      throw new DaemonError(
-        'CU_WORKER_DISCONNECTED',
-        redactSecrets(err instanceof Error ? err.message : 'Browser worker disconnected during observation'),
-        { statusCode: 502 },
-      )
-    }
-
-    if (obs.byteLength > MAX_OBSERVATION_BYTES) {
-      throw new DaemonError('CU_OBSERVATION_TOO_LARGE', 'Screenshot exceeds 2 MiB limit', {
-        statusCode: 413,
+      this.revalidateAuthority({
+        botId: session.botId,
+        runId: session.runId,
+        allowObservation: session.allowObservation,
+        allowNavigation: session.allowNavigation,
+        allowInteraction: session.allowInteraction,
+        sessionId,
       })
+    } catch (err) {
+      await this.failClosedRevokeSession(sessionId, 'Authority revoked before observation', err)
     }
 
-    entry.tabGenerations.set(obs.tabId, obs.navigationGeneration)
-    entry.latestObservations.set(obs.tabId, {
-      observationId: obs.observationId,
-      navigationGeneration: obs.navigationGeneration,
-      capturedAt: obs.capturedAt,
-    })
+    if (entry.observeInFlight) {
+      entry.backpressureDropCount += 1
+      return entry.observeInFlight
+    }
 
     const nowMs = Date.now()
     const minIntervalMs = Math.floor(1000 / MAX_VIEWER_FPS)
-    if (nowMs - entry.lastFrameAtMs < minIntervalMs) {
+    const cachedIsStale =
+      entry.lastObservationDto !== null &&
+      entry.tabGenerations.get(entry.lastObservationDto.tabId) !==
+        entry.lastObservationDto.navigationGeneration
+    if (entry.lastObservationDto && !cachedIsStale && nowMs - entry.lastFrameAtMs < minIntervalMs) {
       entry.backpressureDropCount += 1
+      return {
+        ...entry.lastObservationDto,
+        viewerFrame: {
+          ...entry.lastObservationDto.viewerFrame,
+          backpressureDropCount: entry.backpressureDropCount,
+          stale: false,
+        },
+      }
     }
-    entry.lastFrameAtMs = nowMs
-    entry.frameSeq += 1
 
-    this.appendLedger({
-      cuSessionId: sessionId,
-      botId: session.botId,
-      runId: session.runId,
-      tabId: obs.tabId,
-      observationId: obs.observationId,
-      navigationGeneration: obs.navigationGeneration,
-      actionKind: 'observe_tab',
-      outcomeStatus: 'completed',
-      sanitizedSummary: `Observed tab ${obs.tabId} (gen ${obs.navigationGeneration}, ${obs.byteLength} bytes)`,
-    })
+    const runObserve = async (): Promise<ComputerUseObservationDto> => {
+      const targetTabId = tabId ?? entry.activeTabId
+      let obs: BrowserObservation
+      try {
+        obs = await entry.worker.observeTab(sessionId, session.ownerId, session.botId, targetTabId)
+      } catch (err) {
+        await this.handleWorkerDisconnect(sessionId, err)
+        throw new DaemonError(
+          'CU_WORKER_DISCONNECTED',
+          redactSecrets(err instanceof Error ? err.message : 'Browser worker disconnected during observation'),
+          { statusCode: 502 },
+        )
+      }
 
-    return {
-      observationId: obs.observationId,
-      sessionId: obs.sessionId,
-      tabId: obs.tabId,
-      url: obs.url,
-      navigationGeneration: obs.navigationGeneration,
-      viewport: obs.viewport,
-      mimeType: obs.mimeType,
-      byteLength: obs.byteLength,
-      sha256: obs.sha256,
-      capturedAt: obs.capturedAt,
-      sanitizedSummary: obs.sanitizedSummary,
-      isIsolatedBrowser: true,
-      imageBase64: Buffer.from(obs.buffer).toString('base64'),
-      viewerFrame: {
+      if (entry.stopRequested || this.workers.get(sessionId) !== entry) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Session stopped during observation', {
+          statusCode: 409,
+        })
+      }
+
+      if (obs.byteLength > MAX_OBSERVATION_BYTES) {
+        throw new DaemonError('CU_OBSERVATION_TOO_LARGE', 'Screenshot exceeds 2 MiB limit', {
+          statusCode: 413,
+        })
+      }
+
+      entry.tabGenerations.set(obs.tabId, obs.navigationGeneration)
+      entry.latestObservations.set(obs.tabId, {
+        observationId: obs.observationId,
+        navigationGeneration: obs.navigationGeneration,
+        capturedAt: obs.capturedAt,
+      })
+      entry.lastFrameAtMs = Date.now()
+      entry.frameSeq += 1
+
+      this.appendLedger({
+        cuSessionId: sessionId,
+        botId: session.botId,
+        runId: session.runId,
+        tabId: obs.tabId,
+        observationId: obs.observationId,
+        navigationGeneration: obs.navigationGeneration,
+        actionKind: 'observe_tab',
+        outcomeStatus: 'completed',
+        sanitizedSummary: `Observed tab ${obs.tabId} (gen ${obs.navigationGeneration}, ${obs.byteLength} bytes)`,
+      })
+
+      const dto: ComputerUseObservationDto = {
+        observationId: obs.observationId,
         sessionId: obs.sessionId,
-        frameSeq: entry.frameSeq,
-        timestamp: obs.capturedAt,
-        width: obs.viewport.width,
-        height: obs.viewport.height,
-        mimeType: 'image/png',
+        tabId: obs.tabId,
+        url: obs.url,
+        navigationGeneration: obs.navigationGeneration,
+        viewport: obs.viewport,
+        mimeType: obs.mimeType,
         byteLength: obs.byteLength,
-        captureStatus: 'streaming',
-        backpressureDropCount: entry.backpressureDropCount,
-        stale: false,
-        executionStatus: 'idle',
-        emergencyStopSignaled: false,
-      },
+        sha256: obs.sha256,
+        capturedAt: obs.capturedAt,
+        sanitizedSummary: obs.sanitizedSummary,
+        isIsolatedBrowser: true,
+        imageBase64: Buffer.from(obs.buffer).toString('base64'),
+        viewerFrame: {
+          sessionId: obs.sessionId,
+          frameSeq: entry.frameSeq,
+          timestamp: obs.capturedAt,
+          width: obs.viewport.width,
+          height: obs.viewport.height,
+          mimeType: 'image/png',
+          byteLength: obs.byteLength,
+          captureStatus: 'streaming',
+          backpressureDropCount: entry.backpressureDropCount,
+          stale: false,
+          executionStatus: 'idle',
+          emergencyStopSignaled: false,
+        },
+      }
+      entry.lastObservationDto = dto
+      return dto
     }
+
+    entry.observeInFlight = runObserve().finally(() => {
+      entry.observeInFlight = null
+    })
+    return entry.observeInFlight
+  }
+
+  async startTestFixture(
+    sessionId: string,
+    routes: Record<string, string>,
+    port = 0,
+  ): Promise<{ baseUrl: string }> {
+    if (process.env.GHOST_CU_ENABLE_TEST_FIXTURE !== '1') {
+      throw new DaemonError('FORBIDDEN', 'Test fixture server is disabled', { statusCode: 403 })
+    }
+    this.getSession(sessionId)
+    const entry = this.workers.get(sessionId)
+    if (!entry) {
+      throw new DaemonError('CU_WORKER_DISCONNECTED', 'Browser worker is not attached', {
+        statusCode: 409,
+      })
+    }
+    return entry.worker.startFixtureServer(routes, port)
   }
 
   requestActionApproval(input: {
@@ -472,6 +639,20 @@ export class ComputerUseService {
       throw new DaemonError('CU_SESSION_NOT_ACTIVE', `Session "${input.sessionId}" is ${session.state}`, {
         statusCode: 409,
       })
+    }
+    try {
+      this.revalidateAuthority({
+        botId: session.botId,
+        runId: session.runId,
+        allowObservation: session.allowObservation,
+        allowNavigation: session.allowNavigation,
+        allowInteraction: session.allowInteraction,
+        sessionId: input.sessionId,
+      })
+    } catch (err) {
+      this.revokeApprovalsForSessionSync(input.sessionId)
+      void this.emergencyStop(input.sessionId, 'Authority revoked during approval request').catch(() => {})
+      throw err
     }
     const entry = this.workers.get(input.sessionId)
     if (!entry) {
@@ -547,6 +728,20 @@ export class ComputerUseService {
         statusCode: 409,
       })
     }
+    try {
+      this.revalidateAuthority({
+        botId: session.botId,
+        runId: session.runId,
+        allowObservation: session.allowObservation,
+        allowNavigation: session.allowNavigation,
+        allowInteraction: session.allowInteraction,
+        sessionId,
+      })
+    } catch (err) {
+      this.revokeApprovalsForSessionSync(sessionId)
+      void this.emergencyStop(sessionId, 'Authority revoked during approval resolution').catch(() => {})
+      throw err
+    }
 
     const row = this.getApproval(sessionId, approvalId)
     if (row.status !== 'pending') {
@@ -619,6 +814,18 @@ export class ComputerUseService {
       throw new DaemonError('CU_SESSION_NOT_ACTIVE', `Session "${input.sessionId}" is ${session.state}`, {
         statusCode: 409,
       })
+    }
+    try {
+      this.revalidateAuthority({
+        botId: session.botId,
+        runId: session.runId,
+        allowObservation: session.allowObservation,
+        allowNavigation: session.allowNavigation,
+        allowInteraction: session.allowInteraction,
+        sessionId: input.sessionId,
+      })
+    } catch (err) {
+      await this.failClosedRevokeSession(input.sessionId, 'Authority revoked before action consumption', err)
     }
     const entry = this.workers.get(input.sessionId)
     if (!entry) {
@@ -707,6 +914,40 @@ export class ComputerUseService {
     }
 
     const sanitizedSummary = sanitizeActionSummary(input.action)
+
+    // Revalidate authority immediately before dispatching to worker (post-consumption race guard)
+    try {
+      this.revalidateAuthority({
+        botId: session.botId,
+        runId: session.runId,
+        allowObservation: session.allowObservation,
+        allowNavigation: session.allowNavigation,
+        allowInteraction: session.allowInteraction,
+        sessionId: session.id,
+      })
+      if (this.workers.get(session.id) !== entry || entry.stopRequested) {
+        throw new DaemonError('CU_EMERGENCY_STOPPED', 'Session stopped immediately before action dispatch', {
+          statusCode: 409,
+        })
+      }
+    } catch (err) {
+      this.appendLedger({
+        cuSessionId: session.id,
+        botId: session.botId,
+        runId: session.runId,
+        tabId: targetTabId,
+        observationId: input.observationId,
+        navigationGeneration: input.navigationGeneration,
+        actionId: input.action.actionId,
+        actionKind: input.action.kind,
+        approvalId: approval.id,
+        outcomeStatus: 'cancelled',
+        sanitizedSummary: `${sanitizedSummary} (cancelled before dispatch: authority revoked)`,
+        errorCode: err instanceof DaemonError ? err.code : 'CU_AUTHORITY_REVOKED',
+      })
+      await this.failClosedRevokeSession(session.id, 'Authority revoked immediately before dispatch', err)
+    }
+
     entry.inFlightActionId = input.action.actionId
 
     try {
@@ -717,6 +958,15 @@ export class ComputerUseService {
         botId: session.botId,
         actions: [input.action],
       })
+      if (entry.stopRequested || this.workers.get(session.id) !== entry) {
+        // Late callback after emergency stop / disconnect: do not record completed or advance generation
+        return {
+          outcomeStatus: 'uncertain',
+          navigationGeneration: input.navigationGeneration,
+          errorCode: 'CU_EMERGENCY_STOPPED',
+          sanitizedSummary,
+        }
+      }
       const step = batchRes.entries[0]
       if (!step) {
         throw new Error('Empty batch result from browser worker')
@@ -848,6 +1098,7 @@ export class ComputerUseService {
     let confirmed = true
     const entry = this.workers.get(sessionId)
     if (entry) {
+      entry.stopRequested = true
       const stopRes = await entry.worker.emergencyStop()
       confirmed = stopRes.confirmed
       if (entry.inFlightActionId) {
@@ -950,6 +1201,136 @@ export class ComputerUseService {
   async shutdownAll(): Promise<void> {
     for (const sessionId of Array.from(this.workers.keys())) {
       await this.emergencyStop(sessionId, 'Daemon shutdown').catch(() => {})
+    }
+  }
+
+  async revokeByRunId(runId: string, reason = 'Parent daemon run terminated'): Promise<void> {
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE cu_action_approvals SET status = 'revoked' WHERE run_id = ? AND status IN ('pending', 'approved')`,
+      )
+      .run(runId)
+
+    const sessions = this.dbHandle.sqlite
+      .prepare(`SELECT id FROM cu_sessions WHERE run_id = ? AND state IN ('created', 'active')`)
+      .all(runId) as Array<{ id: string }>
+
+    for (const row of sessions) {
+      await this.emergencyStop(row.id, reason).catch(() => {})
+    }
+  }
+
+  private revokeApprovalsForSessionSync(sessionId: string): void {
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE cu_action_approvals SET status = 'revoked' WHERE cu_session_id = ? AND status IN ('pending', 'approved')`,
+      )
+      .run(sessionId)
+  }
+
+  private async failClosedRevokeSession(sessionId: string, reason: string, err: unknown): Promise<never> {
+    this.revokeApprovalsForSessionSync(sessionId)
+    const row = this.dbHandle.sqlite
+      .prepare(`SELECT state FROM cu_sessions WHERE id = ?`)
+      .get(sessionId) as { state: string } | undefined
+    if (this.workers.has(sessionId) || row?.state === 'created' || row?.state === 'active') {
+      await this.emergencyStop(sessionId, reason).catch(() => {})
+    }
+    throw err
+  }
+
+  private revalidateAuthority(params: {
+    botId: string
+    runId: string
+    allowObservation: boolean
+    allowNavigation: boolean
+    allowInteraction: boolean
+    sessionId?: string
+  }): void {
+    const bot = this.botRepo.getBot(params.botId)
+    if (!bot) {
+      throw new DaemonError('BOT_NOT_FOUND', `Bot "${params.botId}" not found or archived`, {
+        statusCode: 404,
+      })
+    }
+
+    const botPolicy = this.policyBroker.evaluateComputerUsePolicy({
+      requestedPermission: bot.permission,
+      explicitConsent: true,
+      inheritedFromTeamOrRoutine: false,
+      allowObservation: params.allowObservation,
+      allowNavigation: params.allowNavigation,
+      allowInteraction: params.allowInteraction,
+      liveModelDriven: false,
+    })
+    if (!botPolicy.allowed) {
+      throw new DaemonError(botPolicy.reasonCode, botPolicy.reason, { statusCode: 403 })
+    }
+
+    const runRow = this.dbHandle.sqlite
+      .prepare(`SELECT id, agent_id, session_id, status, permission_mode FROM runs WHERE id = ?`)
+      .get(params.runId) as
+      | { id: string; agent_id: string; session_id: string; status: string; permission_mode: string }
+      | undefined
+    if (!runRow || runRow.agent_id !== params.botId) {
+      throw new DaemonError(
+        'CU_RUN_MISMATCH',
+        `Authoritative active daemon run "${params.runId}" not found for bot "${params.botId}"`,
+        { statusCode: 403 },
+      )
+    }
+    if (!PERMITTED_CU_RUN_STATES.has(runRow.status)) {
+      throw new DaemonError(
+        'CU_RUN_NOT_ACTIVE',
+        `Authoritative active daemon run "${params.runId}" is not active for bot "${params.botId}" (status=${runRow.status})`,
+        { statusCode: 403 },
+      )
+    }
+
+    const runPolicy = this.policyBroker.evaluateComputerUsePolicy({
+      requestedPermission: runRow.permission_mode as typeof bot.permission,
+      explicitConsent: true,
+      inheritedFromTeamOrRoutine: false,
+      allowObservation: params.allowObservation,
+      allowNavigation: params.allowNavigation,
+      allowInteraction: params.allowInteraction,
+      liveModelDriven: false,
+    })
+    if (!runPolicy.allowed) {
+      throw new DaemonError(runPolicy.reasonCode, runPolicy.reason, { statusCode: 403 })
+    }
+
+    const chatSess = this.dbHandle.sqlite
+      .prepare(`SELECT id, agent_id, archived_at FROM sessions WHERE id = ?`)
+      .get(runRow.session_id) as { id: string; agent_id: string; archived_at: string | null } | undefined
+    if (!chatSess || chatSess.agent_id !== params.botId || chatSess.archived_at !== null) {
+      throw new DaemonError(
+        'CU_RUN_SESSION_ARCHIVED',
+        `Parent daemon session "${runRow.session_id}" is missing or archived`,
+        { statusCode: 403 },
+      )
+    }
+
+    if (params.sessionId) {
+      const freshSession = this.getSession(params.sessionId)
+      if (
+        freshSession.ownerId !== LOCAL_USER_ID ||
+        freshSession.botId !== params.botId ||
+        freshSession.runId !== params.runId ||
+        freshSession.state !== 'active'
+      ) {
+        throw new DaemonError(
+          'CU_SESSION_NOT_ACTIVE',
+          `Computer Use session "${params.sessionId}" is ${freshSession.state} or mismatched`,
+          { statusCode: 409 },
+        )
+      }
+      const entry = this.workers.get(params.sessionId)
+      if (!entry || entry.stopRequested) {
+        throw new DaemonError('CU_WORKER_DISCONNECTED', 'Browser worker is stopped or disconnected', {
+          statusCode: 409,
+        })
+      }
     }
   }
 

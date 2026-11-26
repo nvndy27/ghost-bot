@@ -11,6 +11,7 @@ export interface RightPanelProps {
   routines?: RoutineRecordDto[]
   unreadRoutineNotifications?: number
   onOpenRoutines?: () => void
+  onOpenComputerUse?: () => void
   onRefreshUsage?: () => void
   onReconnectRuntime?: () => void
   onCollapse: () => void
@@ -25,6 +26,7 @@ export function RightPanel({
   routines,
   unreadRoutineNotifications = 0,
   onOpenRoutines,
+  onOpenComputerUse,
   onRefreshUsage,
   onReconnectRuntime,
   onCollapse,
@@ -73,8 +75,20 @@ export function RightPanel({
       <div style={{ textAlign: 'center', marginTop: '8px' }}>
         <div>Live computer</div>
         <small className="gb-muted">
-          {isMockMode ? 'Mock preview · unavailable' : 'Unavailable (Phase 5)'}
+          {onOpenComputerUse ? 'Isolated browser · ready' : isMockMode ? 'Mock preview · unavailable' : 'Unavailable'}
         </small>
+        {onOpenComputerUse && (
+          <div style={{ marginTop: 6 }}>
+            <button
+              type="button"
+              className="gb-btn-outline"
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={onOpenComputerUse}
+            >
+              Open Live Viewer
+            </button>
+          </div>
+        )}
       </div>
 
       <hr className="gb-divider" />

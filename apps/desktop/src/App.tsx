@@ -25,6 +25,7 @@ import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { BotEditorModal } from './components/BotEditorModal.tsx'
 import { ChatComposer } from './components/ChatComposer.tsx'
 import { ChatHeader } from './components/ChatHeader.tsx'
+import { ComputerUseLiveViewerModal } from './components/ComputerUseLiveViewerModal.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
 import { LeftSidebar } from './components/LeftSidebar.tsx'
 import { MessageList } from './components/MessageList.tsx'
@@ -122,6 +123,8 @@ function persistedToChatMessage(msg: PersistedMessage, activeRun?: RunRecord | n
 
 export function App() {
   const hasBridge = typeof window !== 'undefined' && Boolean(window.ghostBot)
+  const [liveViewerOpen, setLiveViewerOpen] = useState(false)
+  const [liveViewerSessionId, setLiveViewerSessionId] = useState<string | null>(null)
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (hasBridge) return DEFAULT_APP_SETTINGS
     return {
@@ -1576,6 +1579,14 @@ export function App() {
                     }
                   : undefined
               }
+              onOpenComputerUse={
+                hasBridge
+                  ? () => {
+                      setLiveViewerSessionId(null)
+                      setLiveViewerOpen(true)
+                    }
+                  : undefined
+              }
               onRefreshUsage={() => void handleRefreshRuntime()}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
@@ -1601,10 +1612,19 @@ export function App() {
         onRefreshWorkspaceRoutines={() => void refreshRoutines()}
         onNavigateToBot={handleSelectBot}
         onNavigateToTeam={handleSelectTeam}
+        onOpenComputerUseLiveViewer={(sId) => {
+          setLiveViewerSessionId(sId ?? null)
+          setLiveViewerOpen(true)
+        }}
         onClose={() => {
           setSettingsOpen(false)
           setSettingsInitialSection('appearance')
         }}
+      />
+      <ComputerUseLiveViewerModal
+        open={liveViewerOpen}
+        initialSessionId={liveViewerSessionId}
+        onClose={() => setLiveViewerOpen(false)}
       />
       <BotEditorModal
         open={botEditor.open}

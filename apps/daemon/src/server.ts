@@ -308,6 +308,9 @@ export class GhostBotDaemon {
 
     this.computerUseService = new ComputerUseService(dbHandle, this.botRepo, policyBroker)
     this.computerUseService.reconcileOnStartup()
+    this.runOrchestrator.setOnRunTerminated((runId, reason) => {
+      void this.computerUseService?.revokeByRunId(runId, reason).catch(() => {})
+    })
 
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
@@ -1700,7 +1703,7 @@ export class GhostBotDaemon {
         }
 
         const cuSubMatch =
-          /^\/computer-use\/sessions\/([^/]+)\/(observe|approvals|actions|ledger|close|emergency-stop)$/.exec(
+          /^\/computer-use\/sessions\/([^/]+)\/(observe|approvals|actions|ledger|close|emergency-stop|test-fixture)$/.exec(
             url.pathname,
           )
         if (cuSubMatch) {
@@ -1801,6 +1804,20 @@ export class GhostBotDaemon {
               })
             }
             sendJson(res, 200, await cuService.emergencyStop(parsed.data.sessionId, parsed.data.reason))
+            return
+          }
+
+          if (sub === 'test-fixture' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const routes =
+              typeof body === 'object' && body !== null && 'routes' in body
+                ? (body as { routes: Record<string, string> }).routes
+                : {}
+            const port =
+              typeof body === 'object' && body !== null && 'port' in body && typeof (body as { port?: unknown }).port === 'number'
+                ? (body as { port: number }).port
+                : 0
+            sendJson(res, 200, await cuService.startTestFixture(sessionId, routes, port))
             return
           }
         }

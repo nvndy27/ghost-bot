@@ -127,6 +127,8 @@ const bridge: GhostBotBridge = {
   closeComputerUseSession: (input) => ipcRenderer.invoke('ghost:computer-use:session-close', input),
   emergencyStopComputerUseSession: (input) =>
     ipcRenderer.invoke('ghost:computer-use:emergency-stop', input),
+  startComputerUseTestFixture: (input) =>
+    ipcRenderer.invoke('ghost:computer-use:test-fixture', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

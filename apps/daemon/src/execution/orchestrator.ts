@@ -183,6 +183,11 @@ export class RunOrchestrator {
   private readonly memoryService?: MemoryService
   private readonly knowledgeService?: KnowledgeService
   private readonly mcpService?: McpService
+  private onRunTerminated?: (runId: string, reason: string) => void
+
+  setOnRunTerminated(handler: (runId: string, reason: string) => void): void {
+    this.onRunTerminated = handler
+  }
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
@@ -1277,6 +1282,7 @@ export class RunOrchestrator {
           payload: { previousStatus: currentStatus },
           timestamp: now,
         })
+        this.onRunTerminated?.(runId, 'run_cancelling')
       }
 
       const updated = this.dbHandle.sqlite
@@ -1749,6 +1755,7 @@ export class RunOrchestrator {
         timestamp: now,
       })
     })
+    this.onRunTerminated?.(params.runId, `run_${params.terminalStatus}`)
   }
 
   private flushAssistantBuffer(assistantMessageId: string, text: string): void {

@@ -30,7 +30,7 @@ await build({
   format: 'esm',
   external: ['node:*'],
   banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    js: "import { createRequire as __ghostCreateRequire } from 'node:module'; const require = __ghostCreateRequire(import.meta.url);",
   },
   sourcemap: false,
   minify: false,
@@ -66,7 +66,7 @@ await build({
   format: 'esm',
   external: ['electron', 'node:*'],
   banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    js: "import { createRequire as __ghostCreateRequire } from 'node:module'; const require = __ghostCreateRequire(import.meta.url);",
   },
   sourcemap: false,
   minify: false,

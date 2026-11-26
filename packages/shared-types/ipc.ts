@@ -109,6 +109,7 @@ export const IPC_CHANNELS = {
   COMPUTER_USE_LEDGER_LIST: 'ghost:computer-use:ledger-list',
   COMPUTER_USE_SESSION_CLOSE: 'ghost:computer-use:session-close',
   COMPUTER_USE_EMERGENCY_STOP: 'ghost:computer-use:emergency-stop',
+  COMPUTER_USE_TEST_FIXTURE: 'ghost:computer-use:test-fixture',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -1629,6 +1630,7 @@ export interface GhostBotBridge {
   listComputerUseLedger(input: z.infer<typeof ComputerUseSessionListParamSchema>): Promise<{ entries: Array<z.infer<typeof ComputerUseLedgerEntryDtoSchema>> }>
   closeComputerUseSession(input: z.infer<typeof ComputerUseSessionIdParamSchema>): Promise<z.infer<typeof ComputerUseSessionDtoSchema>>
   emergencyStopComputerUseSession(input: z.infer<typeof ComputerUseEmergencyStopInputSchema>): Promise<{ session: z.infer<typeof ComputerUseSessionDtoSchema>; confirmed: boolean }>
+  startComputerUseTestFixture?(input: { sessionId: string; routes: Record<string, string>; port?: number }): Promise<{ baseUrl: string }>
 }
 
 export const RoutineIpcIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/)
@@ -2069,7 +2071,7 @@ export const ComputerUseActionSchema = z.discriminatedUnion('kind', [
 export const CreateComputerUseSessionInputSchema = z
   .object({
     botId: BotIdSchema,
-    runId: RunIdSchema,
+    runId: RunIdSchema.optional(),
     explicitConsent: z.boolean(),
     inheritedFromTeamOrRoutine: z.boolean().optional(),
     allowObservation: z.boolean(),

@@ -103,6 +103,9 @@ export class BwrapIsolatedBrowserWorker {
   }
 
   async start(): Promise<void> {
+    if (this.closed) {
+      throw new ComputerUseError('EMERGENCY_STOPPED', 'Isolated browser worker was stopped before start')
+    }
     if (this.child) return
     const { binds, entryArg } = this.resolveWorkerBindsAndEntry()
 
@@ -263,8 +266,8 @@ export class BwrapIsolatedBrowserWorker {
     return this.call<BrowserCapabilities>('probeCapabilities', {})
   }
 
-  startFixtureServer(routes: Record<string, string>): Promise<{ baseUrl: string }> {
-    return this.call<{ baseUrl: string }>('startFixtureServer', { routes })
+  startFixtureServer(routes: Record<string, string>, port = 0): Promise<{ baseUrl: string }> {
+    return this.call<{ baseUrl: string }>('startFixtureServer', { routes, port })
   }
 
   inspectIsolation(canaryPath: string, hostPort: number): Promise<{
@@ -318,7 +321,9 @@ export class BwrapIsolatedBrowserWorker {
   }
 
   async emergencyStop(): Promise<{ confirmed: boolean }> {
-    if (this.closed) return { confirmed: true }
+    if (this.closed && (!this.child || this.child.exitCode !== null)) {
+      return { confirmed: true }
+    }
     this.closed = true
     this.rejectAll(new ComputerUseError('EMERGENCY_STOPPED', 'Isolated browser worker emergency-stopped'))
 

@@ -95,12 +95,13 @@ rl.on('line', async (line: string) => {
       }
       case 'startFixtureServer': {
         const routes = (params.routes as Record<string, string>) ?? {}
+        const listenPort = typeof params.port === 'number' && Number.isInteger(params.port) ? params.port : 0
         fixtureServer = http.createServer((hReq, hRes) => {
           const body = routes[hReq.url || '/'] ?? routes['/'] ?? '<h1>Missing</h1>'
           hRes.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
           hRes.end(body)
         })
-        await new Promise<void>((resolve) => fixtureServer!.listen(0, '127.0.0.1', () => resolve()))
+        await new Promise<void>((resolve) => fixtureServer!.listen(listenPort, '127.0.0.1', () => resolve()))
         const addr = fixtureServer.address() as net.AddressInfo
         fixtureBaseUrl = `http://127.0.0.1:${addr.port}`
         result = { baseUrl: fixtureBaseUrl }

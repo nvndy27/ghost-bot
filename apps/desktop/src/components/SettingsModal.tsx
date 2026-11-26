@@ -15,6 +15,7 @@ import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
 import { McpSettingsSection } from './McpSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
+import { ComputerUseSettingsSection } from './ComputerUseSettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General' },
@@ -61,6 +62,7 @@ export interface SettingsModalProps {
   onRefreshWorkspaceRoutines?: () => void
   onNavigateToBot?: (botId: string) => void
   onNavigateToTeam?: (teamId: string) => void
+  onOpenComputerUseLiveViewer?: (sessionId?: string) => void
   onClose: () => void
 }
 
@@ -80,6 +82,7 @@ export function SettingsModal({
   onRefreshWorkspaceRoutines,
   onNavigateToBot,
   onNavigateToTeam,
+  onOpenComputerUseLiveViewer,
   onClose,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SectionId>(initialSection ?? 'appearance')
@@ -797,16 +800,14 @@ export function SettingsModal({
             )}
 
             {activeSection === 'computer-use' && (
-              <div>
-                <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
-                  {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}
-                  <span className="gb-badge">Unavailable · Phase 5</span>
-                </h2>
-                <p className="gb-muted">
-                  This capability is not implemented in Phase 1D and remains disabled until its
-                  scheduled vertical slice.
-                </p>
-              </div>
+              <ComputerUseSettingsSection
+                bots={bots}
+                activeBotId={activeBotId ?? null}
+                onOpenLiveViewer={(sId) => {
+                  onClose()
+                  onOpenComputerUseLiveViewer?.(sId)
+                }}
+              />
             )}
           </section>
         </div>
