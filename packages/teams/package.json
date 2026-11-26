@@ -1,0 +1,20 @@
+{
+  "name": "@ghost-bot/teams",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/types.ts",
+    "./daemon-contracts": "./src/contracts/daemon-integration.ts",
+    "./security": "./src/security/validation.ts",
+    "./repository": "./src/repository/team-repository.ts",
+    "./engine": "./src/engine/delegation-engine.ts",
+    "./coordinator": "./src/engine/team-coordinator.ts",
+    "./diagnostics": "./src/engine/team-diagnostics.ts",
+    "./preview": "./src/engine/team-plan-preview.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts"
+  }
+}
