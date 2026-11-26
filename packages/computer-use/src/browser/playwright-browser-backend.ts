@@ -97,11 +97,7 @@ const ALLOWED_BROWSER_KEYS = new Set([
 ])
 
 async function loadPlaywright(customPath?: string): Promise<PwModule> {
-  const candidates = [
-    customPath,
-    'playwright-core',
-    '/home/nguyenduy/Documents/Projects/ghost-bot/node_modules/playwright-core/index.mjs',
-  ].filter((p): p is string => Boolean(p))
+  const candidates = [customPath, 'playwright-core'].filter((p): p is string => Boolean(p))
 
   for (const candidate of candidates) {
     try {

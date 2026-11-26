@@ -19,6 +19,9 @@
     "./browser": "./src/browser/playwright-browser-backend.ts",
     "./isolation": "./src/isolation/bwrap-isolation-worker.ts"
   },
+  "dependencies": {
+    "playwright-core": "^1.65.1"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.ts"
