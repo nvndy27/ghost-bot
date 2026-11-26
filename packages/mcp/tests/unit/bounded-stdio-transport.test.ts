@@ -17,7 +17,16 @@ test('BoundedStdioClientTransport aborts immediately on oversized message before
   })
 
   const errors: Error[] = []
-  transport.onerror = (err) => errors.push(err)
+  let resolveDone!: () => void
+  const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+  transport.onerror = (err) => {
+    errors.push(err)
+    if (err instanceof McpTransportError && err.message.includes('hard transport limit')) {
+      resolveDone()
+    }
+  }
 
   await transport.start()
   try {
@@ -28,8 +37,12 @@ test('BoundedStdioClientTransport aborts immediately on oversized message before
       params: { name: 'poison_tool', arguments: {} },
     })
 
-    // Wait briefly for oversized response to trigger abort
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await Promise.race([
+      donePromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Timed out waiting for hard transport limit error')), 3000),
+      ),
+    ])
     assert.ok(errors.some((e) => e instanceof McpTransportError && e.message.includes('hard transport limit')))
   } finally {
     await transport.close()

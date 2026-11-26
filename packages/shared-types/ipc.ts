@@ -60,6 +60,18 @@ export const IPC_CHANNELS = {
   MCP_SERVERS_CAPABILITIES: 'ghost:mcp:servers:capabilities',
   MCP_SERVERS_READ_RESOURCE: 'ghost:mcp:servers:read-resource',
   MCP_SERVERS_GET_PROMPT: 'ghost:mcp:servers:get-prompt',
+  TEAMS_LIST: 'ghost:teams:list',
+  TEAMS_CREATE: 'ghost:teams:create',
+  TEAMS_UPDATE_MEMBERS: 'ghost:teams:update-members',
+  TEAMS_ARCHIVE: 'ghost:teams:archive',
+  TEAMS_PREVIEW_PLAN: 'ghost:teams:preview-plan',
+  TEAMS_RUN_START: 'ghost:teams:runs:start',
+  TEAMS_RUN_GET: 'ghost:teams:runs:get',
+  TEAMS_RUN_CANCEL: 'ghost:teams:runs:cancel',
+  TEAMS_RUN_TASKS: 'ghost:teams:runs:tasks',
+  TEAMS_RUN_DIAGNOSTICS: 'ghost:teams:runs:diagnostics',
+  TEAMS_RUN_USAGE: 'ghost:teams:runs:usage',
+  TEAMS_MESSAGES_LIST: 'ghost:teams:messages:list',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -1236,6 +1248,118 @@ export const GetMcpPromptResponseSchema = z.object({
 
 export type GetMcpPromptResponse = z.infer<typeof GetMcpPromptResponseSchema>
 
+export const TeamIpcIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid team identifier')
+
+export const TeamBoundsInputSchema = z
+  .object({
+    maxDepth: z.number().int().min(0).max(5).optional(),
+    maxAttempts: z.number().int().min(1).max(5).optional(),
+    maxTokens: z.number().int().min(100).max(500_000).optional(),
+    maxDurationMs: z.number().int().min(1000).max(3_600_000).optional(),
+    maxConcurrentTasks: z.number().int().min(1).max(6).optional(),
+    maxTasksPerRun: z.number().int().min(1).max(100).optional(),
+    maxMessages: z.number().int().min(1).max(2000).optional(),
+    maxResultBytes: z.number().int().min(1024).max(524_288).optional(),
+  })
+  .strict()
+
+export const ListTeamsInputSchema = z
+  .object({
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).max(10_000).optional(),
+    includeArchived: z.boolean().optional(),
+  })
+  .strict()
+
+export const CreateTeamIpcInputSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    description: z.string().max(1000).optional(),
+    leadBotId: BotIdSchema,
+    memberBotIds: z.array(BotIdSchema).min(1).max(12),
+    bounds: TeamBoundsInputSchema.optional(),
+  })
+  .strict()
+
+export const UpdateTeamMembersIpcInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    memberBotIds: z.array(BotIdSchema).min(1).max(12),
+  })
+  .strict()
+
+export const TeamIdParamSchema = z.object({ teamId: TeamIpcIdSchema }).strict()
+export const TeamRunIdParamSchema = z.object({ teamRunId: TeamIpcIdSchema }).strict()
+
+export const TeamPlanTaskInputSchema = z
+  .object({
+    planKey: z.string().min(1).max(64),
+    assignedBotId: BotIdSchema,
+    prompt: z.string().min(1).max(16_384),
+    dependsOn: z.array(z.string().min(1).max(64)).max(25).optional(),
+    tokenBudget: z.number().int().min(1).max(500_000).optional(),
+    durationBudgetMs: z.number().int().min(1000).max(3_600_000).optional(),
+  })
+  .strict()
+
+export const TeamPlanInputSchema = z
+  .object({
+    summary: z.string().min(1).max(1000),
+    tasks: z.array(TeamPlanTaskInputSchema).min(1).max(100),
+  })
+  .strict()
+
+export const PreviewTeamPlanIpcInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    plan: TeamPlanInputSchema,
+  })
+  .strict()
+
+export const StartTeamRunIpcInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    goal: z.string().min(1).max(16_384),
+    idempotencyKey: z.string().min(1).max(128),
+    plan: TeamPlanInputSchema.optional(),
+  })
+  .strict()
+
+export const ListTeamMessagesIpcInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    teamRunId: TeamIpcIdSchema.optional(),
+    viewerBotId: BotIdSchema.optional(),
+    afterSeq: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  })
+  .strict()
+
+export const TeamRecordDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  ownerId: z.string(),
+  leadBotId: z.string(),
+  memberBotIds: z.array(z.string()),
+  memorySharingPolicy: z.literal('explicit-only'),
+  bounds: z.record(z.string(), z.number()),
+  archivedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type TeamRecordDto = z.infer<typeof TeamRecordDtoSchema>
+export type CreateTeamIpcInput = z.infer<typeof CreateTeamIpcInputSchema>
+export type UpdateTeamMembersIpcInput = z.infer<typeof UpdateTeamMembersIpcInputSchema>
+export type PreviewTeamPlanIpcInput = z.infer<typeof PreviewTeamPlanIpcInputSchema>
+export type StartTeamRunIpcInput = z.infer<typeof StartTeamRunIpcInputSchema>
+export type ListTeamMessagesIpcInput = z.infer<typeof ListTeamMessagesIpcInputSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1296,6 +1420,18 @@ export interface GhostBotBridge {
   getMcpCapabilities(id: string): Promise<McpCapabilitySnapshotDto | null>
   readMcpResource(input: ReadMcpResourceInput): Promise<ReadMcpResourceResponse>
   getMcpPrompt(input: GetMcpPromptInput): Promise<GetMcpPromptResponse>
+  listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
+  createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
+  updateTeamMembers(input: UpdateTeamMembersIpcInput): Promise<TeamRecordDto>
+  archiveTeam(teamId: string): Promise<TeamRecordDto>
+  previewTeamPlan(input: PreviewTeamPlanIpcInput): Promise<Record<string, unknown>>
+  startTeamRun(input: StartTeamRunIpcInput): Promise<Record<string, unknown>>
+  getTeamRun(teamRunId: string): Promise<Record<string, unknown>>
+  cancelTeamRun(teamRunId: string): Promise<Record<string, unknown>>
+  listTeamRunTasks(teamRunId: string): Promise<{ tasks: Array<Record<string, unknown>> }>
+  getTeamDiagnostics(teamRunId: string): Promise<Record<string, unknown>>
+  getTeamAggregateUsage(teamRunId: string): Promise<Record<string, unknown>>
+  listTeamMessages(input: ListTeamMessagesIpcInput): Promise<{ messages: Array<Record<string, unknown>> }>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

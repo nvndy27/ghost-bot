@@ -10,6 +10,39 @@ export interface TeamDatabaseHandle {
   close(): void
 }
 
+export function createBorrowedTeamDatabaseHandle(
+  sqlite: DatabaseSync,
+  transaction: <T>(fn: () => T) => T,
+  dbPath = ':borrowed:',
+): TeamDatabaseHandle {
+  let txDepth = 0
+  return {
+    sqlite,
+    dbPath,
+    transaction<T>(fn: () => T): T {
+      if (txDepth > 0) {
+        txDepth += 1
+        try {
+          return fn()
+        } finally {
+          txDepth -= 1
+        }
+      }
+      return transaction(() => {
+        txDepth = 1
+        try {
+          return fn()
+        } finally {
+          txDepth = 0
+        }
+      })
+    },
+    close() {
+      // Borrowed handle: lifecycle is owned by the daemon.
+    },
+  }
+}
+
 function chmodIfExists(path: string, mode: number): void {
   if (existsSync(path)) {
     const st = lstatSync(path)

@@ -214,11 +214,25 @@ test('BoundedStdioClientTransport handles split UTF-8 chunks and multiple messag
   })
 
   const received: unknown[] = []
-  transport.onmessage = (msg) => received.push(msg)
+  let resolveTwo!: () => void
+  const twoPromise = new Promise<void>((resolve) => {
+    resolveTwo = resolve
+  })
+  transport.onmessage = (msg) => {
+    received.push(msg)
+    if (received.length >= 2) {
+      resolveTwo()
+    }
+  }
 
   await transport.start()
   try {
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    await Promise.race([
+      twoPromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Timed out waiting for 2 chunked JSON-RPC messages')), 3000),
+      ),
+    ])
     assert.equal(received.length, 2)
     assert.equal((received[0] as { result: { msg: string } }).result.msg, 'Tiếng Việt 🚀')
     assert.equal((received[1] as { result: { ok: boolean } }).result.ok, true)

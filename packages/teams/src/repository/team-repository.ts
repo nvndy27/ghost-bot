@@ -17,7 +17,8 @@ import {
   validateBounds,
   validateCreateTeamInput,
 } from '../security/validation.ts'
-import type { TeamDatabaseHandle } from './sqlite-store.ts'
+import { createBorrowedTeamDatabaseHandle, type TeamDatabaseHandle } from './sqlite-store.ts'
+export { createBorrowedTeamDatabaseHandle }
 
 interface RawTeamRow {
   id: string

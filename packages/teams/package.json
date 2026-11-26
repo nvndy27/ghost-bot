@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    ".": "./src/index.ts",
     "./contracts": "./src/contracts/types.ts",
     "./daemon-contracts": "./src/contracts/daemon-integration.ts",
     "./security": "./src/security/validation.ts",

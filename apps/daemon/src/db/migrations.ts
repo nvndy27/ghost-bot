@@ -437,6 +437,151 @@ export const MIGRATIONS: readonly Migration[] = [
         ON mcp_approval_bindings(server_id, dispatch_state);
     `,
   },
+  {
+    version: 8,
+    name: '0008_teams_coordination',
+    sql: `
+      ALTER TABLE teams ADD COLUMN description TEXT NOT NULL DEFAULT '';
+      ALTER TABLE teams ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'local-user';
+      ALTER TABLE teams ADD COLUMN lead_bot_id TEXT;
+      ALTER TABLE teams ADD COLUMN member_bot_ids_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE teams ADD COLUMN memory_sharing_policy TEXT NOT NULL DEFAULT 'explicit-only';
+      ALTER TABLE teams ADD COLUMN bounds_json TEXT NOT NULL DEFAULT '{"maxDepth":3,"maxAttempts":2,"maxTokens":50000,"maxDurationMs":300000,"maxConcurrentTasks":3,"maxTasksPerRun":25,"maxMessages":200,"maxResultBytes":65536}';
+      ALTER TABLE teams ADD COLUMN archived_at TEXT;
+      ALTER TABLE teams ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE teams ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+
+      UPDATE teams
+      SET
+        lead_bot_id = COALESCE(lead_bot_id, leader_agent_id, ''),
+        member_bot_ids_json = COALESCE(
+          (
+            SELECT json_group_array(tm.agent_id)
+            FROM team_members tm
+            WHERE tm.team_id = teams.id
+          ),
+          '[]'
+        ),
+        created_at = CASE WHEN created_at = '' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE created_at END,
+        updated_at = CASE WHEN updated_at = '' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE updated_at END;
+
+      CREATE INDEX IF NOT EXISTS idx_teams_owner ON teams(owner_id, archived_at);
+
+      CREATE TABLE IF NOT EXISTS team_runs (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL,
+        lead_bot_id TEXT NOT NULL,
+        root_task_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        goal_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        bounds_json TEXT NOT NULL,
+        tasks_created INTEGER NOT NULL DEFAULT 0,
+        messages_posted INTEGER NOT NULL DEFAULT 0,
+        tokens_reserved INTEGER NOT NULL DEFAULT 0,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        duration_used_ms INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        error_message TEXT,
+        ended_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(team_id, idempotency_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_team_runs_team ON team_runs(team_id, owner_id, status);
+
+      CREATE TABLE IF NOT EXISTS team_tasks (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        team_run_id TEXT,
+        plan_key TEXT,
+        owner_id TEXT NOT NULL,
+        root_task_id TEXT NOT NULL,
+        parent_task_id TEXT,
+        depth INTEGER NOT NULL,
+        assigned_bot_id TEXT NOT NULL,
+        delegated_by_bot_id TEXT,
+        idempotency_key TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        max_attempts INTEGER NOT NULL,
+        token_budget INTEGER NOT NULL,
+        reserved_tokens INTEGER NOT NULL DEFAULT 0,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        duration_budget_ms INTEGER NOT NULL,
+        reserved_duration_ms INTEGER NOT NULL DEFAULT 0,
+        duration_used_ms INTEGER NOT NULL DEFAULT 0,
+        output_text TEXT,
+        output_truncated INTEGER NOT NULL DEFAULT 0,
+        usage_reported INTEGER NOT NULL DEFAULT 1,
+        termination_confirmed INTEGER NOT NULL DEFAULT 1,
+        error_code TEXT,
+        error_message TEXT,
+        started_at TEXT,
+        ended_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(team_id, idempotency_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_team_tasks_root ON team_tasks(root_task_id, depth, status);
+      CREATE INDEX IF NOT EXISTS idx_team_tasks_queue ON team_tasks(team_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_team_tasks_run ON team_tasks(team_run_id, status);
+
+      CREATE TABLE IF NOT EXISTS team_task_dependencies (
+        team_run_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES team_tasks(id) ON DELETE CASCADE,
+        depends_on_task_id TEXT NOT NULL REFERENCES team_tasks(id) ON DELETE CASCADE,
+        PRIMARY KEY (task_id, depends_on_task_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_team_deps_run ON team_task_dependencies(team_run_id, depends_on_task_id);
+
+      CREATE TABLE IF NOT EXISTS team_messages (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        team_run_id TEXT,
+        conversation_id TEXT,
+        owner_id TEXT NOT NULL,
+        author_bot_id TEXT NOT NULL,
+        target_bot_id TEXT,
+        originating_task_id TEXT NOT NULL REFERENCES team_tasks(id) ON DELETE CASCADE,
+        sender_type TEXT NOT NULL DEFAULT 'worker',
+        message_type TEXT NOT NULL DEFAULT 'worker_progress',
+        visibility TEXT NOT NULL DEFAULT 'team',
+        untrusted INTEGER NOT NULL DEFAULT 1,
+        seq INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(team_id, seq)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_team_messages_run ON team_messages(team_run_id, seq);
+
+      CREATE TABLE IF NOT EXISTS team_execution_links (
+        id TEXT PRIMARY KEY,
+        team_run_id TEXT REFERENCES team_runs(id) ON DELETE CASCADE,
+        team_task_id TEXT NOT NULL REFERENCES team_tasks(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+        daemon_run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        runtime_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('planner', 'worker', 'synthesizer')),
+        created_at TEXT NOT NULL,
+        UNIQUE(team_task_id, attempt, role)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_team_exec_links_run ON team_execution_links(team_run_id, daemon_run_id);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

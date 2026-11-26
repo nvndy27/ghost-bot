@@ -91,7 +91,7 @@ test('Phase 3D.4 integrated persistence: fresh + v4/v5/v6 upgrades, 0700/0600 pe
           .all() as Array<{ version: number }>
         assert.deepEqual(
           versions.map((v) => v.version),
-          [1, 2, 3, 4, 5, 6, 7],
+          [1, 2, 3, 4, 5, 6, 7, 8],
         )
 
         const dirStat = await stat(dir)

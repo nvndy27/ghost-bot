@@ -12,6 +12,7 @@ import {
   CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
+  CreateTeamIpcInputSchema,
   GetMcpPromptInputSchema,
   ImportAvatarSvgInputSchema,
   IngestKnowledgeTextInputSchema,
@@ -20,8 +21,11 @@ import {
   ListKnowledgeDocsInputSchema,
   ListMcpServersInputSchema,
   ListMemoriesIpcInputSchema,
+  ListTeamMessagesIpcInputSchema,
+  ListTeamsInputSchema,
   McpServerIdParamSchema,
   MemoryIdParamSchema,
+  PreviewTeamPlanIpcInputSchema,
   ReadMcpResourceInputSchema,
   RegisterMcpServerIpcInputSchema,
   RenameSessionInputSchema,
@@ -37,10 +41,14 @@ import {
   SetActiveSessionInputSchema,
   SetMcpServerEnabledInputSchema,
   StartRunInputSchema,
+  StartTeamRunIpcInputSchema,
+  TeamIdParamSchema,
+  TeamRunIdParamSchema,
   UpdateBotInputSchema,
   UpdateKnowledgeDocInputSchema,
   UpdateMcpServerIpcInputSchema,
   UpdateMemoryIpcInputSchema,
+  UpdateTeamMembersIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
@@ -57,6 +65,8 @@ import { RuntimePolicyBroker } from './runtime/policy-broker.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
+import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
+import { TeamsService } from './teams/service.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -123,6 +133,7 @@ export class GhostBotDaemon {
   private memoryService: MemoryService | null = null
   private knowledgeService: KnowledgeService | null = null
   private mcpService: McpService | null = null
+  private teamsService: TeamsService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -216,10 +227,11 @@ export class GhostBotDaemon {
     this.sessionRepo = new SessionRepository(dbHandle)
     this.memoryService = new MemoryService(dbHandle, this.settingsRepo)
     this.knowledgeService = new KnowledgeService(dbHandle, this.settingsRepo)
+    const policyBroker = new RuntimePolicyBroker()
     this.mcpService = new McpService({
       db: dbHandle,
       settingsRepo: this.settingsRepo,
-      policyBroker: new RuntimePolicyBroker(),
+      policyBroker,
       secretResolver: this.options.mcpSecretResolver,
       gracefulShutdownMs: this.options.mcpGracefulShutdownMs,
     })
@@ -231,6 +243,21 @@ export class GhostBotDaemon {
       mcpService: this.mcpService,
     })
     this.runOrchestrator.reconcileOnStartup()
+    const teamsBridge = new TeamsExecutionBridge({
+      dbHandle,
+      botRepo: this.botRepo,
+      sessionRepo: this.sessionRepo,
+      orchestrator: this.runOrchestrator,
+      policyBroker,
+      getRuntimeState: () => ({
+        runtimeMode: this.runtimeMode,
+        codexVersion: this.options.codexVersion ?? null,
+        authMethod: 'none',
+        accountId: null,
+      }),
+    })
+    this.teamsService = new TeamsService(dbHandle, this.botRepo, teamsBridge)
+    this.teamsService.reconcileOnStartup()
 
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
@@ -1122,6 +1149,145 @@ export class GhostBotDaemon {
             sendJson(res, 200, await mcpService.deleteServer(idCheck.data.id))
             return
           }
+        }
+      }
+
+      if (this.teamsService) {
+        const teamsService = this.teamsService
+
+        if (req.method === 'GET' && url.pathname === '/teams') {
+          const parsed = ListTeamsInputSchema.safeParse({
+            ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
+            ...(url.searchParams.has('offset') ? { offset: Number(url.searchParams.get('offset')) } : {}),
+            ...(url.searchParams.has('includeArchived')
+              ? { includeArchived: url.searchParams.get('includeArchived') === 'true' }
+              : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid teams query', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, teamsService.listTeams(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/teams') {
+          const body = await readJsonBody(req)
+          const parsed = CreateTeamIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid team payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 201, teamsService.createTeam(parsed.data))
+          return
+        }
+
+        const teamSubMatch = /^\/teams\/([^/]+)\/(members|archive|preview|runs|messages)$/.exec(url.pathname)
+        if (teamSubMatch && teamSubMatch[1] !== 'runs') {
+          const idCheck = TeamIdParamSchema.safeParse({ teamId: decodeURIComponent(teamSubMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid team identifier', { statusCode: 400 })
+          }
+          const action = teamSubMatch[2]
+          if (action === 'members' && req.method === 'PATCH') {
+            const body = await readJsonBody(req)
+            const parsed = UpdateTeamMembersIpcInputSchema.safeParse({
+              teamId: idCheck.data.teamId,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid members payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, teamsService.updateTeamMembers(parsed.data.teamId, parsed.data.memberBotIds))
+            return
+          }
+          if (action === 'archive' && req.method === 'POST') {
+            sendJson(res, 200, teamsService.archiveTeam(idCheck.data.teamId))
+            return
+          }
+          if (action === 'preview' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = PreviewTeamPlanIpcInputSchema.safeParse({
+              teamId: idCheck.data.teamId,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid preview payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, teamsService.previewPlan(parsed.data.teamId, parsed.data.plan))
+            return
+          }
+          if (action === 'runs' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = StartTeamRunIpcInputSchema.safeParse({
+              teamId: idCheck.data.teamId,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid team run payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 201, await teamsService.startTeamRun(parsed.data))
+            return
+          }
+          if (action === 'messages' && req.method === 'GET') {
+            const parsed = ListTeamMessagesIpcInputSchema.safeParse({
+              teamId: idCheck.data.teamId,
+              ...(url.searchParams.has('teamRunId') ? { teamRunId: url.searchParams.get('teamRunId') ?? undefined } : {}),
+              ...(url.searchParams.has('viewerBotId') ? { viewerBotId: url.searchParams.get('viewerBotId') ?? undefined } : {}),
+              ...(url.searchParams.has('afterSeq') ? { afterSeq: Number(url.searchParams.get('afterSeq')) } : {}),
+              ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid team messages query', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, { messages: teamsService.listMessages(parsed.data.teamId, parsed.data) })
+            return
+          }
+        }
+
+        const teamRunSubMatch = /^\/teams\/runs\/([^/]+)\/(cancel|tasks|diagnostics|usage)$/.exec(url.pathname)
+        if (teamRunSubMatch) {
+          const idCheck = TeamRunIdParamSchema.safeParse({ teamRunId: decodeURIComponent(teamRunSubMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid teamRunId', { statusCode: 400 })
+          }
+          const action = teamRunSubMatch[2]
+          if (action === 'cancel' && req.method === 'POST') {
+            sendJson(res, 200, await teamsService.cancelTeamRun(idCheck.data.teamRunId))
+            return
+          }
+          if (action === 'tasks' && req.method === 'GET') {
+            sendJson(res, 200, { tasks: teamsService.listRunTasks(idCheck.data.teamRunId) })
+            return
+          }
+          if (action === 'diagnostics' && req.method === 'GET') {
+            sendJson(res, 200, teamsService.getDiagnostics(idCheck.data.teamRunId))
+            return
+          }
+          if (action === 'usage' && req.method === 'GET') {
+            sendJson(res, 200, teamsService.getAggregateUsage(idCheck.data.teamRunId))
+            return
+          }
+        }
+
+        const teamRunMatch = /^\/teams\/runs\/([^/]+)$/.exec(url.pathname)
+        if (teamRunMatch && req.method === 'GET') {
+          const idCheck = TeamRunIdParamSchema.safeParse({ teamRunId: decodeURIComponent(teamRunMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid teamRunId', { statusCode: 400 })
+          }
+          sendJson(res, 200, teamsService.getTeamRun(idCheck.data.teamRunId))
+          return
         }
       }
 

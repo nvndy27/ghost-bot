@@ -74,6 +74,18 @@ const bridge: GhostBotBridge = {
   getMcpCapabilities: (id) => ipcRenderer.invoke('ghost:mcp:servers:capabilities', { id }),
   readMcpResource: (input) => ipcRenderer.invoke('ghost:mcp:servers:read-resource', input),
   getMcpPrompt: (input) => ipcRenderer.invoke('ghost:mcp:servers:get-prompt', input),
+  listTeams: (input) => ipcRenderer.invoke('ghost:teams:list', input ?? {}),
+  createTeam: (input) => ipcRenderer.invoke('ghost:teams:create', input),
+  updateTeamMembers: (input) => ipcRenderer.invoke('ghost:teams:update-members', input),
+  archiveTeam: (teamId) => ipcRenderer.invoke('ghost:teams:archive', { teamId }),
+  previewTeamPlan: (input) => ipcRenderer.invoke('ghost:teams:preview-plan', input),
+  startTeamRun: (input) => ipcRenderer.invoke('ghost:teams:runs:start', input),
+  getTeamRun: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:get', { teamRunId }),
+  cancelTeamRun: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:cancel', { teamRunId }),
+  listTeamRunTasks: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:tasks', { teamRunId }),
+  getTeamDiagnostics: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:diagnostics', { teamRunId }),
+  getTeamAggregateUsage: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:usage', { teamRunId }),
+  listTeamMessages: (input) => ipcRenderer.invoke('ghost:teams:messages:list', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)
