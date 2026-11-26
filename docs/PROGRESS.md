@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 3D.4 — Integrated End-to-End Acceptance
+
+2026-11-26. Branched `feat/phase-3d4-integrated-acceptance` from `04e324c` (Phase 3D.3 hardened). Offline integrated RC is **Verified** (**PASS**) with zero live subscription inference turns consumed. See [Phase 3D.4 report](extensions/phase-3d4-integrated-acceptance.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Verified fresh + populated v4/v5/v6->v7 upgrades (`0700`/`0600` permissions, FTS5 consistency, foreign keys), atomic bot archival rollback across Core + Memory + Knowledge + MCP, combined `4096`/`8192`/`12288`-byte UTF-8 budgets, and `CodexAppServerAdapter` dispatch-time revalidation (`tests/phase-3d4-integrated.test.ts`). |
+| Verified | Verified unified 27-step Memory + Knowledge + MCP + restart Electron E2E (`scripts/verify-phase-3d4-electron.mjs`, 4 screenshots in `design/reviews/phase-3d4/`, deny = `0` invocations, approve = `1` invocation, no auto-launch on restart) and ~2500-chunk cross-extension responsiveness (`searchP50Ms: 75.27–91.63`, `searchP95Ms: 104.70–120.58`, `healthP95Ms: 1.39–1.53`, `eventLoopP95Ms: 10.74–10.76`). |
+| Verified | Rebuilt and verified Linux AppImage (`GhostBot-0.1.0-x86_64.AppImage`, sha256 `b8d45e8b0eb4d232a20bef2cff47fd3dc88dc34bc8368b5df73083f3893faca8`, `APPIMAGE_EXTRACT_AND_RUN=1` 2-launch E2E) and Fedora RPM (`ghost-bot-0.1.0-1.x86_64.rpm`, sha256 `24ba149303222cb8318905b4b16260969b5d6532e21018a4f6923e332103f9c6`, `rpm -qip` + extracted smoke launch, zero credentials/DB bundled). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (`No known vulnerabilities found`), all 5 Electron E2E suites (`2e`, `3d1`, `3d2`, `3d3`, `3d4`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `81/81` core = **121/121** each) all passed. |
+
 ## Phase 3D.3 — Production MCP Integration
 
 2026-11-26. Branched `feat/phase-3d3-mcp-integration` from `9b6ba1b` (Phase 3D.2 hardened). Phase 3D.3 is **Verified** (**PASS**) with zero live subscription inference turns and native Codex MCP execution kept disabled (`unsupported_native_mcp`). See [Phase 3D.3 report](extensions/phase-3d3-mcp-integration.md).
