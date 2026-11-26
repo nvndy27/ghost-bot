@@ -1,6 +1,7 @@
 export type MockScenarioKind =
   | 'default'
   | 'approval'
+  | 'mcp-tool'
   | 'fail'
   | 'disconnect'
   | 'duplicate'
@@ -14,6 +15,12 @@ export interface MockApprovalSpec {
   risk: 'low' | 'medium' | 'high'
 }
 
+export interface MockMcpToolSpec {
+  serverId: string
+  toolName: string
+  args: Record<string, unknown>
+}
+
 export interface MockScenarioPlan {
   kind: MockScenarioKind
   initialPauseMs: number
@@ -25,6 +32,7 @@ export interface MockScenarioPlan {
     summary: string
   }
   approval?: MockApprovalSpec
+  mcpTool?: MockMcpToolSpec
   postApprovalChunks?: string[]
   failAfterChunks?: {
     code: string
@@ -34,8 +42,30 @@ export interface MockScenarioPlan {
   duplicateEventTest?: boolean
 }
 
+function parseMockMcpToolTrigger(prompt: string): MockMcpToolSpec | null {
+  const match = /mcp-tool:([a-zA-Z0-9._:-]+)\/([a-zA-Z0-9._-]+)(?:\s+(\{[\s\S]*\}))?/i.exec(prompt)
+  if (!match) return null
+  let args: Record<string, unknown> = {}
+  if (match[3]) {
+    try {
+      const parsed = JSON.parse(match[3]) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        args = parsed as Record<string, unknown>
+      }
+    } catch {
+      args = {}
+    }
+  }
+  return {
+    serverId: match[1],
+    toolName: match[2],
+    args,
+  }
+}
+
 export function detectMockScenario(prompt: string): MockScenarioKind {
   const lower = prompt.toLowerCase()
+  if (lower.includes('mcp-tool:')) return 'mcp-tool'
   if (lower.includes('early-cancel')) return 'early-cancel'
   if (lower.includes('slow-cancel')) return 'slow-cancel'
   if (lower.includes('disconnect')) return 'disconnect'
@@ -109,6 +139,29 @@ export function buildMockScenarioPlan(
           'Simulated workspace update completed cleanly with zero real side effects.',
         ],
       }
+
+    case 'mcp-tool': {
+      const mcpTool = parseMockMcpToolTrigger(prompt)
+      return {
+        kind,
+        initialPauseMs: 10,
+        chunkDelayMs: 15,
+        chunks: [
+          mcpTool
+            ? `[Mock ${botName}] Preparing MCP tool call \`${mcpTool.serverId}/${mcpTool.toolName}\`.\n\n`
+            : `[Mock ${botName}] Invalid MCP tool trigger syntax.\n\n`,
+        ],
+        ...(mcpTool ? { mcpTool } : {}),
+        ...(mcpTool
+          ? {}
+          : {
+              failAfterChunks: {
+                code: 'VALIDATION_ERROR',
+                message: 'Invalid mcp-tool:<serverId>/<toolName> trigger syntax',
+              },
+            }),
+      }
+    }
 
     case 'fail':
       return {

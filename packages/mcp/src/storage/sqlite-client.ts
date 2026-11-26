@@ -95,3 +95,44 @@ export async function openMcpDatabase(dbPathInput: string): Promise<McpDatabaseH
     },
   }
 }
+
+export interface BorrowedMcpDatabaseOptions {
+  dbLabel?: string
+}
+
+/**
+ * Wraps an externally owned SQLite connection (e.g., daemon-owned `ghost-bot.sqlite`)
+ * after production migrations have initialized the MCP tables.
+ * Closing this handle only detaches the registry; it never closes `sqlite`.
+ */
+export function createBorrowedMcpDatabaseHandle(
+  sqlite: DatabaseSync,
+  options: BorrowedMcpDatabaseOptions = {},
+): McpDatabaseHandle {
+  const dbPath = options.dbLabel ?? ':borrowed:'
+
+  const transaction = <T,>(fn: () => T): T => {
+    sqlite.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      sqlite.exec('COMMIT')
+      return result
+    } catch (err) {
+      try {
+        sqlite.exec('ROLLBACK')
+      } catch {
+        // Ignore rollback error.
+      }
+      throw err
+    }
+  }
+
+  return {
+    dbPath,
+    sqlite,
+    transaction,
+    close: () => {
+      // Intentionally no-op: the caller retains ownership of `sqlite`.
+    },
+  }
+}

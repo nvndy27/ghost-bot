@@ -62,6 +62,7 @@ export class SettingsRepository {
         privacy: { ...current.privacy, ...(patch.privacy ?? {}) },
         memory: { ...current.memory, ...(patch.memory ?? {}) },
         knowledge: { ...current.knowledge, ...(patch.knowledge ?? {}) },
+        mcp: { ...current.mcp, ...(patch.mcp ?? {}) },
       })
 
       this.handle.sqlite

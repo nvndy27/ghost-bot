@@ -11,6 +11,7 @@ import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
+import { McpSettingsSection } from './McpSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
@@ -755,17 +756,21 @@ export function SettingsModal({
               />
             )}
 
-            {(activeSection === 'tools' ||
-              activeSection === 'computer-use' ||
+            {activeSection === 'tools' && (
+              <McpSettingsSection
+                settings={settings}
+                bots={bots}
+                activeBotId={activeBotId}
+                onUpdateSettings={onUpdateSettings}
+              />
+            )}
+
+            {(activeSection === 'computer-use' ||
               activeSection === 'routines') && (
               <div>
                 <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
                   {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}
-                  <span className="gb-badge">
-                    {activeSection === 'tools'
-                      ? 'Unavailable · Phase 3'
-                      : 'Unavailable · Phase 5'}
-                  </span>
+                  <span className="gb-badge">Unavailable · Phase 5</span>
                 </h2>
                 <p className="gb-muted">
                   This capability is not implemented in Phase 1D and remains disabled until its

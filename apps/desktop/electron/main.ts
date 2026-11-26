@@ -25,6 +25,8 @@ import {
   CreateSessionInputSchema,
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
+  GetMcpPromptInputSchema,
+  GetMcpPromptResponseSchema,
   IPC_CHANNELS,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
@@ -36,17 +38,27 @@ import {
   ListKnowledgeCollectionsInputSchema,
   ListKnowledgeDocsInputSchema,
   ListKnowledgeDocsResponseSchema,
+  ListMcpServersInputSchema,
+  ListMcpServersResponseSchema,
   ListMemoriesIpcInputSchema,
   ListMemoriesResponseSchema,
   ListMessagesParamsSchema,
   ListRunEventsParamsSchema,
   ListSessionsParamsSchema,
+  McpCapabilitySnapshotDtoSchema,
+  McpConnectionStatusDtoSchema,
+  McpIpcIdSchema,
+  McpServerDtoSchema,
+  McpServerIdParamSchema,
   MemoryIpcIdSchema,
   MemoryIdParamSchema,
   MemoryRecordDtoSchema,
   MessagesListResponseSchema,
   PickAndIngestKnowledgeFileInputSchema,
   ProviderSummarySchema,
+  ReadMcpResourceInputSchema,
+  ReadMcpResourceResponseSchema,
+  RegisterMcpServerIpcInputSchema,
   RenameSessionInputSchema,
   ReplaceKnowledgeDocTextInputSchema,
   ResolveApprovalInputSchema,
@@ -58,6 +70,8 @@ import {
   RunIdParamsSchema,
   RunRecordSchema,
   RuntimeSnapshotParamsSchema,
+  SetMcpServerEnabledInputSchema,
+  UpdateMcpServerIpcInputSchema,
   RuntimeSnapshotSchema,
   SearchKnowledgeDocsInputSchema,
   SearchKnowledgeDocsResponseSchema,
@@ -842,6 +856,111 @@ function registerIpcHandlers(): void {
     assertBoundedKnowledgeIpcPayload(params)
     const parsed = ResolveKnowledgeCitationInputSchema.parse(params)
     return queryDaemon('/knowledge/citations/resolve', ResolveKnowledgeCitationResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ListMcpServersInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.scopeKinds?.length) qs.set('scopeKinds', parsed.scopeKinds.join(','))
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    qs.set('includeUserWide', String(parsed.includeUserWide))
+    qs.set('enabledOnly', String(parsed.enabledOnly))
+    qs.set('limit', String(parsed.limit))
+    qs.set('offset', String(parsed.offset))
+    return queryDaemon(`/mcp/servers?${qs.toString()}`, ListMcpServersResponseSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_REGISTER, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = RegisterMcpServerIpcInputSchema.parse(params)
+    return queryDaemon('/mcp/servers', McpServerDtoSchema, { method: 'POST', body: parsed })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = UpdateMcpServerIpcInputSchema.parse(params)
+    const { id, ...body } = parsed
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}`, McpServerDtoSchema, {
+      method: 'PATCH',
+      body,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_APPROVE_TRUST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}/trust`, McpServerDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_REVOKE_TRUST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}/revoke-trust`, McpServerDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_SET_ENABLED, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetMcpServerEnabledInputSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(parsed.id)}/enabled`, McpServerDtoSchema, {
+      method: 'POST',
+      body: { enabled: parsed.enabled },
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_DELETE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}`, z.object({ deletedId: McpIpcIdSchema }), {
+      method: 'DELETE',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_CONNECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}/connect`, McpConnectionStatusDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_DISCONNECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(`/mcp/servers/${encodeURIComponent(id)}/disconnect`, McpConnectionStatusDtoSchema, {
+      method: 'POST',
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_CAPABILITIES, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(
+      `/mcp/servers/${encodeURIComponent(id)}/capabilities`,
+      McpCapabilitySnapshotDtoSchema.nullable(),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_READ_RESOURCE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = ReadMcpResourceInputSchema.parse(params)
+    return queryDaemon('/mcp/resources/read', ReadMcpResourceResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVERS_GET_PROMPT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = GetMcpPromptInputSchema.parse(params)
+    return queryDaemon('/mcp/prompts/get', GetMcpPromptResponseSchema, {
       method: 'POST',
       body: parsed,
     })

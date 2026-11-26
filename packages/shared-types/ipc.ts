@@ -48,6 +48,18 @@ export const IPC_CHANNELS = {
   KNOWLEDGE_DOCS_ARCHIVE: 'ghost:knowledge:docs:archive',
   KNOWLEDGE_DOCS_DELETE: 'ghost:knowledge:docs:delete',
   KNOWLEDGE_CITATIONS_RESOLVE: 'ghost:knowledge:citations:resolve',
+  MCP_SERVERS_LIST: 'ghost:mcp:servers:list',
+  MCP_SERVERS_REGISTER: 'ghost:mcp:servers:register',
+  MCP_SERVERS_UPDATE: 'ghost:mcp:servers:update',
+  MCP_SERVERS_APPROVE_TRUST: 'ghost:mcp:servers:approve-trust',
+  MCP_SERVERS_REVOKE_TRUST: 'ghost:mcp:servers:revoke-trust',
+  MCP_SERVERS_SET_ENABLED: 'ghost:mcp:servers:set-enabled',
+  MCP_SERVERS_DELETE: 'ghost:mcp:servers:delete',
+  MCP_SERVERS_CONNECT: 'ghost:mcp:servers:connect',
+  MCP_SERVERS_DISCONNECT: 'ghost:mcp:servers:disconnect',
+  MCP_SERVERS_CAPABILITIES: 'ghost:mcp:servers:capabilities',
+  MCP_SERVERS_READ_RESOURCE: 'ghost:mcp:servers:read-resource',
+  MCP_SERVERS_GET_PROMPT: 'ghost:mcp:servers:get-prompt',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -275,6 +287,18 @@ export const KnowledgeSettingsPatchSchema = z
   })
   .strict()
 
+export const McpSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  externalProviderTransmissionConsent: z.boolean().default(false),
+})
+
+export const McpSettingsPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    externalProviderTransmissionConsent: z.boolean().optional(),
+  })
+  .strict()
+
 export const AppSettingsSchema = z.object({
   general: GeneralSettingsSchema.prefault({}),
   appearance: AppearanceSettingsSchema.prefault({}),
@@ -283,6 +307,7 @@ export const AppSettingsSchema = z.object({
   privacy: PrivacySettingsSchema.prefault({}),
   memory: MemorySettingsSchema.prefault({}),
   knowledge: KnowledgeSettingsSchema.prefault({}),
+  mcp: McpSettingsSchema.prefault({}),
 })
 
 export type AppSettings = z.infer<typeof AppSettingsSchema>
@@ -296,6 +321,7 @@ export const AppSettingsPatchSchema = z
     privacy: PrivacySettingsSchema.partial().optional(),
     memory: MemorySettingsPatchSchema.optional(),
     knowledge: KnowledgeSettingsPatchSchema.optional(),
+    mcp: McpSettingsPatchSchema.optional(),
   })
   .strict()
 
@@ -951,6 +977,265 @@ export const ResolveKnowledgeCitationResponseSchema = z.object({
 
 export type ResolveKnowledgeCitationResponse = z.infer<typeof ResolveKnowledgeCitationResponseSchema>
 
+export const McpIpcIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/, 'Invalid MCP identifier')
+
+export const McpEnvVarNameDtoSchema = z
+  .string()
+  .regex(/^[A-Z_][A-Z0-9_]{0,63}$/, 'Invalid environment variable name')
+
+export const McpScopeInputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user') }).strict(),
+  z.object({ kind: z.literal('bot'), botId: BotIdSchema }).strict(),
+  z
+    .object({
+      kind: z.literal('workspace'),
+      workspacePath: z.string().trim().min(1).max(512),
+    })
+    .strict(),
+])
+
+export type McpScopeInput = z.infer<typeof McpScopeInputSchema>
+
+export const McpSecretRefDtoSchema = z
+  .object({
+    envVar: McpEnvVarNameDtoSchema,
+    refId: McpIpcIdSchema,
+    label: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict()
+
+export const McpStdioTransportDtoSchema = z
+  .object({
+    type: z.literal('stdio'),
+    executablePath: z.string().min(1).max(1024),
+    args: z.array(z.string().max(4096)).max(64).default([]),
+    cwd: z.string().min(1).max(1024),
+    envAllowlist: z.array(McpEnvVarNameDtoSchema).max(64).default([]),
+    secretRefs: z.array(McpSecretRefDtoSchema).max(32).default([]),
+  })
+  .strict()
+
+export const McpTrustStateDtoSchema = z.enum(['untrusted', 'trusted', 'revoked'])
+export type McpTrustStateDto = z.infer<typeof McpTrustStateDtoSchema>
+
+export const McpConnectionStateDtoSchema = z.enum([
+  'disconnected',
+  'connecting',
+  'ready',
+  'disconnecting',
+  'failed',
+])
+export type McpConnectionStateDto = z.infer<typeof McpConnectionStateDtoSchema>
+
+export const McpServerDtoSchema = z.object({
+  id: McpIpcIdSchema,
+  scope: McpScopeInputSchema,
+  displayName: z.string(),
+  description: z.string(),
+  transport: McpStdioTransportDtoSchema,
+  enabled: z.boolean(),
+  trustState: McpTrustStateDtoSchema,
+  configFingerprint: z.string(),
+  trustedFingerprint: z.string().nullable(),
+  trustedBinaryDigest: z.string().nullable(),
+  connectTimeoutMs: z.number().int(),
+  requestTimeoutMs: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  connectionState: McpConnectionStateDtoSchema.optional(),
+  lastError: z.string().nullable().optional(),
+  pid: z.number().int().nullable().optional(),
+  generation: z.number().int().nonnegative().optional(),
+})
+
+export type McpServerDto = z.infer<typeof McpServerDtoSchema>
+
+export const McpToolDescriptorDtoSchema = z.object({
+  capabilityKey: z.string(),
+  serverId: McpIpcIdSchema,
+  name: z.string(),
+  description: z.string(),
+  inputSchema: z.record(z.string(), z.unknown()),
+  definitionHash: z.string(),
+})
+
+export const McpResourceDescriptorDtoSchema = z.object({
+  capabilityKey: z.string(),
+  serverId: McpIpcIdSchema,
+  uri: z.string(),
+  name: z.string(),
+  description: z.string(),
+  mimeType: z.string().optional(),
+})
+
+export const McpResourceTemplateDescriptorDtoSchema = z.object({
+  capabilityKey: z.string(),
+  serverId: McpIpcIdSchema,
+  uriTemplate: z.string(),
+  name: z.string(),
+  description: z.string(),
+  mimeType: z.string().optional(),
+})
+
+export const McpPromptArgumentDtoSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  required: z.boolean().optional(),
+})
+
+export const McpPromptDescriptorDtoSchema = z.object({
+  capabilityKey: z.string(),
+  serverId: McpIpcIdSchema,
+  name: z.string(),
+  description: z.string(),
+  arguments: z.array(McpPromptArgumentDtoSchema).optional(),
+})
+
+export const McpCapabilitySnapshotDtoSchema = z.object({
+  serverId: McpIpcIdSchema,
+  discoveredAt: z.string(),
+  configFingerprint: z.string(),
+  tools: z.array(McpToolDescriptorDtoSchema),
+  resources: z.array(McpResourceDescriptorDtoSchema),
+  resourceTemplates: z.array(McpResourceTemplateDescriptorDtoSchema),
+  prompts: z.array(McpPromptDescriptorDtoSchema),
+})
+
+export type McpCapabilitySnapshotDto = z.infer<typeof McpCapabilitySnapshotDtoSchema>
+
+export const ListMcpServersInputSchema = z
+  .object({
+    scopeKinds: z.array(z.enum(['user', 'bot', 'workspace'])).min(1).max(3).optional(),
+    botId: BotIdSchema.optional(),
+    includeUserWide: z.boolean().default(true),
+    enabledOnly: z.boolean().default(false),
+    limit: z.number().int().min(1).max(200).default(100),
+    offset: z.number().int().min(0).max(100_000).default(0),
+  })
+  .strict()
+
+export type ListMcpServersInput = z.infer<typeof ListMcpServersInputSchema>
+
+export const ListMcpServersResponseSchema = z.object({
+  servers: z.array(McpServerDtoSchema),
+  total: z.number().int().nonnegative(),
+})
+
+export type ListMcpServersResponse = z.infer<typeof ListMcpServersResponseSchema>
+
+export const RegisterMcpServerIpcInputSchema = z
+  .object({
+    id: McpIpcIdSchema.optional(),
+    scope: McpScopeInputSchema,
+    displayName: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(500).default(''),
+    transport: McpStdioTransportDtoSchema,
+    connectTimeoutMs: z.number().int().min(500).max(30_000).optional(),
+    requestTimeoutMs: z.number().int().min(500).max(30_000).optional(),
+  })
+  .strict()
+
+export type RegisterMcpServerIpcInput = z.infer<typeof RegisterMcpServerIpcInputSchema>
+
+export const UpdateMcpServerIpcInputSchema = z
+  .object({
+    id: McpIpcIdSchema,
+    displayName: z.string().trim().min(1).max(120).optional(),
+    description: z.string().trim().max(500).optional(),
+    transport: McpStdioTransportDtoSchema.optional(),
+    connectTimeoutMs: z.number().int().min(500).max(30_000).optional(),
+    requestTimeoutMs: z.number().int().min(500).max(30_000).optional(),
+  })
+  .strict()
+
+export type UpdateMcpServerIpcInput = z.infer<typeof UpdateMcpServerIpcInputSchema>
+
+export const McpServerIdParamSchema = z
+  .object({
+    id: McpIpcIdSchema,
+  })
+  .strict()
+
+export const SetMcpServerEnabledInputSchema = z
+  .object({
+    id: McpIpcIdSchema,
+    enabled: z.boolean(),
+  })
+  .strict()
+
+export type SetMcpServerEnabledInput = z.infer<typeof SetMcpServerEnabledInputSchema>
+
+export const McpConnectionStatusDtoSchema = z.object({
+  serverId: McpIpcIdSchema,
+  state: McpConnectionStateDtoSchema,
+  generation: z.number().int().nonnegative(),
+  configFingerprint: z.string(),
+  pid: z.number().int().nullable(),
+  lastError: z.string().nullable(),
+  hasCapabilities: z.boolean(),
+})
+
+export type McpConnectionStatusDto = z.infer<typeof McpConnectionStatusDtoSchema>
+
+export const ReadMcpResourceInputSchema = z
+  .object({
+    serverId: McpIpcIdSchema,
+    uri: z.string().min(1).max(2048),
+    botId: BotIdSchema.optional(),
+  })
+  .strict()
+
+export type ReadMcpResourceInput = z.infer<typeof ReadMcpResourceInputSchema>
+
+export const ReadMcpResourceResponseSchema = z.object({
+  serverId: McpIpcIdSchema,
+  uri: z.string(),
+  contents: z.array(
+    z.object({
+      uri: z.string(),
+      mimeType: z.string().optional(),
+      text: z.string().optional(),
+      blobBase64: z.string().optional(),
+    }),
+  ),
+})
+
+export type ReadMcpResourceResponse = z.infer<typeof ReadMcpResourceResponseSchema>
+
+export const GetMcpPromptInputSchema = z
+  .object({
+    serverId: McpIpcIdSchema,
+    name: z.string().min(1).max(160),
+    args: z.record(z.string(), z.string().max(4096)).optional(),
+    botId: BotIdSchema.optional(),
+  })
+  .strict()
+
+export type GetMcpPromptInput = z.infer<typeof GetMcpPromptInputSchema>
+
+export const GetMcpPromptResponseSchema = z.object({
+  serverId: McpIpcIdSchema,
+  name: z.string(),
+  description: z.string().optional(),
+  messages: z.array(
+    z.object({
+      role: z.string(),
+      content: z.object({
+        type: z.string(),
+        text: z.string().optional(),
+        mimeType: z.string().optional(),
+      }),
+    }),
+  ),
+})
+
+export type GetMcpPromptResponse = z.infer<typeof GetMcpPromptResponseSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -999,6 +1284,18 @@ export interface GhostBotBridge {
   archiveKnowledgeDocument(id: string): Promise<KnowledgeDocumentDto>
   deleteKnowledgeDocument(id: string): Promise<{ deletedId: string }>
   resolveKnowledgeCitation(input: ResolveKnowledgeCitationInput): Promise<ResolveKnowledgeCitationResponse>
+  listMcpServers(input?: Partial<ListMcpServersInput>): Promise<ListMcpServersResponse>
+  registerMcpServer(input: RegisterMcpServerIpcInput): Promise<McpServerDto>
+  updateMcpServer(input: UpdateMcpServerIpcInput): Promise<McpServerDto>
+  approveMcpTrust(id: string): Promise<McpServerDto>
+  revokeMcpTrust(id: string): Promise<McpServerDto>
+  setMcpServerEnabled(input: SetMcpServerEnabledInput): Promise<McpServerDto>
+  deleteMcpServer(id: string): Promise<{ deletedId: string }>
+  connectMcpServer(id: string): Promise<McpConnectionStatusDto>
+  disconnectMcpServer(id: string): Promise<McpConnectionStatusDto>
+  getMcpCapabilities(id: string): Promise<McpCapabilitySnapshotDto | null>
+  readMcpResource(input: ReadMcpResourceInput): Promise<ReadMcpResourceResponse>
+  getMcpPrompt(input: GetMcpPromptInput): Promise<GetMcpPromptResponse>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

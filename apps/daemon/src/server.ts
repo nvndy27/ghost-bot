@@ -12,13 +12,18 @@ import {
   CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
+  GetMcpPromptInputSchema,
   ImportAvatarSvgInputSchema,
   IngestKnowledgeTextInputSchema,
   KnowledgeIdParamSchema,
   ListKnowledgeCollectionsInputSchema,
   ListKnowledgeDocsInputSchema,
+  ListMcpServersInputSchema,
   ListMemoriesIpcInputSchema,
+  McpServerIdParamSchema,
   MemoryIdParamSchema,
+  ReadMcpResourceInputSchema,
+  RegisterMcpServerIpcInputSchema,
   RenameSessionInputSchema,
   ReplaceKnowledgeDocTextInputSchema,
   ResolveApprovalInputSchema,
@@ -30,9 +35,11 @@ import {
   SessionIdSchema,
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
+  SetMcpServerEnabledInputSchema,
   StartRunInputSchema,
   UpdateBotInputSchema,
   UpdateKnowledgeDocInputSchema,
+  UpdateMcpServerIpcInputSchema,
   UpdateMemoryIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
@@ -44,7 +51,9 @@ import { seedInitialBotsIfNeeded } from './db/seed.ts'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
 import { RunOrchestrator } from './execution/orchestrator.ts'
 import { KnowledgeService } from './knowledge/service.ts'
+import { McpService, type McpSecretResolver } from './mcp/service.ts'
 import { MemoryService } from './memory/service.ts'
+import { RuntimePolicyBroker } from './runtime/policy-broker.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
@@ -56,6 +65,8 @@ export interface DaemonServerOptions {
   dataDir?: string
   runtimeMode?: 'codex' | 'mock'
   codexVersion?: string | null
+  mcpSecretResolver?: McpSecretResolver
+  mcpGracefulShutdownMs?: number
 }
 
 function constantTimeTokenMatch(headerValue: string | undefined, expectedToken: string): boolean {
@@ -111,6 +122,7 @@ export class GhostBotDaemon {
   private sessionRepo: SessionRepository | null = null
   private memoryService: MemoryService | null = null
   private knowledgeService: KnowledgeService | null = null
+  private mcpService: McpService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -204,11 +216,19 @@ export class GhostBotDaemon {
     this.sessionRepo = new SessionRepository(dbHandle)
     this.memoryService = new MemoryService(dbHandle, this.settingsRepo)
     this.knowledgeService = new KnowledgeService(dbHandle, this.settingsRepo)
+    this.mcpService = new McpService({
+      db: dbHandle,
+      settingsRepo: this.settingsRepo,
+      policyBroker: new RuntimePolicyBroker(),
+      secretResolver: this.options.mcpSecretResolver,
+      gracefulShutdownMs: this.options.mcpGracefulShutdownMs,
+    })
     this.runOrchestrator = new RunOrchestrator(dbHandle, {
       runtimeRegistry: this.runtimeRegistry,
       settingsRepo: this.settingsRepo,
       memoryService: this.memoryService,
       knowledgeService: this.knowledgeService,
+      mcpService: this.mcpService,
     })
     this.runOrchestrator.reconcileOnStartup()
 
@@ -263,6 +283,10 @@ export class GhostBotDaemon {
     if (this.knowledgeService) {
       this.knowledgeService.close()
       this.knowledgeService = null
+    }
+    if (this.mcpService) {
+      await this.mcpService.close()
+      this.mcpService = null
     }
     if (this.dbHandle) {
       this.dbHandle.close()
@@ -399,12 +423,19 @@ export class GhostBotDaemon {
           return
         }
         if (req.method === 'DELETE') {
+          let archivedMcpIds: string[] = []
           const result = repo.deleteBot(idCheck.data, {
             onArchiveBot: (botId, now) => {
               this.memoryService?.archiveMemoriesForBotInTx(botId, now)
               this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
+              if (this.mcpService) {
+                archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
+              }
             },
           })
+          if (this.mcpService && archivedMcpIds.length > 0) {
+            await this.mcpService.invalidateBotConnections(archivedMcpIds)
+          }
           sendJson(res, 200, result)
           return
         }
@@ -955,6 +986,140 @@ export class GhostBotDaemon {
           }
           if (req.method === 'DELETE') {
             sendJson(res, 200, await knowledgeService.deleteDocument(idCheck.data.id))
+            return
+          }
+        }
+      }
+
+      if (this.mcpService) {
+        const mcpService = this.mcpService
+
+        if (req.method === 'GET' && url.pathname === '/mcp/servers') {
+          const scopeKindsRaw = url.searchParams.get('scopeKinds')
+          const parsed = ListMcpServersInputSchema.safeParse({
+            ...(scopeKindsRaw ? { scopeKinds: scopeKindsRaw.split(',').filter(Boolean) } : {}),
+            ...(url.searchParams.has('botId') ? { botId: url.searchParams.get('botId') ?? undefined } : {}),
+            ...(url.searchParams.has('includeUserWide')
+              ? { includeUserWide: url.searchParams.get('includeUserWide') === 'true' }
+              : {}),
+            ...(url.searchParams.has('enabledOnly')
+              ? { enabledOnly: url.searchParams.get('enabledOnly') === 'true' }
+              : {}),
+            ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
+            ...(url.searchParams.has('offset') ? { offset: Number(url.searchParams.get('offset')) } : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP query', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, mcpService.listServers(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/mcp/servers') {
+          const body = await readJsonBody(req)
+          const parsed = RegisterMcpServerIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP server payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 201, mcpService.registerServer(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/mcp/resources/read') {
+          const body = await readJsonBody(req)
+          const parsed = ReadMcpResourceInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP resource payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, await mcpService.readResource(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/mcp/prompts/get') {
+          const body = await readJsonBody(req)
+          const parsed = GetMcpPromptInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP prompt payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, await mcpService.getPrompt(parsed.data))
+          return
+        }
+
+        const mcpActionMatch = /^\/mcp\/servers\/([^/]+)\/(trust|revoke-trust|enabled|connect|disconnect|capabilities)$/.exec(
+          url.pathname,
+        )
+        if (mcpActionMatch) {
+          const idCheck = McpServerIdParamSchema.safeParse({ id: decodeURIComponent(mcpActionMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid MCP server identifier', { statusCode: 400 })
+          }
+          const action = mcpActionMatch[2]
+          if (action === 'trust' && req.method === 'POST') {
+            sendJson(res, 200, mcpService.approveTrust(idCheck.data.id))
+            return
+          }
+          if (action === 'revoke-trust' && req.method === 'POST') {
+            sendJson(res, 200, await mcpService.revokeTrust(idCheck.data.id))
+            return
+          }
+          if (action === 'enabled' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = SetMcpServerEnabledInputSchema.safeParse({
+              id: idCheck.data.id,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid enabled payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, await mcpService.setEnabled(parsed.data))
+            return
+          }
+          if (action === 'connect' && req.method === 'POST') {
+            sendJson(res, 200, await mcpService.connectServer(idCheck.data.id))
+            return
+          }
+          if (action === 'disconnect' && req.method === 'POST') {
+            sendJson(res, 200, await mcpService.disconnectServer(idCheck.data.id))
+            return
+          }
+          if (action === 'capabilities' && req.method === 'GET') {
+            sendJson(res, 200, mcpService.getCapabilities(idCheck.data.id))
+            return
+          }
+        }
+
+        const mcpServerMatch = /^\/mcp\/servers\/([^/]+)$/.exec(url.pathname)
+        if (mcpServerMatch) {
+          const idCheck = McpServerIdParamSchema.safeParse({ id: decodeURIComponent(mcpServerMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid MCP server identifier', { statusCode: 400 })
+          }
+          if (req.method === 'PATCH') {
+            const body = await readJsonBody(req)
+            const parsed = UpdateMcpServerIpcInputSchema.safeParse({
+              id: idCheck.data.id,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP update payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, mcpService.updateServer(parsed.data))
+            return
+          }
+          if (req.method === 'DELETE') {
+            sendJson(res, 200, await mcpService.deleteServer(idCheck.data.id))
             return
           }
         }

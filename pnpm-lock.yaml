@@ -35,6 +35,9 @@ importers:
       '@ghost-bot/knowledge':
         specifier: workspace:*
         version: link:../../packages/knowledge
+      '@ghost-bot/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@ghost-bot/memory':
         specifier: workspace:*
         version: link:../../packages/memory

@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
 import type { KnowledgeService, PreparedExecutionKnowledgeContext } from '../knowledge/service.ts'
+import type { McpService } from '../mcp/service.ts'
 import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
 import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
@@ -168,6 +169,7 @@ export interface RunOrchestratorOptions {
   policyBroker?: RuntimePolicyBroker
   memoryService?: MemoryService
   knowledgeService?: KnowledgeService
+  mcpService?: McpService
 }
 
 const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
@@ -180,6 +182,7 @@ export class RunOrchestrator {
   private readonly policyBroker: RuntimePolicyBroker
   private readonly memoryService?: MemoryService
   private readonly knowledgeService?: KnowledgeService
+  private readonly mcpService?: McpService
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
@@ -191,6 +194,7 @@ export class RunOrchestrator {
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
     this.memoryService = options?.memoryService
     this.knowledgeService = options?.knowledgeService
+    this.mcpService = options?.mcpService
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
   }
@@ -473,6 +477,22 @@ export class RunOrchestrator {
            WHERE status IN ('pending', 'resolving')`,
         )
         .run(now, JSON.stringify({ reason: 'daemon_restarted' }))
+
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE mcp_approval_bindings
+           SET dispatch_state = 'uncertain', updated_at = ?
+           WHERE dispatch_state = 'dispatched'`,
+        )
+        .run(now)
+
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE mcp_approval_bindings
+           SET dispatch_state = 'cancelled', updated_at = ?
+           WHERE dispatch_state = 'pending'`,
+        )
+        .run(now)
 
       return staleRuns.length
     })
@@ -1328,6 +1348,14 @@ export class RunOrchestrator {
       )
       .run(now, JSON.stringify({ reason }), runId)
 
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE mcp_approval_bindings
+         SET dispatch_state = 'cancelled', updated_at = ?
+         WHERE approval_id IN (SELECT id FROM approvals WHERE run_id = ?) AND dispatch_state = 'pending'`,
+      )
+      .run(now, runId)
+
     for (const row of pendingRows) {
       this.eventStore.appendEvent(runId, {
         eventKey: `approval.revoked:${row.id}`,
@@ -1411,6 +1439,29 @@ export class RunOrchestrator {
             'Approval action arguments hash mismatch',
             { statusCode: 409 },
           )
+        }
+        const mcpBinding = this.dbHandle.sqlite
+          .prepare(
+            `SELECT dispatch_state, args_hash
+             FROM mcp_approval_bindings
+             WHERE approval_id = ?`,
+          )
+          .get(approvalId) as { dispatch_state: string; args_hash: string } | undefined
+        if (mcpBinding) {
+          if (mcpBinding.dispatch_state !== 'pending') {
+            throw new DaemonError(
+              'APPROVAL_ALREADY_RESOLVED',
+              `MCP approval "${approvalId}" is already in dispatch state "${mcpBinding.dispatch_state}"`,
+              { statusCode: 409 },
+            )
+          }
+          if (mcpBinding.args_hash !== appRow.args_hash) {
+            throw new DaemonError(
+              'APPROVAL_ARGS_MISMATCH',
+              'MCP approval binding arguments hash mismatch',
+              { statusCode: 409 },
+            )
+          }
         }
         if (
           runRow.runtime_id === 'codex' &&
@@ -1533,6 +1584,15 @@ export class RunOrchestrator {
           `UPDATE approvals SET status = ?, resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
         )
         .run(decision, now, JSON.stringify({ decision }), approvalId)
+      if (decision === 'denied') {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE mcp_approval_bindings
+             SET dispatch_state = 'cancelled', updated_at = ?
+             WHERE approval_id = ? AND dispatch_state = 'pending'`,
+          )
+          .run(now, approvalId)
+      }
       this.eventStore.appendEvent(runId, {
         eventKey: `approval.resolved:${approvalId}`,
         type: 'approval.resolved',
@@ -1855,6 +1915,240 @@ export class RunOrchestrator {
           },
         })
         return
+      }
+
+      if (plan.mcpTool) {
+        maybeFlush(true)
+        if (!this.mcpService) {
+          throw new DaemonError('MCP_UNAVAILABLE', 'MCP service is not configured in daemon', { statusCode: 503 })
+        }
+        const runMeta = this.dbHandle.sqlite
+          .prepare('SELECT agent_id, permission_mode FROM runs WHERE id = ?')
+          .get(runId) as { agent_id: string; permission_mode: string } | undefined
+        const agentId = runMeta?.agent_id ?? 'chief'
+        const permissionMode = (runMeta?.permission_mode ?? 'ask-approval') as PermissionMode
+
+        const prepared = await this.mcpService.prepareToolCallForRun({
+          serverId: plan.mcpTool.serverId,
+          toolName: plan.mcpTool.toolName,
+          botId: agentId,
+          workspacePath,
+          permissionMode,
+          signal,
+        })
+
+        const argsJson = JSON.stringify(plan.mcpTool.args)
+        const argsHash = createHash('sha256').update(argsJson).digest('hex')
+        const mcpApprovalId = `mcp_app_${randomUUID()}`
+        const nowApp = new Date().toISOString()
+        const expiresAt = new Date(Date.now() + 120_000).toISOString()
+        const approvalSpec: PendingApprovalRecord = {
+          approvalId: mcpApprovalId,
+          title: `Approve MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+          command: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName} ${argsJson}`,
+          risk: 'high',
+          actionType: 'mcp.toolCall',
+          argsHash,
+          permissionMode,
+          expiresAt,
+          isMock: false,
+          status: 'pending',
+        }
+        const decisionPromise = new Promise<'approved' | 'denied' | 'cancelled'>((resolve) => {
+          control.pendingApproval = { spec: approvalSpec, resolve }
+        })
+
+        this.dbHandle.transaction(() => {
+          this.dbHandle.sqlite
+            .prepare(
+              `INSERT INTO approvals (
+                 id, run_id, session_id, agent_id, runtime_generation, account_id,
+                 thread_id, turn_id, provider_request_id, action_type, action_summary,
+                 args_json, args_hash, permission_mode, status, decision_meta_json,
+                 created_at, expires_at, resolved_at
+               ) VALUES (?, ?, ?, ?, ?, 'local', NULL, NULL, ?, 'mcp.toolCall', ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)`,
+            )
+            .run(
+              mcpApprovalId,
+              runId,
+              sessionId,
+              agentId,
+              prepared.connectionGeneration,
+              mcpApprovalId,
+              approvalSpec.command,
+              argsJson,
+              argsHash,
+              permissionMode,
+              nowApp,
+              expiresAt,
+            )
+
+          this.dbHandle.sqlite
+            .prepare(
+              `INSERT INTO mcp_approval_bindings (
+                 approval_id, server_id, config_fingerprint, trusted_binary_digest,
+                 connection_generation, capability_key, definition_hash, tool_name,
+                 args_hash, dispatch_state, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(
+              mcpApprovalId,
+              plan.mcpTool!.serverId,
+              prepared.configFingerprint,
+              prepared.server.trustedBinaryDigest,
+              prepared.connectionGeneration,
+              `${plan.mcpTool!.serverId}::${plan.mcpTool!.toolName}`,
+              prepared.definitionHash,
+              plan.mcpTool!.toolName,
+              argsHash,
+              nowApp,
+              nowApp,
+            )
+        })
+
+        this.transitionRun(runId, 'awaiting_approval', {
+          eventKey: `approval.requested:${mcpApprovalId}`,
+          type: 'approval.requested',
+          payload: {
+            approvalId: mcpApprovalId,
+            title: approvalSpec.title,
+            command: approvalSpec.command,
+            risk: approvalSpec.risk,
+            actionType: 'mcp.toolCall',
+            argsHash,
+            permissionMode,
+            expiresAt,
+            serverId: plan.mcpTool.serverId,
+            toolName: plan.mcpTool.toolName,
+            definitionHash: prepared.definitionHash,
+          },
+        })
+
+        const decision = await decisionPromise
+        if (decision === 'cancelled' || finalizeIfCancelled()) {
+          return
+        }
+
+        if (decision === 'denied') {
+          this.transitionRun(runId, 'cancelling', {
+            eventKey: `run.cancelling:mcp_approval_denied:${mcpApprovalId}`,
+            type: 'run.cancelling',
+            payload: { reason: 'approval_denied', approvalId: mcpApprovalId },
+          })
+          accumulatedText += `\n\n[MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName} denied by user]`
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'cancelled',
+            messageStatus: 'cancelled',
+            accumulatedText,
+            eventKey: 'run.cancelled:mcp_approval_denied',
+            eventType: 'run.cancelled',
+            eventPayload: { reason: 'approval_denied', approvalId: mcpApprovalId },
+          })
+          return
+        }
+
+        const claimTime = new Date().toISOString()
+        const claimed = this.dbHandle.transaction(() => {
+          const appCheck = this.dbHandle.sqlite
+            .prepare(`SELECT status, args_hash FROM approvals WHERE id = ?`)
+            .get(mcpApprovalId) as { status: string; args_hash: string } | undefined
+          if (!appCheck || appCheck.status !== 'approved' || appCheck.args_hash !== argsHash) {
+            return false
+          }
+          const res = this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = 'dispatched', updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'pending' AND args_hash = ?`,
+            )
+            .run(claimTime, mcpApprovalId, argsHash)
+          return Number(res.changes) === 1
+        })
+
+        if (!claimed) {
+          throw new DaemonError(
+            'APPROVAL_ALREADY_CONSUMED',
+            'MCP approval was already consumed or invalidated before dispatch',
+            { statusCode: 409 },
+          )
+        }
+
+        this.eventStore.appendEvent(runId, {
+          eventKey: `tool.started:${mcpApprovalId}`,
+          type: 'tool.started',
+          payload: {
+            toolCallId: mcpApprovalId,
+            toolName: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+            summary: `Executing MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+          },
+        })
+
+        try {
+          const toolResult = await this.mcpService.invokeApprovedTool({
+            serverId: plan.mcpTool.serverId,
+            toolName: plan.mcpTool.toolName,
+            args: plan.mcpTool.args,
+            botId: agentId,
+            workspacePath,
+            permissionMode,
+            expectedConfigFingerprint: prepared.configFingerprint,
+            expectedDefinitionHash: prepared.definitionHash,
+            expectedConnectionGeneration: prepared.connectionGeneration,
+            signal,
+          })
+
+          const completedAt = new Date().toISOString()
+          const resultText = toolResult.content
+            .map((part) => (part.type === 'text' ? part.text ?? '' : `[${part.type}]`))
+            .filter((v) => v.length > 0)
+            .join('\n')
+          const summary = redactSecrets(resultText || (toolResult.isToolError ? 'Tool returned error' : 'Tool completed')).slice(0, 1000)
+
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = ?, updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'dispatched'`,
+            )
+            .run(toolResult.isToolError ? 'failed' : 'completed', completedAt, mcpApprovalId)
+
+          const delta = `MCP tool \`${plan.mcpTool.serverId}/${plan.mcpTool.toolName}\` ${toolResult.isToolError ? 'returned error' : 'result'}:\n${summary}`
+          accumulatedText += delta
+          pendingChunks += 1
+          chunkIndex += 1
+          this.eventStore.appendEvent(runId, {
+            eventKey: `message.delta:${chunkIndex}`,
+            type: 'message.delta',
+            payload: { delta },
+          })
+          this.eventStore.appendEvent(runId, {
+            eventKey: `tool.completed:${mcpApprovalId}`,
+            type: 'tool.completed',
+            payload: {
+              toolCallId: mcpApprovalId,
+              toolName: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+              summary,
+              isError: toolResult.isToolError,
+            },
+          })
+        } catch (invokeErr) {
+          const completedAt = new Date().toISOString()
+          const errCode = invokeErr instanceof DaemonError ? invokeErr.code : 'MCP_DISPATCH_UNCERTAIN'
+          const isPreDispatch = errCode === 'MCP_STALE_APPROVAL' || errCode === 'MCP_UNTRUSTED' || errCode === 'MCP_FORBIDDEN' || errCode === 'MCP_DISABLED'
+          const nextState = isPreDispatch ? 'failed' : 'uncertain'
+          const safeMsg = redactSecrets(invokeErr instanceof Error ? invokeErr.message : String(invokeErr))
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = ?, updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'dispatched'`,
+            )
+            .run(nextState, completedAt, mcpApprovalId)
+          throw invokeErr
+        }
       }
 
       if (plan.approval) {

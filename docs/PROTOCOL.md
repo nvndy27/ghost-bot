@@ -26,3 +26,7 @@ Allowlisted typed IPC channels in `packages/shared-types/ipc.ts` (validated by `
 ## Phase 3D.2 Knowledge IPC surface (implemented)
 
 - `ghost:knowledge:collections:list`, `ghost:knowledge:collections:create`, `ghost:knowledge:docs:list`, `ghost:knowledge:docs:search`, `ghost:knowledge:docs:ingest-text`, `ghost:knowledge:docs:pick-and-ingest`, `ghost:knowledge:docs:update`, `ghost:knowledge:docs:replace-text`, `ghost:knowledge:docs:archive`, `ghost:knowledge:docs:delete`, `ghost:knowledge:citations:resolve`.
+
+## Phase 3D.3 MCP IPC surface (implemented)
+
+- `ghost:mcp:servers:list`, `ghost:mcp:servers:register`, `ghost:mcp:servers:update`, `ghost:mcp:servers:approve-trust`, `ghost:mcp:servers:revoke-trust`, `ghost:mcp:servers:set-enabled`, `ghost:mcp:servers:delete`, `ghost:mcp:servers:connect`, `ghost:mcp:servers:disconnect`, `ghost:mcp:servers:capabilities`, `ghost:mcp:servers:read-resource`, `ghost:mcp:servers:get-prompt`.

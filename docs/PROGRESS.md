@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 3D.3 — Production MCP Integration
+
+2026-11-26. Branched `feat/phase-3d3-mcp-integration` from `9b6ba1b` (Phase 3D.2 hardened). Phase 3D.3 is **Verified** (**PASS**) with zero live subscription inference turns and native Codex MCP execution kept disabled (`unsupported_native_mcp`). See [Phase 3D.3 report](extensions/phase-3d3-mcp-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added `createBorrowedMcpDatabaseHandle()` (`packages/mcp/src/storage/sqlite-client.ts`), production migration `0007_mcp_core` (`mcp_servers` + `mcp_approval_bindings` in `apps/daemon/src/db/migrations.ts`, `schema.ts`), and `RuntimePolicyBroker.createMcpPolicyAdapter()` (`apps/daemon/src/runtime/policy-broker.ts`) blocking `full-access` and `read-only` for local STDIO MCP. |
+| Verified | Implemented daemon-owned `McpService` (`apps/daemon/src/mcp/service.ts`) with trusted `McpAuthContext`, explicit trust + binary digest pinning, fail-closed default `McpSecretResolver`, `archiveMcpForBotInTx()` + post-commit `invalidateBotConnections()` on `DELETE /bots/:id`, and `RunOrchestrator` durable `approvals` + `mcp_approval_bindings` single-use execution (`pending -> dispatched -> completed | failed | uncertain | cancelled`). |
+| Verified | Wired 12 Zod v4 MCP IPC channels (`packages/shared-types/ipc.ts`, `apps/desktop/electron/preload.cts`, `main.ts`), `McpSettingsSection` UI (`apps/desktop/src/components/McpSettingsSection.tsx`, `SettingsModal.tsx`), and `/mcp/*` daemon routes (`apps/daemon/src/server.ts`). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (`No known vulnerabilities found`), `verify-phase-2e-acceptance.mjs`, `verify-phase-3d1-electron.mjs`, `verify-phase-3d2-electron.mjs`, `verify-phase-3d3-electron.mjs` (4 screenshots in `design/reviews/phase-3d3/`), `/health` p95 responsiveness benchmark (`< 50ms`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `75/75` core = **115/115** each) all passed. |
+
 ## Phase 3D.2 — Production Knowledge & Retrieval Integration
 
 2026-11-26. Branched `feat/phase-3d2-knowledge-integration` from `ac4f80d` (Phase 3D.1 closure gate). Phase 3D.2 is **Verified** (**PASS**) with zero MCP production integration and zero live subscription inference turns. See [Phase 3D.2 report](extensions/phase-3d2-knowledge-integration.md).

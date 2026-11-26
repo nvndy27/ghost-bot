@@ -62,6 +62,18 @@ const bridge: GhostBotBridge = {
     ipcRenderer.invoke('ghost:knowledge:docs:delete', { id }),
   resolveKnowledgeCitation: (input) =>
     ipcRenderer.invoke('ghost:knowledge:citations:resolve', input),
+  listMcpServers: (input) => ipcRenderer.invoke('ghost:mcp:servers:list', input ?? {}),
+  registerMcpServer: (input) => ipcRenderer.invoke('ghost:mcp:servers:register', input),
+  updateMcpServer: (input) => ipcRenderer.invoke('ghost:mcp:servers:update', input),
+  approveMcpTrust: (id) => ipcRenderer.invoke('ghost:mcp:servers:approve-trust', { id }),
+  revokeMcpTrust: (id) => ipcRenderer.invoke('ghost:mcp:servers:revoke-trust', { id }),
+  setMcpServerEnabled: (input) => ipcRenderer.invoke('ghost:mcp:servers:set-enabled', input),
+  deleteMcpServer: (id) => ipcRenderer.invoke('ghost:mcp:servers:delete', { id }),
+  connectMcpServer: (id) => ipcRenderer.invoke('ghost:mcp:servers:connect', { id }),
+  disconnectMcpServer: (id) => ipcRenderer.invoke('ghost:mcp:servers:disconnect', { id }),
+  getMcpCapabilities: (id) => ipcRenderer.invoke('ghost:mcp:servers:capabilities', { id }),
+  readMcpResource: (input) => ipcRenderer.invoke('ghost:mcp:servers:read-resource', input),
+  getMcpPrompt: (input) => ipcRenderer.invoke('ghost:mcp:servers:get-prompt', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

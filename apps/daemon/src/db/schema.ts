@@ -333,3 +333,52 @@ export const knowledgeChunks = sqliteTable(
   },
   (t) => [index('idx_knowledge_chunks_doc_rev').on(t.documentId, t.revisionId)],
 )
+
+export const mcpServers = sqliteTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey(),
+    schemaVersion: integer('schema_version').notNull(),
+    scopeKind: text('scope_kind').notNull(),
+    userId: text('user_id').notNull(),
+    botId: text('bot_id').references(() => agents.id, { onDelete: 'restrict' }),
+    workspaceId: text('workspace_id'),
+    scopeKey: text('scope_key').notNull(),
+    displayName: text('display_name').notNull(),
+    description: text('description').notNull(),
+    transportJson: text('transport_json').notNull(),
+    enabled: integer('enabled').notNull(),
+    trustState: text('trust_state').notNull(),
+    configFingerprint: text('config_fingerprint').notNull(),
+    trustedFingerprint: text('trusted_fingerprint'),
+    trustedBinaryDigest: text('trusted_binary_digest'),
+    connectTimeoutMs: integer('connect_timeout_ms').notNull(),
+    requestTimeoutMs: integer('request_timeout_ms').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [index('idx_mcp_servers_scope').on(t.userId, t.scopeKind, t.updatedAt, t.id)],
+)
+
+export const mcpApprovalBindings = sqliteTable(
+  'mcp_approval_bindings',
+  {
+    approvalId: text('approval_id')
+      .primaryKey()
+      .references(() => approvals.id, { onDelete: 'cascade' }),
+    serverId: text('server_id')
+      .notNull()
+      .references(() => mcpServers.id, { onDelete: 'cascade' }),
+    configFingerprint: text('config_fingerprint').notNull(),
+    trustedBinaryDigest: text('trusted_binary_digest'),
+    connectionGeneration: integer('connection_generation').notNull(),
+    capabilityKey: text('capability_key').notNull(),
+    definitionHash: text('definition_hash').notNull(),
+    toolName: text('tool_name').notNull(),
+    argsHash: text('args_hash').notNull(),
+    dispatchState: text('dispatch_state').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [index('idx_mcp_bindings_server').on(t.serverId, t.dispatchState)],
+)

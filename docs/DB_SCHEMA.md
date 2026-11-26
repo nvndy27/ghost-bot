@@ -49,3 +49,8 @@ Create provider accounts, model profiles, agents, sessions, runs, run events, me
 
 - Added `knowledge_collections`, `knowledge_documents` (`bot_id REFERENCES agents(id) ON DELETE RESTRICT`, `collection_id REFERENCES knowledge_collections(id) ON DELETE RESTRICT`), `knowledge_document_revisions` (`ON DELETE CASCADE`), `knowledge_chunks` (`ON DELETE CASCADE`), and `knowledge_chunks_fts` (`USING fts5(..., tokenize='unicode61 remove_diacritics 2')`) in `apps/daemon/src/db/migrations.ts` and `apps/daemon/src/db/schema.ts`.
 - Accessed via `KnowledgeService` (`apps/daemon/src/knowledge/service.ts`) using `createBorrowedKnowledgeDatabaseHandle()`.
+
+## Phase 3D.3 migration `0007_mcp_core`
+
+- Added `mcp_servers` (`bot_id REFERENCES agents(id) ON DELETE RESTRICT`, `transport_json` storing opaque `secretRefs` only) and `mcp_approval_bindings` (`approval_id REFERENCES approvals(id) ON DELETE CASCADE`, `server_id REFERENCES mcp_servers(id) ON DELETE CASCADE`, `dispatch_state` in `pending | dispatched | uncertain | completed | failed | cancelled`) in `apps/daemon/src/db/migrations.ts` and `apps/daemon/src/db/schema.ts`.
+- Accessed via `McpService` (`apps/daemon/src/mcp/service.ts`) using `createBorrowedMcpDatabaseHandle()`.

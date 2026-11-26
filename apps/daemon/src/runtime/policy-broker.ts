@@ -1,3 +1,4 @@
+import type { HostMcpPolicyAdapter } from '@ghost-bot/mcp'
 import { canEnablePermission } from '@ghost-bot/shared-types/permissions'
 import type { RuntimePermissionEvidence } from '@ghost-bot/shared-types/permissions'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
@@ -131,5 +132,37 @@ export class RuntimePolicyBroker {
    */
   authorizeLiveExecution(input: PolicyAuthorizationInput): PolicyAuthorizationDecision {
     return this.authorize(input)
+  }
+
+  /**
+   * Creates a HostMcpPolicyAdapter bound to a bot/run permission mode.
+   * Blocks local STDIO MCP launch and tool invocation under `full-access` and `read-only`;
+   * permits `ask-approval` and `workspace` (with per-call durable approval enforced by the orchestrator).
+   */
+  createMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {
+    return createHostMcpPolicyAdapter(permissionMode)
+  }
+}
+
+export function createHostMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {
+  const evaluate = (action: 'launch' | 'tool'): { allowed: boolean; reason?: string } => {
+    if (permissionMode === 'full-access') {
+      return {
+        allowed: false,
+        reason: `Full Access mode is blocked for local STDIO MCP ${action}`,
+      }
+    }
+    if (permissionMode === 'read-only') {
+      return {
+        allowed: false,
+        reason: `Read-Only mode blocks local STDIO MCP ${action}`,
+      }
+    }
+    return { allowed: true }
+  }
+
+  return {
+    evaluateLaunch: () => evaluate('launch'),
+    evaluateToolInvocation: () => evaluate('tool'),
   }
 }

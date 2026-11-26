@@ -1,8 +1,13 @@
 # Next steps
 
-## Phase 3D.3 — MCP Foundation Integration
+## Phase 3D.4 — Integrated End-to-End Acceptance
 
-1. Add coordinated migration `0007_mcp_core` for `mcp_servers` (storing configuration and opaque `secretRefs` only, never raw secrets).
+1. Verify combined Memory + Knowledge + MCP production workflows in Electron and daemon regression suites on the integrated branch.
+2. Perform final release-candidate security audit and documentation sign-off before merging to `main`.
+
+## Earlier Phase 3D.3 plan (Completed)
+
+1. Add coordinated migration `0007_mcp_core` for `mcp_servers` (storing configuration and opaque `secretRefs` only, never raw secrets) and `mcp_approval_bindings`.
 2. Wire `@ghost-bot/mcp` behind daemon-owned `McpService`, `HostMcpPolicyAdapter` in `RuntimePolicyBroker`, and durable approval binding in `RunOrchestrator`.
 3. Follow with Phase 3D.4 (Integrated End-to-End Acceptance).
 

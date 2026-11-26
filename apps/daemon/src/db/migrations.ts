@@ -379,6 +379,64 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 7,
+    name: '0007_mcp_core',
+    sql: `
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('user', 'bot', 'workspace')),
+        user_id TEXT NOT NULL,
+        bot_id TEXT REFERENCES agents(id) ON DELETE RESTRICT,
+        workspace_id TEXT,
+        scope_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        transport_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        trust_state TEXT NOT NULL CHECK (trust_state IN ('untrusted', 'trusted', 'revoked')),
+        config_fingerprint TEXT NOT NULL,
+        trusted_fingerprint TEXT,
+        trusted_binary_digest TEXT,
+        connect_timeout_ms INTEGER NOT NULL,
+        request_timeout_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (
+          (scope_kind = 'user' AND bot_id IS NULL AND workspace_id IS NULL) OR
+          (scope_kind = 'bot' AND bot_id IS NOT NULL AND workspace_id IS NULL) OR
+          (scope_kind = 'workspace' AND bot_id IS NULL AND workspace_id IS NOT NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_scope_name
+        ON mcp_servers(scope_key, display_name);
+
+      CREATE INDEX IF NOT EXISTS idx_mcp_servers_scope
+        ON mcp_servers(user_id, scope_kind, updated_at DESC, id ASC);
+
+      CREATE TABLE IF NOT EXISTS mcp_approval_bindings (
+        approval_id TEXT PRIMARY KEY REFERENCES approvals(id) ON DELETE CASCADE,
+        server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+        config_fingerprint TEXT NOT NULL,
+        trusted_binary_digest TEXT,
+        connection_generation INTEGER NOT NULL,
+        capability_key TEXT NOT NULL,
+        definition_hash TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        args_hash TEXT NOT NULL,
+        dispatch_state TEXT NOT NULL CHECK (
+          dispatch_state IN ('pending', 'dispatched', 'uncertain', 'completed', 'failed', 'cancelled')
+        ),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mcp_bindings_server
+        ON mcp_approval_bindings(server_id, dispatch_state);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

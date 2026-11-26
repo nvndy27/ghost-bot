@@ -75,7 +75,12 @@ export type {
 export { computeServerConfigFingerprint } from './registry/fingerprint.ts'
 export type { McpRegistryRepository, McpServerListResult } from './registry/interface.ts'
 
-export { openMcpDatabase, type McpDatabaseHandle } from './storage/sqlite-client.ts'
+export {
+  createBorrowedMcpDatabaseHandle,
+  openMcpDatabase,
+  type BorrowedMcpDatabaseOptions,
+  type McpDatabaseHandle,
+} from './storage/sqlite-client.ts'
 export { initializeMcpSchema, MCP_DB_SCHEMA_VERSION } from './storage/sqlite-schema.ts'
 export { SqliteMcpRegistry, type SqliteMcpRegistryOptions } from './storage/sqlite-registry.ts'
 
