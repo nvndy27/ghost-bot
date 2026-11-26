@@ -127,20 +127,43 @@ export class ExecutionQueue {
       }
 
       const id = `tsk_${randomUUID()}`
-      this.db.sqlite
-        .prepare(
-          `INSERT INTO scheduler_occurrence_dedup (
-            occurrence_key, routine_id, trigger_source, payload_hash, created_at, expires_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          occurrenceKey,
-          routine.id,
-          triggerSource,
-          payloadHash,
-          nowIso,
-          options.dedupExpiresAt ?? null,
-        )
+      const hasScheduledForCol = (
+        this.db.sqlite.prepare(`PRAGMA table_info(scheduler_occurrence_dedup)`).all() as Array<{
+          name: string
+        }>
+      ).some((c) => c.name === 'scheduled_for')
+      if (hasScheduledForCol) {
+        this.db.sqlite
+          .prepare(
+            `INSERT INTO scheduler_occurrence_dedup (
+              occurrence_key, routine_id, trigger_source, scheduled_for, payload_hash, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            occurrenceKey,
+            routine.id,
+            triggerSource,
+            scheduledFor,
+            payloadHash,
+            nowIso,
+            options.dedupExpiresAt ?? null,
+          )
+      } else {
+        this.db.sqlite
+          .prepare(
+            `INSERT INTO scheduler_occurrence_dedup (
+              occurrence_key, routine_id, trigger_source, payload_hash, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            occurrenceKey,
+            routine.id,
+            triggerSource,
+            payloadHash,
+            nowIso,
+            options.dedupExpiresAt ?? null,
+          )
+      }
 
       this.db.sqlite
         .prepare(
@@ -526,16 +549,26 @@ export class ExecutionQueue {
    */
   pruneExpiredDedup(options: { nowIso: string; maxKeepPerRoutine?: number }): number {
     return this.db.transaction(() => {
-      // Advance dedup_watermark_at for any routine whose expired schedule/event keys are pruned
+      const hasScheduledForCol = (
+        this.db.sqlite.prepare(`PRAGMA table_info(scheduler_occurrence_dedup)`).all() as Array<{
+          name: string
+        }>
+      ).some((c) => c.name === 'scheduled_for')
+
+      // Advance dedup_watermark_at only for scheduled/event occurrences using occurrence timestamp
+      const tsExpr = hasScheduledForCol
+        ? `MAX(COALESCE(scheduled_for, created_at))`
+        : `MAX(created_at)`
       const expiringTasks = this.db.sqlite
         .prepare(
-          `SELECT routine_id, MAX(created_at) AS max_created
+          `SELECT routine_id, ${tsExpr} AS max_occ
            FROM scheduler_occurrence_dedup
            WHERE expires_at IS NOT NULL AND expires_at <= ?
+             AND trigger_source IN ('schedule', 'event')
              AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)
            GROUP BY routine_id`,
         )
-        .all(options.nowIso) as Array<{ routine_id: string; max_created: string }>
+        .all(options.nowIso) as Array<{ routine_id: string; max_occ: string }>
 
       for (const row of expiringTasks) {
         this.db.sqlite
@@ -547,7 +580,7 @@ export class ExecutionQueue {
              END
              WHERE id = ?`,
           )
-          .run(row.max_created, row.max_created, row.routine_id)
+          .run(row.max_occ, row.max_occ, row.routine_id)
       }
 
       const res = this.db.sqlite

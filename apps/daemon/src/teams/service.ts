@@ -444,12 +444,13 @@ export class TeamsService {
   }
 
   reconcileOnStartup(): { tasksMarkedUncertain: number; runsMarkedUncertain: number; recoveredLinks: number } {
-    // Recover any crash-window orphan between orchestrator.startRun() and team_execution_links insert.
+    // Recover any crash-window orphan between orchestrator.startRun() and team_execution_links insert,
+    // validating authoritative task, team_run, team membership, session, agent, and attempt relationships.
     let recoveredLinks = 0
     const orphanRuns = this.dbHandle.sqlite
       .prepare(
         `SELECT r.id AS daemon_run_id, r.session_id, r.agent_id, r.idempotency_key, r.runtime_id,
-                s.title AS session_title
+                r.created_at AS run_created_at, s.title AS session_title, s.agent_id AS session_agent_id
          FROM runs r
          JOIN sessions s ON s.id = r.session_id
          LEFT JOIN team_execution_links l ON l.daemon_run_id = r.id
@@ -463,7 +464,9 @@ export class TeamsService {
       agent_id: string
       idempotency_key: string
       runtime_id: string
+      run_created_at: string
       session_title: string
+      session_agent_id: string
     }>
 
     if (orphanRuns.length > 0) {
@@ -474,16 +477,63 @@ export class TeamsService {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'local', ?, 'worker', ?)`,
       )
       for (const row of orphanRuns) {
+        if (row.session_agent_id !== row.agent_id) continue
         const keyMatch = /^team:([^:]+):attempt:(\d+)$/.exec(row.idempotency_key)
-        const titleMatch = /^team:([^:]+):/.exec(row.session_title)
+        const titleMatch = /^team:([^:]+):([^:]+)$/.exec(row.session_title)
         if (!keyMatch || !titleMatch) continue
         const teamTaskId = keyMatch[1]!
         const attempt = Number(keyMatch[2]!)
         const teamRunId = titleMatch[1]!
-        const taskExists = this.dbHandle.sqlite
-          .prepare(`SELECT 1 FROM team_tasks WHERE id = ? AND team_run_id = ?`)
-          .get(teamTaskId, teamRunId)
-        if (!taskExists) continue
+        const titleAgentId = titleMatch[2]!
+        if (titleAgentId !== row.agent_id) continue
+
+        const authRow = this.dbHandle.sqlite
+          .prepare(
+            `SELECT tt.id AS task_id, tt.assigned_bot_id, tt.attempt AS task_attempt,
+                    tt.status AS task_status, tr.status AS run_status,
+                    tr.created_at AS team_run_created_at,
+                    t.member_bot_ids_json, t.archived_at AS team_archived_at
+             FROM team_tasks tt
+             JOIN team_runs tr ON tr.id = tt.team_run_id
+             JOIN teams t ON t.id = tr.team_id
+             WHERE tt.id = ? AND tt.team_run_id = ?`,
+          )
+          .get(teamTaskId, teamRunId) as
+          | {
+              task_id: string
+              assigned_bot_id: string
+              task_attempt: number
+              task_status: string
+              run_status: string
+              team_run_created_at: string
+              member_bot_ids_json: string
+              team_archived_at: string | null
+            }
+          | undefined
+
+        if (!authRow) continue
+        if (authRow.team_archived_at !== null) continue
+        if (authRow.assigned_bot_id !== row.agent_id) continue
+        if (authRow.task_attempt !== attempt) continue
+        if (!['running', 'queued', 'cancelling'].includes(authRow.task_status)) continue
+        if (!['running', 'queued', 'cancelling'].includes(authRow.run_status)) continue
+        if (row.run_created_at < authRow.team_run_created_at) continue
+
+        let members: string[] = []
+        try {
+          members = JSON.parse(authRow.member_bot_ids_json) as string[]
+        } catch {
+          continue
+        }
+        if (!members.includes(row.agent_id)) continue
+
+        const existingTaskLink = this.dbHandle.sqlite
+          .prepare(
+            `SELECT 1 FROM team_execution_links WHERE team_task_id = ? AND attempt = ?`,
+          )
+          .get(teamTaskId, attempt)
+        if (existingTaskLink) continue
+
         const info = insertLink.run(
           `texec_rec_${row.daemon_run_id}`,
           teamRunId,

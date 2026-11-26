@@ -10,6 +10,24 @@ export interface SchedulerDatabaseHandle {
   close(): void
 }
 
+/**
+ * Wraps an existing daemon-owned SQLite connection without running standalone scheduler migrations.
+ */
+export function createBorrowedSchedulerDatabaseHandle(
+  sqlite: DatabaseSync,
+  transaction: <T>(fn: () => T) => T,
+  dbPath = ':memory:',
+): SchedulerDatabaseHandle {
+  return {
+    sqlite,
+    dbPath,
+    transaction,
+    close() {
+      // Borrowed handle: lifecycle owned by @ghost-bot/daemon
+    },
+  }
+}
+
 function chmodIfExists(path: string, mode: number): void {
   if (existsSync(path)) {
     const st = lstatSync(path)
@@ -202,6 +220,7 @@ export function openSchedulerDatabase(
           occurrence_key TEXT PRIMARY KEY,
           routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
           trigger_source TEXT NOT NULL,
+          scheduled_for TEXT,
           payload_hash TEXT,
           created_at TEXT NOT NULL,
           expires_at TEXT

@@ -75,6 +75,28 @@ export const IPC_CHANNELS = {
   TEAMS_RUN_USAGE: 'ghost:teams:runs:usage',
   TEAMS_RUN_APPROVALS: 'ghost:teams:runs:approvals',
   TEAMS_MESSAGES_LIST: 'ghost:teams:messages:list',
+  ROUTINES_LIST: 'ghost:routines:list',
+  ROUTINES_GET: 'ghost:routines:get',
+  ROUTINES_CREATE: 'ghost:routines:create',
+  ROUTINES_UPDATE: 'ghost:routines:update',
+  ROUTINES_ENABLE: 'ghost:routines:enable',
+  ROUTINES_DISABLE: 'ghost:routines:disable',
+  ROUTINES_ARCHIVE: 'ghost:routines:archive',
+  ROUTINES_TRIGGER: 'ghost:routines:trigger',
+  ROUTINES_TASK_GET: 'ghost:routines:tasks:get',
+  ROUTINES_TASK_CANCEL: 'ghost:routines:tasks:cancel',
+  ROUTINES_PREVIEW: 'ghost:routines:preview',
+  ROUTINES_DIAGNOSE: 'ghost:routines:diagnose',
+  ROUTINES_SIMULATE: 'ghost:routines:simulate',
+  ROUTINES_IMPORT_PREVIEW: 'ghost:routines:import-preview',
+  ROUTINES_IMPORT_COMMIT: 'ghost:routines:import-commit',
+  ROUTINES_EXPORT: 'ghost:routines:export',
+  ROUTINES_STATS: 'ghost:routines:stats',
+  ROUTINES_HISTORY: 'ghost:routines:history',
+  ROUTINE_NOTIFICATIONS_LIST: 'ghost:routine-notifications:list',
+  ROUTINE_NOTIFICATIONS_UNREAD_COUNT: 'ghost:routine-notifications:unread-count',
+  ROUTINE_NOTIFICATIONS_MARK_READ: 'ghost:routine-notifications:mark-read',
+  ROUTINE_NOTIFICATIONS_DISMISS: 'ghost:routine-notifications:dismiss',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -1451,6 +1473,173 @@ export interface GhostBotBridge {
   getTeamAggregateUsage(teamRunId: string): Promise<Record<string, unknown>>
   listTeamRunApprovals(teamRunId: string): Promise<{ approvals: Array<Record<string, unknown>> }>
   listTeamMessages(input: ListTeamMessagesIpcInput): Promise<{ messages: Array<Record<string, unknown>> }>
+  listRoutines(input?: z.infer<typeof ListRoutinesIpcInputSchema>): Promise<{ routines: Array<Record<string, unknown>> }>
+  getRoutine(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  createRoutine(input: z.infer<typeof CreateRoutineIpcInputSchema>): Promise<Record<string, unknown>>
+  updateRoutine(input: z.infer<typeof UpdateRoutineIpcInputSchema>): Promise<Record<string, unknown>>
+  enableRoutine(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  disableRoutine(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  archiveRoutine(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  triggerRoutine(input: z.infer<typeof TriggerRoutineIpcInputSchema>): Promise<Record<string, unknown>>
+  getRoutineTask(input: z.infer<typeof RoutineTaskParamSchema>): Promise<Record<string, unknown>>
+  cancelRoutineTask(input: z.infer<typeof RoutineTaskParamSchema>): Promise<Record<string, unknown>>
+  previewRoutineSchedule(input: z.infer<typeof RoutineCountParamSchema>): Promise<Record<string, unknown>>
+  diagnoseRoutine(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  simulateRoutine(input: z.infer<typeof RoutineCountParamSchema>): Promise<Record<string, unknown>>
+  previewRoutineImport(input: z.infer<typeof ImportRoutineIpcInputSchema>): Promise<Record<string, unknown>>
+  commitRoutineImport(input: z.infer<typeof ImportRoutineIpcInputSchema>): Promise<Record<string, unknown>>
+  exportRoutines(input: { botId: string }): Promise<Record<string, unknown>>
+  getRoutineStats(input: z.infer<typeof RoutineScopeParamSchema>): Promise<Record<string, unknown>>
+  listRoutineHistory(input: z.infer<typeof RoutineCountParamSchema>): Promise<{ tasks: Array<Record<string, unknown>> }>
+  listRoutineNotifications(input: z.infer<typeof ListRoutineNotificationsIpcInputSchema>): Promise<{ notifications: Array<Record<string, unknown>> }>
+  getRoutineUnreadNotificationCount(input: { botId: string }): Promise<{ unreadCount: number }>
+  markRoutineNotificationRead(input: z.infer<typeof RoutineNotificationParamSchema>): Promise<Record<string, unknown>>
+  dismissRoutineNotification(input: z.infer<typeof RoutineNotificationParamSchema>): Promise<Record<string, unknown>>
 }
+
+export const RoutineIpcIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/)
+
+export const RoutineScopeParamSchema = z
+  .object({
+    routineId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+  })
+  .strict()
+
+export const RoutineCountParamSchema = z
+  .object({
+    routineId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+    count: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+
+export const RoutineTaskParamSchema = z
+  .object({
+    taskId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+  })
+  .strict()
+
+export const ListRoutinesIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    includeArchived: z.boolean().optional(),
+  })
+  .strict()
+
+export const RoutineTriggerInputSchema = z.union([
+  z.object({ kind: z.literal('one_time'), runAt: z.string().min(1).max(64) }).strict(),
+  z
+    .object({
+      kind: z.literal('interval'),
+      intervalMs: z.number().int().min(60_000).max(31_536_000_000),
+      startAt: z.string().min(1).max(64).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('daily'),
+      hour: z.number().int().min(0).max(23),
+      minute: z.number().int().min(0).max(59),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('weekly'),
+      daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+      hour: z.number().int().min(0).max(23),
+      minute: z.number().int().min(0).max(59),
+    })
+    .strict(),
+  z.object({ kind: z.literal('cron'), expression: z.string().min(5).max(120) }).strict(),
+  z
+    .object({
+      kind: z.literal('event'),
+      source: z.string().min(1).max(64),
+      eventType: z.string().min(1).max(120),
+    })
+    .strict(),
+])
+
+export const CreateRoutineIpcInputSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    description: z.string().max(1000).optional(),
+    botId: BotIdSchema,
+    targetType: z.enum(['bot', 'team']).optional(),
+    teamId: TeamIpcIdSchema.nullable().optional(),
+    trigger: RoutineTriggerInputSchema,
+    timezone: z.string().min(1).max(64).optional(),
+    task: z
+      .object({
+        prompt: z.string().min(1).max(16_384),
+        kind: z.enum(['prompt', 'team_goal']).optional(),
+      })
+      .strict(),
+    enabled: z.boolean().optional(),
+    missedRunPolicy: z.enum(['skip', 'run_once', 'catch_up_bounded']).optional(),
+    maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
+    concurrencyPolicy: z.enum(['forbid', 'allow_bounded', 'replace']).optional(),
+    maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
+    expiresAt: z.string().min(1).max(64).nullable().optional(),
+  })
+  .strict()
+
+export const UpdateRoutineIpcInputSchema = z
+  .object({
+    routineId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+    name: z.string().min(1).max(120).optional(),
+    description: z.string().max(1000).optional(),
+    targetType: z.enum(['bot', 'team']).optional(),
+    teamId: TeamIpcIdSchema.nullable().optional(),
+    trigger: RoutineTriggerInputSchema.optional(),
+    timezone: z.string().min(1).max(64).optional(),
+    task: z
+      .object({
+        prompt: z.string().min(1).max(16_384),
+        kind: z.enum(['prompt', 'team_goal']).optional(),
+      })
+      .strict()
+      .optional(),
+    missedRunPolicy: z.enum(['skip', 'run_once', 'catch_up_bounded']).optional(),
+    maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
+    concurrencyPolicy: z.enum(['forbid', 'allow_bounded', 'replace']).optional(),
+    maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
+    expiresAt: z.string().min(1).max(64).nullable().optional(),
+  })
+  .strict()
+
+export const TriggerRoutineIpcInputSchema = z
+  .object({
+    routineId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+    idempotencyKey: z.string().min(1).max(128),
+  })
+  .strict()
+
+export const ImportRoutineIpcInputSchema = z
+  .object({
+    botId: BotIdSchema,
+    bundle: z.record(z.string(), z.unknown()),
+    conflictPolicy: z.enum(['skip', 'overwrite', 'rename']).optional(),
+  })
+  .strict()
+
+export const ListRoutineNotificationsIpcInputSchema = z
+  .object({
+    botId: BotIdSchema,
+    unreadOnly: z.boolean().optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  })
+  .strict()
+
+export const RoutineNotificationParamSchema = z
+  .object({
+    notificationId: RoutineIpcIdSchema,
+    botId: BotIdSchema,
+  })
+  .strict()
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

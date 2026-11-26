@@ -11,16 +11,20 @@ import {
   CreateBotInputSchema,
   CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
+  CreateRoutineIpcInputSchema,
   CreateSessionInputSchema,
   CreateTeamIpcInputSchema,
   GetMcpPromptInputSchema,
   ImportAvatarSvgInputSchema,
+  ImportRoutineIpcInputSchema,
   IngestKnowledgeTextInputSchema,
   KnowledgeIdParamSchema,
   ListKnowledgeCollectionsInputSchema,
   ListKnowledgeDocsInputSchema,
   ListMcpServersInputSchema,
   ListMemoriesIpcInputSchema,
+  ListRoutineNotificationsIpcInputSchema,
+  ListRoutinesIpcInputSchema,
   ListTeamMessagesIpcInputSchema,
   ListTeamsInputSchema,
   McpServerIdParamSchema,
@@ -33,6 +37,10 @@ import {
   ResolveApprovalInputSchema,
   ResolveKnowledgeCitationInputSchema,
   RetryRunInputSchema,
+  RoutineCountParamSchema,
+  RoutineNotificationParamSchema,
+  RoutineScopeParamSchema,
+  RoutineTaskParamSchema,
   RunIdSchema,
   SearchKnowledgeDocsInputSchema,
   SearchMemoriesIpcInputSchema,
@@ -44,10 +52,12 @@ import {
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
   TeamRunIdParamSchema,
+  TriggerRoutineIpcInputSchema,
   UpdateBotInputSchema,
   UpdateKnowledgeDocInputSchema,
   UpdateMcpServerIpcInputSchema,
   UpdateMemoryIpcInputSchema,
+  UpdateRoutineIpcInputSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
@@ -64,6 +74,8 @@ import { McpService, type McpSecretResolver } from './mcp/service.ts'
 import { MemoryService } from './memory/service.ts'
 import { RuntimePolicyBroker } from './runtime/policy-broker.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
+import { DaemonRoutineDispatcher } from './scheduler/execution-bridge.ts'
+import { SchedulerService } from './scheduler/service.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
@@ -135,6 +147,7 @@ export class GhostBotDaemon {
   private knowledgeService: KnowledgeService | null = null
   private mcpService: McpService | null = null
   private teamsService: TeamsService | null = null
+  private schedulerService: SchedulerService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -260,6 +273,28 @@ export class GhostBotDaemon {
     this.teamsService = new TeamsService(dbHandle, this.botRepo, teamsBridge)
     this.teamsService.reconcileOnStartup()
 
+    this.schedulerService = new SchedulerService(dbHandle, this.botRepo, this.teamsService, {
+      tickIntervalMs: 5_000,
+    })
+    const routineDispatcher = new DaemonRoutineDispatcher({
+      dbHandle,
+      botRepo: this.botRepo,
+      sessionRepo: this.sessionRepo,
+      orchestrator: this.runOrchestrator,
+      policyBroker,
+      teamsService: this.teamsService,
+      approvalCoordinator: this.schedulerService.approvals,
+      getRuntimeState: () => ({
+        runtimeMode: this.runtimeMode,
+        codexVersion: this.options.codexVersion ?? null,
+        authMethod: 'none',
+        accountId: null,
+      }),
+    })
+    this.schedulerService.attachDispatcher(routineDispatcher)
+    this.schedulerService.reconcileOnStartup()
+    this.schedulerService.startTimer()
+
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
     })
@@ -291,6 +326,10 @@ export class GhostBotDaemon {
   }
 
   async stop(): Promise<void> {
+    if (this.schedulerService) {
+      await this.schedulerService.stopTimer()
+      this.schedulerService = null
+    }
     if (this.runOrchestrator) {
       await this.runOrchestrator.stop()
       this.runOrchestrator = null
@@ -1316,6 +1355,243 @@ export class GhostBotDaemon {
             throw new DaemonError('VALIDATION_ERROR', 'Invalid teamRunId', { statusCode: 400 })
           }
           sendJson(res, 200, teamsService.getTeamRun(idCheck.data.teamRunId))
+          return
+        }
+      }
+
+      if (this.schedulerService) {
+        const schedulerService = this.schedulerService
+
+        if (req.method === 'GET' && url.pathname === '/routines') {
+          const parsed = ListRoutinesIpcInputSchema.safeParse({
+            botId: url.searchParams.get('botId') ?? undefined,
+            includeArchived: url.searchParams.get('includeArchived') === 'true',
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid routines query', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, { routines: schedulerService.listRoutines(parsed.data) })
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/routines') {
+          const body = await readJsonBody(req)
+          const parsed = CreateRoutineIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid routine input', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 201, schedulerService.createRoutine(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/routines/import-preview') {
+          const body = await readJsonBody(req)
+          const parsed = ImportRoutineIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid import preview payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, schedulerService.previewImport(parsed.data.bundle, parsed.data.botId, parsed.data.conflictPolicy))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/routines/import-commit') {
+          const body = await readJsonBody(req)
+          const parsed = ImportRoutineIpcInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid import commit payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, schedulerService.commitImport(parsed.data.bundle, parsed.data.botId, parsed.data.conflictPolicy))
+          return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/routines/export') {
+          const botId = url.searchParams.get('botId')
+          const botCheck = BotIdSchema.safeParse(botId)
+          if (!botCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid botId', { statusCode: 400 })
+          }
+          sendJson(res, 200, schedulerService.exportRoutines(botCheck.data))
+          return
+        }
+
+        const routineTaskActionMatch = /^\/routines\/tasks\/([^/]+)\/cancel$/.exec(url.pathname)
+        if (routineTaskActionMatch && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const parsed = RoutineTaskParamSchema.safeParse({
+            taskId: decodeURIComponent(routineTaskActionMatch[1]),
+            botId: (body as Record<string, unknown>)?.botId,
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid taskId or botId', { statusCode: 400 })
+          }
+          sendJson(res, 200, await schedulerService.cancelTask(parsed.data.taskId, parsed.data.botId))
+          return
+        }
+
+        const routineTaskMatch = /^\/routines\/tasks\/([^/]+)$/.exec(url.pathname)
+        if (routineTaskMatch && req.method === 'GET') {
+          const parsed = RoutineTaskParamSchema.safeParse({
+            taskId: decodeURIComponent(routineTaskMatch[1]),
+            botId: url.searchParams.get('botId'),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid taskId or botId', { statusCode: 400 })
+          }
+          sendJson(res, 200, schedulerService.getTask(parsed.data.taskId, parsed.data.botId))
+          return
+        }
+
+        const routineActionMatch = /^\/routines\/([^/]+)\/(enable|disable|archive|trigger|preview|diagnose|simulate|stats|history)$/.exec(
+          url.pathname,
+        )
+        if (routineActionMatch) {
+          const routineId = decodeURIComponent(routineActionMatch[1])
+          const action = routineActionMatch[2]
+          if (req.method === 'POST' && (action === 'enable' || action === 'disable' || action === 'archive')) {
+            const body = await readJsonBody(req)
+            const parsed = RoutineScopeParamSchema.safeParse({
+              routineId,
+              botId: (body as Record<string, unknown>)?.botId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid routineId or botId', { statusCode: 400 })
+            }
+            const updated =
+              action === 'enable'
+                ? schedulerService.enableRoutine(parsed.data.routineId, parsed.data.botId)
+                : action === 'disable'
+                  ? schedulerService.disableRoutine(parsed.data.routineId, parsed.data.botId)
+                  : schedulerService.archiveRoutine(parsed.data.routineId, parsed.data.botId)
+            sendJson(res, 200, updated)
+            return
+          }
+          if (req.method === 'POST' && action === 'trigger') {
+            const body = await readJsonBody(req)
+            const parsed = TriggerRoutineIpcInputSchema.safeParse({ ...(body as Record<string, unknown>), routineId })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid trigger payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 201, schedulerService.triggerManual(parsed.data.routineId, parsed.data.botId, parsed.data.idempotencyKey))
+            return
+          }
+          if (req.method === 'GET' && (action === 'preview' || action === 'simulate' || action === 'history')) {
+            const countRaw = url.searchParams.get('count')
+            const parsed = RoutineCountParamSchema.safeParse({
+              routineId,
+              botId: url.searchParams.get('botId'),
+              count: countRaw ? Number(countRaw) : undefined,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid routineId, botId, or count', { statusCode: 400 })
+            }
+            if (action === 'preview') {
+              sendJson(res, 200, schedulerService.previewRoutineSchedule(parsed.data.routineId, parsed.data.botId, parsed.data.count))
+              return
+            }
+            if (action === 'simulate') {
+              sendJson(res, 200, schedulerService.simulateRoutine(parsed.data.routineId, parsed.data.botId, parsed.data.count))
+              return
+            }
+            sendJson(res, 200, { tasks: schedulerService.listTaskHistory(parsed.data.routineId, parsed.data.botId, parsed.data.count) })
+            return
+          }
+          if (req.method === 'GET' && (action === 'diagnose' || action === 'stats')) {
+            const parsed = RoutineScopeParamSchema.safeParse({
+              routineId,
+              botId: url.searchParams.get('botId'),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid routineId or botId', { statusCode: 400 })
+            }
+            sendJson(
+              res,
+              200,
+              action === 'diagnose'
+                ? schedulerService.diagnoseRoutine(parsed.data.routineId, parsed.data.botId)
+                : schedulerService.getExecutionStatistics(parsed.data.routineId, parsed.data.botId),
+            )
+            return
+          }
+        }
+
+        const routineMatch = /^\/routines\/([^/]+)$/.exec(url.pathname)
+        if (routineMatch) {
+          const routineId = decodeURIComponent(routineMatch[1])
+          if (req.method === 'GET') {
+            const parsed = RoutineScopeParamSchema.safeParse({
+              routineId,
+              botId: url.searchParams.get('botId'),
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid routineId or botId', { statusCode: 400 })
+            }
+            sendJson(res, 200, schedulerService.getRoutine(parsed.data.routineId, parsed.data.botId))
+            return
+          }
+          if (req.method === 'PATCH') {
+            const body = await readJsonBody(req)
+            const parsed = UpdateRoutineIpcInputSchema.safeParse({ ...(body as Record<string, unknown>), routineId })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid routine patch', {
+                statusCode: 400,
+              })
+            }
+            const { routineId: id, botId, ...patch } = parsed.data
+            sendJson(res, 200, schedulerService.updateRoutine(id, botId, patch))
+            return
+          }
+        }
+
+        if (req.method === 'GET' && url.pathname === '/routine-notifications') {
+          const limitRaw = url.searchParams.get('limit')
+          const parsed = ListRoutineNotificationsIpcInputSchema.safeParse({
+            botId: url.searchParams.get('botId'),
+            unreadOnly: url.searchParams.get('unreadOnly') === 'true',
+            limit: limitRaw ? Number(limitRaw) : undefined,
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid notifications query', { statusCode: 400 })
+          }
+          sendJson(res, 200, { notifications: schedulerService.listNotifications(parsed.data.botId, parsed.data) })
+          return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/routine-notifications/unread-count') {
+          const botCheck = BotIdSchema.safeParse(url.searchParams.get('botId'))
+          if (!botCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid botId', { statusCode: 400 })
+          }
+          sendJson(res, 200, { unreadCount: schedulerService.getUnreadNotificationCount(botCheck.data) })
+          return
+        }
+
+        const notifActionMatch = /^\/routine-notifications\/([^/]+)\/(mark-read|dismiss)$/.exec(url.pathname)
+        if (notifActionMatch && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const parsed = RoutineNotificationParamSchema.safeParse({
+            notificationId: decodeURIComponent(notifActionMatch[1]),
+            botId: (body as Record<string, unknown>)?.botId,
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid notificationId or botId', { statusCode: 400 })
+          }
+          sendJson(
+            res,
+            200,
+            notifActionMatch[2] === 'mark-read'
+              ? schedulerService.markNotificationRead(parsed.data.notificationId, parsed.data.botId)
+              : schedulerService.dismissNotification(parsed.data.notificationId, parsed.data.botId),
+          )
           return
         }
       }

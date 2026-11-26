@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./contracts": "./src/contracts/types.ts",
+    "./db": "./src/repository/sqlite-store.ts",
     "./schedules": "./src/schedules/calculator.ts",
     "./repository": "./src/repository/routine-repository.ts",
     "./queue": "./src/queue/execution-queue.ts",

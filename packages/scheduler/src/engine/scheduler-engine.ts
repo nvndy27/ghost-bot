@@ -31,6 +31,7 @@ export class SchedulerEngine {
   private readonly queue: ExecutionQueue
   private readonly clock: Clock
   private readonly graceWindowMs: number
+  private tickInProgress = false
 
   constructor(options: SchedulerEngineOptions) {
     this.repository = options.repository
@@ -44,6 +45,18 @@ export class SchedulerEngine {
    * Never dispatches inside an open SQLite transaction.
    */
   tick(): TickSummary {
+    if (this.tickInProgress) {
+      throw new SchedulerError('TICK_CONCURRENT', 'Scheduler tick is already in progress')
+    }
+    this.tickInProgress = true
+    try {
+      return this.runTickInternal()
+    } finally {
+      this.tickInProgress = false
+    }
+  }
+
+  private runTickInternal(): TickSummary {
     const nowMs = this.clock.nowMs()
     const nowIso = new Date(nowMs).toISOString()
     const routines = this.repository.listAllEnabledForEngine()

@@ -582,6 +582,157 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_team_exec_links_run ON team_execution_links(team_run_id, daemon_run_id);
     `,
   },
+  {
+    version: 9,
+    name: '0009_scheduler_routines',
+    sql: `
+      CREATE TABLE IF NOT EXISTS scheduler_routines (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        target_type TEXT NOT NULL DEFAULT 'bot',
+        team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT,
+        trigger_json TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        task_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        archived_at TEXT,
+        missed_run_policy TEXT NOT NULL,
+        max_catch_up_runs INTEGER NOT NULL,
+        concurrency_policy TEXT NOT NULL,
+        max_concurrent_runs INTEGER NOT NULL,
+        retry_policy_json TEXT NOT NULL,
+        expires_at TEXT,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        last_evaluated_at TEXT,
+        last_task_status TEXT,
+        revision INTEGER NOT NULL DEFAULT 1,
+        ownership TEXT NOT NULL DEFAULT 'ghost-bot',
+        dedup_watermark_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_routines_scope
+        ON scheduler_routines(owner_id, bot_id, archived_at, enabled);
+
+      CREATE TABLE IF NOT EXISTS scheduler_tasks (
+        id TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+        routine_revision INTEGER NOT NULL DEFAULT 1,
+        trigger_source TEXT NOT NULL DEFAULT 'schedule',
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        occurrence_key TEXT NOT NULL UNIQUE,
+        scheduled_for TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        max_attempts INTEGER NOT NULL,
+        claim_owner TEXT,
+        claim_lease_expires_at TEXT,
+        uncertain_execution INTEGER NOT NULL DEFAULT 0,
+        approval_required INTEGER NOT NULL DEFAULT 0,
+        approval_state TEXT,
+        approval_expires_at TEXT,
+        approval_action_summary TEXT,
+        task_snapshot_json TEXT NOT NULL,
+        payload_hash TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        started_at TEXT,
+        ended_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_tasks_claim
+        ON scheduler_tasks(status, scheduled_for, created_at);
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_tasks_routine
+        ON scheduler_tasks(routine_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS scheduler_occurrence_dedup (
+        occurrence_key TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+        trigger_source TEXT NOT NULL,
+        scheduled_for TEXT,
+        payload_hash TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_dedup_routine
+        ON scheduler_occurrence_dedup(routine_id, expires_at);
+
+      CREATE TABLE IF NOT EXISTS scheduler_notifications (
+        id TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+        routine_revision INTEGER NOT NULL,
+        task_id TEXT,
+        occurrence_key TEXT,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        dedup_key TEXT NOT NULL UNIQUE,
+        summary TEXT NOT NULL,
+        read_at TEXT,
+        dismissed_at TEXT,
+        delivery_status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_notifications_scope
+        ON scheduler_notifications(owner_id, bot_id, read_at, dismissed_at, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_notifications_routine
+        ON scheduler_notifications(routine_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS scheduler_execution_links (
+        id TEXT PRIMARY KEY,
+        routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+        routine_revision INTEGER NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        scheduler_task_id TEXT NOT NULL REFERENCES scheduler_tasks(id) ON DELETE CASCADE,
+        target_type TEXT NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT,
+        session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT,
+        daemon_run_id TEXT REFERENCES runs(id) ON DELETE RESTRICT,
+        team_run_id TEXT REFERENCES team_runs(id) ON DELETE RESTRICT,
+        runtime_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(scheduler_task_id, attempt)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_exec_links_task
+        ON scheduler_execution_links(scheduler_task_id, daemon_run_id, team_run_id);
+
+      CREATE TABLE IF NOT EXISTS scheduler_approval_links (
+        id TEXT PRIMARY KEY,
+        scheduler_task_id TEXT NOT NULL REFERENCES scheduler_tasks(id) ON DELETE CASCADE,
+        routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+        routine_revision INTEGER NOT NULL,
+        occurrence_key TEXT NOT NULL,
+        daemon_run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE RESTRICT,
+        daemon_approval_id TEXT NOT NULL REFERENCES approvals(id) ON DELETE CASCADE,
+        state TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(scheduler_task_id, daemon_approval_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduler_approval_links_run
+        ON scheduler_approval_links(daemon_run_id, daemon_approval_id);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

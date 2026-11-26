@@ -89,6 +89,31 @@ const bridge: GhostBotBridge = {
   getTeamAggregateUsage: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:usage', { teamRunId }),
   listTeamRunApprovals: (teamRunId) => ipcRenderer.invoke('ghost:teams:runs:approvals', { teamRunId }),
   listTeamMessages: (input) => ipcRenderer.invoke('ghost:teams:messages:list', input),
+  listRoutines: (input) => ipcRenderer.invoke('ghost:routines:list', input ?? {}),
+  getRoutine: (input) => ipcRenderer.invoke('ghost:routines:get', input),
+  createRoutine: (input) => ipcRenderer.invoke('ghost:routines:create', input),
+  updateRoutine: (input) => ipcRenderer.invoke('ghost:routines:update', input),
+  enableRoutine: (input) => ipcRenderer.invoke('ghost:routines:enable', input),
+  disableRoutine: (input) => ipcRenderer.invoke('ghost:routines:disable', input),
+  archiveRoutine: (input) => ipcRenderer.invoke('ghost:routines:archive', input),
+  triggerRoutine: (input) => ipcRenderer.invoke('ghost:routines:trigger', input),
+  getRoutineTask: (input) => ipcRenderer.invoke('ghost:routines:tasks:get', input),
+  cancelRoutineTask: (input) => ipcRenderer.invoke('ghost:routines:tasks:cancel', input),
+  previewRoutineSchedule: (input) => ipcRenderer.invoke('ghost:routines:preview', input),
+  diagnoseRoutine: (input) => ipcRenderer.invoke('ghost:routines:diagnose', input),
+  simulateRoutine: (input) => ipcRenderer.invoke('ghost:routines:simulate', input),
+  previewRoutineImport: (input) => ipcRenderer.invoke('ghost:routines:import-preview', input),
+  commitRoutineImport: (input) => ipcRenderer.invoke('ghost:routines:import-commit', input),
+  exportRoutines: (input) => ipcRenderer.invoke('ghost:routines:export', input),
+  getRoutineStats: (input) => ipcRenderer.invoke('ghost:routines:stats', input),
+  listRoutineHistory: (input) => ipcRenderer.invoke('ghost:routines:history', input),
+  listRoutineNotifications: (input) => ipcRenderer.invoke('ghost:routine-notifications:list', input),
+  getRoutineUnreadNotificationCount: (input) =>
+    ipcRenderer.invoke('ghost:routine-notifications:unread-count', input),
+  markRoutineNotificationRead: (input) =>
+    ipcRenderer.invoke('ghost:routine-notifications:mark-read', input),
+  dismissRoutineNotification: (input) =>
+    ipcRenderer.invoke('ghost:routine-notifications:dismiss', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)
