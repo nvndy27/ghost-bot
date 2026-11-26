@@ -1,5 +1,15 @@
 # Progress log
 
+## Provider.3 — Anthropic Claude API Integration & Targeted Core Hardening
+
+2026-11-27. Branched `feat/provider3-claude-api` from `94a71dc` (`feat/provider2-ollama-local`). Commit 1 (`edfbad1`) closed `CORE2-TERM-01` and `CORE1-SS-01`; Commit 2 implemented `AnthropicClaudeApiAdapter` and provider credential namespace with zero live inference or external API calls. See [Provider.3 report](extensions/provider3-claude-api.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Closed `CORE2-TERM-01` (`ScopedTerminalService.revokeByRunId`/`revokeByBotId` wired to `RunOrchestrator.setOnRunTerminated` and `PATCH/DELETE /bots/:id`, startup race closed, unconfirmed running commands marked `uncertain`) and `CORE1-SS-01` (`LinuxSecretServiceStore.getStatus()` fails closed when `busctl`, `org.freedesktop.secrets`, or collections are unavailable/locked) in `tests/core-security-hardening.test.ts` (2/2 PASS). |
+| Implemented | Added `AnthropicClaudeApiAdapter` (`packages/runtime-adapters/claude/anthropic-claude-api.ts`) pinned to `https://api.anthropic.com` (`anthropic-version: 2023-06-01`), `read-only` tool-free SSE streaming, bounded history/tokens/duration/stream, `maxAttempts: 1`, `ProviderSecretCoordinate` (`ghost-bot.provider`) in `SecretStore`, `RuntimePolicyBroker.authorizeClaudeApiExecution()`, `/claude/*` daemon routes, `IPC_CHANNELS.CLAUDE_*`, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI. Assessed local `claude` CLI `2.1.331` read-only (`capabilities.claudeCodeCli: false`). |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider3-claude-production.test.ts` + `tests/core-security-hardening.test.ts` (4/4), 3 consecutive full-workspace regression runs (**223/223** per run: `root` 130/130, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 11 Electron E2E/IPC scripts (`verify-provider3-claude-desktop.mjs` + 10 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
 ## Provider.2 — Ollama Local Runtime Production Integration
 
 2026-11-27. Branched `feat/provider2-ollama-local` from `d6436c6` (`feat/provider1-openclaw-execution`). Offline Provider.2 implementation is **Tested / Implemented** (host Ollama CLI/daemon unavailable) with zero live inference, model downloads, or `sudo` changes. See [Provider.2 report](extensions/provider2-ollama-local.md).

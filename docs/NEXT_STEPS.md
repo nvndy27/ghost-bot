@@ -1,5 +1,10 @@
 # Next steps
 
+## Provider.3 — Anthropic Claude API Integration (Completed Offline / Execution Gated)
+
+1. When explicitly authorized for billed API testing, configure an Anthropic API key in Settings -> Accounts & Providers and run the bounded one-turn live acceptance procedure in `docs/extensions/provider3-claude-api.md`.
+2. Proceed to Google Gemini API-key integration (`Provider.4`) using the same isolated provider credential namespace, official `generativelanguage.googleapis.com` endpoint pinning, and explicit opt-in gates.
+
 ## Provider.2 — Ollama Local Runtime Production Integration (Completed Offline / Host Prerequisite Open)
 
 1. Install Ollama locally and pull a lightweight local model (e.g., `qwen2.5:1.5b` or `llama3.2:1b` for the host's 13 GiB RAM / 4.9 GiB available / RTX 3050 Mobile) when explicitly authorized.

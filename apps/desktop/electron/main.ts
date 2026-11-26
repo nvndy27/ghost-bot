@@ -98,6 +98,9 @@ import {
   SetSkillEnabledInputSchema,
   OpenClawStatusDtoSchema,
   OllamaStatusDtoSchema,
+  ClaudeStatusDtoSchema,
+  SetClaudeCredentialInputSchema,
+  SetClaudeAuthInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1214,6 +1217,39 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.OLLAMA_STATUS, async (event) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     return queryDaemon('/ollama/status', OllamaStatusDtoSchema, { timeoutMs: 12_000 })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/claude/status', ClaudeStatusDtoSchema, { timeoutMs: 12_000 })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_CREDENTIAL_SET, async (event, rawInput) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetClaudeCredentialInputSchema.parse(rawInput)
+    return queryDaemon('/claude/credential', ClaudeStatusDtoSchema, {
+      method: 'PUT',
+      body: parsed,
+      timeoutMs: 12_000,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_CREDENTIAL_DELETE, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/claude/credential', ClaudeStatusDtoSchema, {
+      method: 'DELETE',
+      timeoutMs: 12_000,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_AUTH_SET, async (event, rawInput) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetClaudeAuthInputSchema.parse(rawInput)
+    return queryDaemon('/claude/authorization', ClaudeStatusDtoSchema, {
+      method: 'PUT',
+      body: parsed,
+      timeoutMs: 12_000,
+    })
   })
 
   function assertBoundedTeamsIpcPayload(raw: unknown): void {

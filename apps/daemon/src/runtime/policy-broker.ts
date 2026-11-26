@@ -22,7 +22,7 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'mock'
+  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
@@ -35,6 +35,10 @@ export interface PolicyAuthorizationInput {
   ollamaAvailable?: boolean
   ollamaLoopbackVerified?: boolean
   ollamaLocalOnlyVerified?: boolean
+  claudeExecutionAuthorized?: boolean
+  claudeCredentialConfigured?: boolean
+  claudeKeyringAvailable?: boolean
+  claudeEndpointVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -93,6 +97,17 @@ export class RuntimePolicyBroker {
         ollamaAvailable: input.ollamaAvailable ?? false,
         ollamaLoopbackVerified: input.ollamaLoopbackVerified ?? false,
         ollamaLocalOnlyVerified: input.ollamaLocalOnlyVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'claude-api') {
+      return this.authorizeClaudeApiExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        claudeExecutionAuthorized: input.claudeExecutionAuthorized ?? false,
+        claudeCredentialConfigured: input.claudeCredentialConfigured ?? false,
+        claudeKeyringAvailable: input.claudeKeyringAvailable ?? false,
+        claudeEndpointVerified: input.claudeEndpointVerified ?? false,
       })
     }
 
@@ -254,6 +269,64 @@ export class RuntimePolicyBroker {
     return {
       allowed: true,
       reason: 'Authorized for bounded local read-only Ollama chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeClaudeApiExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    claudeExecutionAuthorized: boolean
+    claudeCredentialConfigured: boolean
+    claudeKeyringAvailable: boolean
+    claudeEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Anthropic Claude API initial integration supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'Anthropic API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Anthropic Claude API execution is gated until explicit API-billed authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://api.anthropic.com endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded API-billed read-only Anthropic Claude chat without tools',
       verifiedModes: ['read-only'],
     }
   }

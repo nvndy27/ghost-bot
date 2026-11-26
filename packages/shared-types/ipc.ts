@@ -76,6 +76,10 @@ export const IPC_CHANNELS = {
   SKILLS_SET_ENABLED: 'ghost:skills:set-enabled',
   OPENCLAW_STATUS: 'ghost:openclaw:status',
   OLLAMA_STATUS: 'ghost:ollama:status',
+  CLAUDE_STATUS: 'ghost:claude:status',
+  CLAUDE_CREDENTIAL_SET: 'ghost:claude:credential:set',
+  CLAUDE_CREDENTIAL_DELETE: 'ghost:claude:credential:delete',
+  CLAUDE_AUTH_SET: 'ghost:claude:auth:set',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1787,6 +1791,73 @@ export const OllamaStatusDtoSchema = z.object({
 
 export type OllamaStatusDto = z.infer<typeof OllamaStatusDtoSchema>
 
+export const SetClaudeCredentialInputSchema = z
+  .object({
+    apiKey: z.string().min(8).max(4096),
+    accountRef: z.string().min(1).max(64).default('default'),
+  })
+  .strict()
+
+export type SetClaudeCredentialInput = z.infer<typeof SetClaudeCredentialInputSchema>
+
+export const SetClaudeAuthInputSchema = z
+  .object({
+    authorized: z.boolean(),
+  })
+  .strict()
+
+export type SetClaudeAuthInput = z.infer<typeof SetClaudeAuthInputSchema>
+
+export const ClaudeStatusDtoSchema = z.object({
+  available: z.boolean(),
+  endpoint: z.string(),
+  apiVersion: z.string(),
+  billingMode: z.literal('api-key-billed'),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  detail: z.string(),
+  keyringAvailable: z.boolean(),
+  keyringLocked: z.boolean(),
+  credentialConfigured: z.boolean(),
+  accountRef: z.string(),
+  maskedKeyHint: z.string().nullable(),
+  credentialGeneration: z.number().int().min(0),
+  executionAuthorized: z.boolean(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    resume: z.boolean(),
+    approvals: z.boolean(),
+    usage: z.boolean(),
+    sandbox: z.boolean(),
+    tools: z.literal(false),
+    claudeCodeCli: z.literal(false),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+    }),
+  ),
+  resourceLimits: z.object({
+    maxConcurrentRuns: z.number(),
+    maxHistoryMessages: z.number(),
+    maxHistoryBytes: z.number(),
+    maxOutputTokens: z.number(),
+    maxDurationMs: z.number(),
+    maxStreamBytes: z.number(),
+  }),
+  diagnostics: z.array(z.string()),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.literal(false),
+    workspaceAllowed: z.literal(false),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type ClaudeStatusDto = z.infer<typeof ClaudeStatusDtoSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1863,6 +1934,10 @@ export interface GhostBotBridge {
   setLocalSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<LocalSkillDto>
   getOpenClawStatus(): Promise<OpenClawStatusDto>
   getOllamaStatus(): Promise<OllamaStatusDto>
+  getClaudeStatus(): Promise<ClaudeStatusDto>
+  setClaudeCredential(input: SetClaudeCredentialInput): Promise<ClaudeStatusDto>
+  deleteClaudeCredential(): Promise<ClaudeStatusDto>
+  setClaudeExecutionAuthorized(input: SetClaudeAuthInput): Promise<ClaudeStatusDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

@@ -8,6 +8,7 @@
     "./codex": "./codex/codex-app-server.ts",
     "./openclaw": "./openclaw/openclaw-gateway.ts",
     "./ollama": "./ollama/ollama-adapter.ts",
+    "./claude": "./claude/anthropic-claude-api.ts",
     "./mock": "./mock/mock-runtime.ts"
   },
   "dependencies": {

@@ -1,5 +1,10 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import {
+  ANTHROPIC_API_VERSION,
+  APPROVED_ANTHROPIC_ORIGIN,
+  AnthropicClaudeApiAdapter,
+} from '@ghost-bot/runtime-adapters/claude'
 import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
 import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
@@ -54,6 +59,7 @@ export interface RuntimeRegistryOptions {
   codexClientFactory?: (version: string | null) => CodexMetadataClient
   openclawAdapter?: OpenClawGatewayAdapter
   ollamaAdapter?: OllamaLocalAdapter
+  claudeAdapter?: AnthropicClaudeApiAdapter
   cacheTtlMs?: number
 }
 
@@ -341,6 +347,90 @@ export class RuntimeRegistry {
       runningModels: summary.runningModels.slice(0, 50),
       resourceLimits: summary.resourceLimits,
       diagnostics: summary.diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getClaudeStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').ClaudeStatusDto> {
+    const adapter =
+      this.options.claudeAdapter ??
+      new AnthropicClaudeApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeClaudeApiExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      claudeExecutionAuthorized: input.executionAuthorized,
+      claudeCredentialConfigured: input.credentialConfigured,
+      claudeKeyringAvailable: input.keyringAvailable,
+      claudeEndpointVerified: adapter.getEndpointOrigin() === APPROVED_ANTHROPIC_ORIGIN,
+    })
+
+    const diagnostics: string[] = [
+      'Uses official Anthropic Messages API (x-api-key + anthropic-version: 2023-06-01); never Claude.ai subscription tokens or browser cookies.',
+      'Initial execution is tool-free read-only chat; Claude Code CLI is not invoked.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_ANTHROPIC_ORIGIN,
+      apiVersion: ANTHROPIC_API_VERSION,
+      billingMode: 'api-key-billed',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'Anthropic API key configured and authorized for bounded API-billed read-only chat'
+            : 'Anthropic API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No Anthropic API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: true,
+        sandbox: false,
+        tools: false,
+        claudeCodeCli: false,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
       policyCompatibility: {
         readOnlyAllowed: readOnlyDecision.allowed,
         askApprovalAllowed: false,

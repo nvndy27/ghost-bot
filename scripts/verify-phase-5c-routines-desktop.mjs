@@ -111,6 +111,7 @@ try {
     await page.getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('button', { name: 'Routines', exact: true }).click()
     const routinesSection2 = page.getByTestId('routines-settings-section')
+    await routinesSection2.getByRole('button', { name: 'Inspect', exact: true }).first().waitFor({ timeout: 10_000 })
     const inspectCount = await routinesSection2.getByRole('button', { name: 'Inspect', exact: true }).count()
     assert.ok(inspectCount >= 2, `Expected >=2 persisted routines after restart, got ${inspectCount}`)
     await routinesSection2.getByRole('button', { name: 'Inspect', exact: true }).last().click()

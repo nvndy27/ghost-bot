@@ -60,11 +60,14 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
-  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw' | 'ollama'>(
+  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api'>(
     'mock-offline',
   )
   const [ollamaStatus, setOllamaStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
+  >(null)
+  const [claudeStatus, setClaudeStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
   >(null)
   const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
   const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
@@ -88,6 +91,12 @@ export function BotEditorModal({
         .then(setOllamaStatus)
         .catch(() => setOllamaStatus(null))
     }
+    if (window.ghostBot?.getClaudeStatus) {
+      void window.ghostBot
+        .getClaudeStatus()
+        .then(setClaudeStatus)
+        .catch(() => setClaudeStatus(null))
+    }
     if (mode === 'edit' && initialBot) {
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
@@ -95,7 +104,8 @@ export function BotEditorModal({
       setRuntimeId(
         initialBot.runtimeId === 'codex' ||
           initialBot.runtimeId === 'openclaw' ||
-          initialBot.runtimeId === 'ollama'
+          initialBot.runtimeId === 'ollama' ||
+          initialBot.runtimeId === 'claude-api'
           ? initialBot.runtimeId
           : 'mock-offline',
       )
@@ -535,13 +545,23 @@ export function BotEditorModal({
                 data-testid="bot-runtime-select"
                 value={runtimeId}
                 onChange={(e) => {
-                  const next = e.target.value as 'mock-offline' | 'codex' | 'openclaw' | 'ollama'
+                  const next = e.target.value as
+                    | 'mock-offline'
+                    | 'codex'
+                    | 'openclaw'
+                    | 'ollama'
+                    | 'claude-api'
                   setDirty(true)
                   setRuntimeId(next)
                   if (next === 'ollama') {
                     setPermission('read-only')
                     if (ollamaStatus && ollamaStatus.models.length > 0) {
                       setModelId(ollamaStatus.models[0].id)
+                    }
+                  } else if (next === 'claude-api') {
+                    setPermission('read-only')
+                    if (claudeStatus && claudeStatus.models.length > 0) {
+                      setModelId(claudeStatus.models[0].id)
                     }
                   }
                 }}
@@ -550,11 +570,18 @@ export function BotEditorModal({
                 <option value="codex">Codex (ChatGPT)</option>
                 <option value="openclaw">OpenClaw Gateway</option>
                 <option value="ollama">Ollama Local</option>
+                <option value="claude-api">Anthropic Claude API (API-key billed)</option>
               </select>
             </label>
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>{runtimeId === 'ollama' ? 'Model (Ollama)' : 'Model (mock)'}</span>
+              <span>
+                {runtimeId === 'ollama'
+                  ? 'Model (Ollama)'
+                  : runtimeId === 'claude-api'
+                    ? 'Model (Claude API)'
+                    : 'Model (mock)'}
+              </span>
               <select
                 data-testid="bot-model-select"
                 value={modelId}
@@ -576,6 +603,20 @@ export function BotEditorModal({
                       {ollamaStatus?.available
                         ? 'No local Ollama models installed'
                         : 'Ollama unavailable (127.0.0.1:11434)'}
+                    </option>
+                  )
+                ) : runtimeId === 'claude-api' ? (
+                  claudeStatus && claudeStatus.models.length > 0 ? (
+                    claudeStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {claudeStatus?.credentialConfigured
+                        ? 'API-billed model discovery requires explicit opt-in'
+                        : 'Configure Anthropic API key in Settings'}
                     </option>
                   )
                 ) : (

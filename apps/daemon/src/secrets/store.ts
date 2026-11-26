@@ -21,6 +21,12 @@ export interface SecretCoordinate {
   refId: string
 }
 
+export interface ProviderSecretCoordinate {
+  ownerId: string
+  providerId: string
+  accountRef: string
+}
+
 export interface SecretStore {
   getStatus(): SecretStoreStatus
   store(coord: SecretCoordinate, label: string, secretValue: string): void
@@ -28,6 +34,11 @@ export interface SecretStore {
   resolve(coord: SecretCoordinate): string
   exists(coord: SecretCoordinate): boolean
   delete(coord: SecretCoordinate): boolean
+  storeProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void
+  replaceProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void
+  resolveProviderSecret(coord: ProviderSecretCoordinate): string
+  existsProviderSecret(coord: ProviderSecretCoordinate): boolean
+  deleteProviderSecret(coord: ProviderSecretCoordinate): boolean
 }
 
 const MAX_SECRET_BYTES = 16 * 1024
@@ -91,6 +102,26 @@ export class UnavailableSecretStore implements SecretStore {
   delete(): boolean {
     throw new McpCredentialError(this.reason)
   }
+
+  storeProviderSecret(): void {
+    throw new McpCredentialError(this.reason)
+  }
+
+  replaceProviderSecret(): void {
+    throw new McpCredentialError(this.reason)
+  }
+
+  resolveProviderSecret(): string {
+    throw new McpCredentialError(this.reason)
+  }
+
+  existsProviderSecret(): boolean {
+    return false
+  }
+
+  deleteProviderSecret(): boolean {
+    throw new McpCredentialError(this.reason)
+  }
 }
 
 export class LinuxSecretServiceStore implements SecretStore {
@@ -117,6 +148,21 @@ export class LinuxSecretServiceStore implements SecretStore {
       coord.serverId,
       'ref_id',
       coord.refId,
+    ]
+  }
+
+  private providerAttrs(coord: ProviderSecretCoordinate): string[] {
+    return [
+      'service',
+      'ghost-bot.provider',
+      'namespace',
+      this.namespace,
+      'owner_id',
+      coord.ownerId,
+      'provider_id',
+      coord.providerId,
+      'account_ref',
+      coord.accountRef,
     ]
   }
 
@@ -370,6 +416,91 @@ export class LinuxSecretServiceStore implements SecretStore {
       )
     }
   }
+
+  storeProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void {
+    this.assertAvailable()
+    const cleanLabel = validateSecretInput(
+      { ownerId: coord.ownerId, serverId: coord.providerId, refId: coord.accountRef },
+      label,
+      secretValue,
+    )
+    try {
+      execFileSync(
+        this.secretToolPath!,
+        ['store', `--label=${cleanLabel}`, ...this.providerAttrs(coord)],
+        {
+          input: secretValue,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 5_000,
+        },
+      )
+    } catch {
+      throw new McpCredentialError(
+        `Failed to store provider credential "${coord.providerId}/${coord.accountRef}" in OS Secret Service`,
+      )
+    }
+  }
+
+  replaceProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void {
+    this.storeProviderSecret(coord, label, secretValue)
+  }
+
+  resolveProviderSecret(coord: ProviderSecretCoordinate): string {
+    this.assertAvailable()
+    if (!coord.ownerId || !coord.providerId || !coord.accountRef) {
+      throw new McpCredentialError('Invalid provider secret coordinate')
+    }
+    try {
+      const value = execFileSync(this.secretToolPath!, ['lookup', ...this.providerAttrs(coord)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
+      }).toString('utf8')
+      if (value.length === 0) {
+        throw new McpCredentialError(
+          `Provider credential "${coord.providerId}/${coord.accountRef}" was not found in OS Secret Service`,
+        )
+      }
+      return value
+    } catch (err) {
+      if (err instanceof McpCredentialError) throw err
+      throw new McpCredentialError(
+        `Provider credential "${coord.providerId}/${coord.accountRef}" was not found or keyring is locked`,
+      )
+    }
+  }
+
+  existsProviderSecret(coord: ProviderSecretCoordinate): boolean {
+    const status = this.getStatus()
+    if (!status.available) return false
+    try {
+      const value = execFileSync(this.secretToolPath!, ['lookup', ...this.providerAttrs(coord)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
+      }).toString('utf8')
+      return value.length > 0
+    } catch {
+      return false
+    }
+  }
+
+  deleteProviderSecret(coord: ProviderSecretCoordinate): boolean {
+    this.assertAvailable()
+    if (!coord.ownerId || !coord.providerId || !coord.accountRef) {
+      throw new McpCredentialError('Invalid provider secret coordinate')
+    }
+    const existed = this.existsProviderSecret(coord)
+    try {
+      execFileSync(this.secretToolPath!, ['clear', ...this.providerAttrs(coord)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
+      })
+      return existed
+    } catch {
+      throw new McpCredentialError(
+        `Failed to delete provider credential "${coord.providerId}/${coord.accountRef}" from OS Secret Service`,
+      )
+    }
+  }
 }
 
 /**
@@ -378,11 +509,16 @@ export class LinuxSecretServiceStore implements SecretStore {
  */
 export class InMemoryTestSecretStore implements SecretStore {
   private readonly items = new Map<string, string>()
+  private readonly providerItems = new Map<string, string>()
   private locked = false
   private available = true
 
   private key(coord: SecretCoordinate): string {
     return `${coord.ownerId}\0${coord.serverId}\0${coord.refId}`
+  }
+
+  private providerKey(coord: ProviderSecretCoordinate): string {
+    return `${coord.ownerId}\0${coord.providerId}\0${coord.accountRef}`
   }
 
   setLocked(locked: boolean): void {
@@ -452,6 +588,41 @@ export class InMemoryTestSecretStore implements SecretStore {
   delete(coord: SecretCoordinate): boolean {
     this.assertAvailable()
     return this.items.delete(this.key(coord))
+  }
+
+  storeProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void {
+    this.assertAvailable()
+    validateSecretInput(
+      { ownerId: coord.ownerId, serverId: coord.providerId, refId: coord.accountRef },
+      label,
+      secretValue,
+    )
+    this.providerItems.set(this.providerKey(coord), secretValue)
+  }
+
+  replaceProviderSecret(coord: ProviderSecretCoordinate, label: string, secretValue: string): void {
+    this.storeProviderSecret(coord, label, secretValue)
+  }
+
+  resolveProviderSecret(coord: ProviderSecretCoordinate): string {
+    this.assertAvailable()
+    const val = this.providerItems.get(this.providerKey(coord))
+    if (val === undefined) {
+      throw new McpCredentialError(
+        `Provider credential "${coord.providerId}/${coord.accountRef}" was not found`,
+      )
+    }
+    return val
+  }
+
+  existsProviderSecret(coord: ProviderSecretCoordinate): boolean {
+    if (!this.getStatus().available) return false
+    return this.providerItems.has(this.providerKey(coord))
+  }
+
+  deleteProviderSecret(coord: ProviderSecretCoordinate): boolean {
+    this.assertAvailable()
+    return this.providerItems.delete(this.providerKey(coord))
   }
 }
 

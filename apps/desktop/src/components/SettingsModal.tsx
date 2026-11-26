@@ -96,6 +96,11 @@ export function SettingsModal({
   const [ollamaStatus, setOllamaStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
   >(null)
+  const [claudeStatus, setClaudeStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
+  >(null)
+  const [claudeApiKeyInput, setClaudeApiKeyInput] = useState('')
+  const [claudeBusy, setClaudeBusy] = useState(false)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -103,6 +108,7 @@ export function SettingsModal({
     if (initialSection) setActiveSection(initialSection)
     setConfirmReset(false)
     setErrorMsg(null)
+    setClaudeApiKeyInput('')
     if (window.ghostBot?.getOpenClawStatus) {
       void window.ghostBot
         .getOpenClawStatus()
@@ -118,6 +124,14 @@ export function SettingsModal({
         .then(setOllamaStatus)
         .catch(() => {
           setOllamaStatus(null)
+        })
+    }
+    if (window.ghostBot?.getClaudeStatus) {
+      void window.ghostBot
+        .getClaudeStatus()
+        .then(setClaudeStatus)
+        .catch(() => {
+          setClaudeStatus(null)
         })
     }
   }, [open, initialSection])
@@ -516,6 +530,119 @@ export function SettingsModal({
                     {ollamaStatus.policyCompatibility.gatedReason && (
                       <small className="gb-muted" data-testid="ollama-gated-reason">
                         Execution gate: {ollamaStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {claudeStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="claude-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>Anthropic Claude API (API-key billed)</strong>
+                      <span className="gb-badge" data-testid="claude-auth-badge">
+                        {claudeStatus.authStatus}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{claudeStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Endpoint: {claudeStatus.endpoint}</span>
+                      <span>Keyring: {claudeStatus.keyringAvailable ? 'available' : claudeStatus.keyringLocked ? 'locked' : 'unavailable'}</span>
+                      <span>Key: {claudeStatus.maskedKeyHint ?? 'not configured'}</span>
+                      <span>Gen: {claudeStatus.credentialGeneration}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">billing: API-key billed (not Pro/Max)</span>
+                      <span className="gb-badge">tools: disabled (read-only chat)</span>
+                      <span className="gb-badge">claude code cli: disabled</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="password"
+                        data-testid="claude-api-key-input"
+                        value={claudeApiKeyInput}
+                        onChange={(e) => setClaudeApiKeyInput(e.target.value)}
+                        placeholder={
+                          claudeStatus.credentialConfigured
+                            ? 'Replace Anthropic API key (sk-ant-...)'
+                            : 'Enter Anthropic API key (sk-ant-...)'
+                        }
+                        autoComplete="off"
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="claude-save-key-btn"
+                        disabled={claudeBusy || claudeApiKeyInput.trim().length < 8}
+                        onClick={() => {
+                          if (!window.ghostBot?.setClaudeCredential) return
+                          setClaudeBusy(true)
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setClaudeCredential({ apiKey: claudeApiKeyInput.trim(), accountRef: 'default' })
+                            .then((next) => {
+                              setClaudeStatus(next)
+                              setClaudeApiKeyInput('')
+                            })
+                            .catch((err: unknown) => {
+                              setErrorMsg(err instanceof Error ? err.message : 'Failed to save API key')
+                            })
+                            .finally(() => setClaudeBusy(false))
+                        }}
+                      >
+                        {claudeStatus.credentialConfigured ? 'Replace key' : 'Save key'}
+                      </button>
+                      {claudeStatus.credentialConfigured && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="claude-delete-key-btn"
+                            disabled={claudeBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.deleteClaudeCredential) return
+                              setClaudeBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .deleteClaudeCredential()
+                                .then(setClaudeStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to delete API key')
+                                })
+                                .finally(() => setClaudeBusy(false))
+                            }}
+                          >
+                            Delete key
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="claude-toggle-auth-btn"
+                            disabled={claudeBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.setClaudeExecutionAuthorized) return
+                              setClaudeBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .setClaudeExecutionAuthorized({
+                                  authorized: !claudeStatus.executionAuthorized,
+                                })
+                                .then(setClaudeStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
+                                })
+                                .finally(() => setClaudeBusy(false))
+                            }}
+                          >
+                            {claudeStatus.executionAuthorized ? 'Revoke API opt-in' : 'Authorize API-billed chat'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {claudeStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="claude-gated-reason">
+                        Execution gate: {claudeStatus.policyCompatibility.gatedReason}
                       </small>
                     )}
                   </div>

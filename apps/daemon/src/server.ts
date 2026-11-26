@@ -62,6 +62,8 @@ import {
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
   SetMcpServerEnabledInputSchema,
+  SetClaudeAuthInputSchema,
+  SetClaudeCredentialInputSchema,
   SetMcpServerSecretInputSchema,
   SetSkillEnabledInputSchema,
   SkillIdParamSchema,
@@ -101,6 +103,8 @@ import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
 import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
+import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
+import { LOCAL_USER_ID } from './memory/service.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -111,6 +115,7 @@ export interface DaemonServerOptions {
   codexVersion?: string | null
   mcpSecretResolver?: McpSecretResolver
   mcpGracefulShutdownMs?: number
+  secretStore?: SecretStore
 }
 
 function constantTimeTokenMatch(headerValue: string | undefined, expectedToken: string): boolean {
@@ -172,6 +177,7 @@ export class GhostBotDaemon {
   private computerUseService: ComputerUseService | null = null
   private terminalService: ScopedTerminalService | null = null
   private skillsService: LocalSkillsService | null = null
+  private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -324,6 +330,7 @@ export class GhostBotDaemon {
     this.terminalService = new ScopedTerminalService(dbHandle, this.botRepo)
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
+    this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
       void this.computerUseService?.revokeByRunId(runId, reason).catch(() => {})
       void this.terminalService?.revokeByRunId(runId, reason).catch(() => {})
@@ -357,6 +364,89 @@ export class GhostBotDaemon {
     const addr = server.address()
     const boundPort = typeof addr === 'object' && addr ? addr.port : port
     return { address: `http://127.0.0.1:${boundPort}` }
+  }
+
+  private readClaudeProviderMeta(): {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  } {
+    const row = this.dbHandle?.sqlite
+      .prepare(`SELECT value_json FROM settings WHERE key = 'provider.anthropic.v1'`)
+      .get() as { value_json: string } | undefined
+    if (!row) {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+    try {
+      const parsed = JSON.parse(row.value_json) as Record<string, unknown>
+      return {
+        accountRef:
+          typeof parsed.accountRef === 'string' && parsed.accountRef ? parsed.accountRef : 'default',
+        maskedKeyHint: typeof parsed.maskedKeyHint === 'string' ? parsed.maskedKeyHint : null,
+        credentialGeneration:
+          typeof parsed.credentialGeneration === 'number' ? parsed.credentialGeneration : 0,
+        executionAuthorized: parsed.executionAuthorized === true,
+      }
+    } catch {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+  }
+
+  private writeClaudeProviderMeta(meta: {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  }): void {
+    const nowIso = new Date().toISOString()
+    this.dbHandle?.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES ('provider.anthropic.v1', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(JSON.stringify(meta), nowIso)
+  }
+
+  private async getClaudeStatusDto(): Promise<import('@ghost-bot/shared-types/ipc').ClaudeStatusDto> {
+    const meta = this.readClaudeProviderMeta()
+    const store = this.providerSecretStore
+    const status = store?.getStatus() ?? {
+      available: false,
+      locked: false,
+      backend: 'unavailable' as const,
+      reason: 'Secret store not initialized',
+    }
+    const credentialConfigured =
+      status.available &&
+      Boolean(
+        store?.existsProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'anthropic',
+          accountRef: meta.accountRef,
+        }),
+      )
+    return this.runtimeRegistry.getClaudeStatus({
+      keyringAvailable: status.available,
+      keyringLocked: status.locked,
+      keyringReason: status.reason,
+      credentialConfigured,
+      accountRef: meta.accountRef,
+      maskedKeyHint: credentialConfigured ? meta.maskedKeyHint : null,
+      credentialGeneration: meta.credentialGeneration,
+      executionAuthorized: credentialConfigured ? meta.executionAuthorized : false,
+    })
   }
 
   async stop(): Promise<void> {
@@ -443,6 +533,130 @@ export class GhostBotDaemon {
 
       if (req.method === 'GET' && url.pathname === '/ollama/status') {
         sendJson(res, 200, await this.runtimeRegistry.getOllamaStatus())
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/claude/status') {
+        sendJson(res, 200, await this.getClaudeStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/claude/credential') {
+        const body = await readJsonBody(req)
+        const parsed = SetClaudeCredentialInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid credential payload', {
+            statusCode: 400,
+          })
+        }
+        const apiKey = parsed.data.apiKey.trim()
+        if (!apiKey || apiKey.includes('\0') || /\s/.test(apiKey)) {
+          throw new DaemonError('VALIDATION_ERROR', 'Anthropic API key format is invalid', {
+            statusCode: 400,
+          })
+        }
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readClaudeProviderMeta()
+        const accountRef = parsed.data.accountRef
+        store.storeProviderSecret(
+          { ownerId: LOCAL_USER_ID, providerId: 'anthropic', accountRef },
+          `Ghost Bot Anthropic API (${accountRef})`,
+          apiKey,
+        )
+        const maskedKeyHint =
+          apiKey.length >= 10
+            ? `${apiKey.slice(0, 7)}...${apiKey.slice(-4)}`
+            : `...${apiKey.slice(-4)}`
+        this.writeClaudeProviderMeta({
+          accountRef,
+          maskedKeyHint,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        sendJson(res, 200, await this.getClaudeStatusDto())
+        return
+      }
+
+      if (req.method === 'DELETE' && url.pathname === '/claude/credential') {
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readClaudeProviderMeta()
+        store.deleteProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'anthropic',
+          accountRef: prevMeta.accountRef,
+        })
+        this.writeClaudeProviderMeta({
+          accountRef: prevMeta.accountRef,
+          maskedKeyHint: null,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        sendJson(res, 200, await this.getClaudeStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/claude/authorization') {
+        const body = await readJsonBody(req)
+        const parsed = SetClaudeAuthInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', 'Invalid authorization payload', { statusCode: 400 })
+        }
+        const meta = this.readClaudeProviderMeta()
+        const store = this.providerSecretStore
+        const storeStatus = store?.getStatus() ?? {
+          available: false,
+          locked: false,
+          backend: 'unavailable' as const,
+          reason: 'Secret store not initialized',
+        }
+        if (parsed.data.authorized) {
+          if (!storeStatus.available) {
+            throw new DaemonError(
+              storeStatus.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+              storeStatus.reason ?? 'OS Secret Service is unavailable or locked',
+              { statusCode: 503 },
+            )
+          }
+          const exists = store!.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'anthropic',
+            accountRef: meta.accountRef,
+          })
+          if (!exists) {
+            throw new DaemonError(
+              'CLAUDE_CREDENTIAL_MISSING',
+              'Configure an Anthropic API key before authorizing execution',
+              { statusCode: 400 },
+            )
+          }
+        }
+        this.writeClaudeProviderMeta({
+          ...meta,
+          executionAuthorized: parsed.data.authorized,
+        })
+        sendJson(res, 200, await this.getClaudeStatusDto())
         return
       }
 
