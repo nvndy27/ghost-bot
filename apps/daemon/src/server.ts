@@ -54,9 +54,11 @@ import {
   SearchKnowledgeDocsInputSchema,
   SearchMemoriesIpcInputSchema,
   SessionIdSchema,
+  DeleteMcpServerSecretInputSchema,
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
   SetMcpServerEnabledInputSchema,
+  SetMcpServerSecretInputSchema,
   StartRunInputSchema,
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
@@ -1143,6 +1145,54 @@ export class GhostBotDaemon {
           }
           sendJson(res, 200, await mcpService.getPrompt(parsed.data))
           return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/secrets/status') {
+          sendJson(res, 200, mcpService.getSecretStoreStatus())
+          return
+        }
+
+        const mcpServerSecretDeleteMatch = /^\/mcp\/servers\/([^/]+)\/secrets\/([^/]+)$/.exec(
+          url.pathname,
+        )
+        if (mcpServerSecretDeleteMatch && req.method === 'DELETE') {
+          const parsed = DeleteMcpServerSecretInputSchema.safeParse({
+            serverId: decodeURIComponent(mcpServerSecretDeleteMatch[1]),
+            refId: decodeURIComponent(mcpServerSecretDeleteMatch[2]),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid secret reference delete params', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, await mcpService.deleteServerSecretRef(parsed.data))
+          return
+        }
+
+        const mcpServerSecretsMatch = /^\/mcp\/servers\/([^/]+)\/secrets$/.exec(url.pathname)
+        if (mcpServerSecretsMatch) {
+          const idCheck = McpServerIdParamSchema.safeParse({ id: decodeURIComponent(mcpServerSecretsMatch[1]) })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid MCP server identifier', { statusCode: 400 })
+          }
+          if (req.method === 'GET') {
+            sendJson(res, 200, mcpService.listServerSecretRefs(idCheck.data.id))
+            return
+          }
+          if (req.method === 'PUT') {
+            const body = await readJsonBody(req)
+            const parsed = SetMcpServerSecretInputSchema.safeParse({
+              ...(body && typeof body === 'object' ? body : {}),
+              serverId: idCheck.data.id,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid MCP secret payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, mcpService.setServerSecretRef(parsed.data))
+            return
+          }
         }
 
         const mcpActionMatch = /^\/mcp\/servers\/([^/]+)\/(trust|revoke-trust|enabled|connect|disconnect|capabilities)$/.exec(

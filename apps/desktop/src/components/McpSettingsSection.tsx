@@ -5,6 +5,8 @@ import type {
   McpCapabilitySnapshotDto,
   McpScopeInput,
   McpServerDto,
+  McpServerSecretRefStatusDto,
+  SecretStoreStatusDto,
 } from '@ghost-bot/shared-types/ipc'
 import type { WorkspaceBot } from '../types/workspace.ts'
 
@@ -51,8 +53,22 @@ export function McpSettingsSection({
 
   const [selectedCaps, setSelectedCaps] = useState<McpCapabilitySnapshotDto | null>(null)
   const [previewText, setPreviewText] = useState<string | null>(null)
+  const [secretStatus, setSecretStatus] = useState<SecretStoreStatusDto | null>(null)
+  const [secretServerId, setSecretServerId] = useState<string | null>(null)
+  const [secretRefs, setSecretRefs] = useState<McpServerSecretRefStatusDto[]>([])
+  const [secretEnvVar, setSecretEnvVar] = useState('')
+  const [secretRefId, setSecretRefId] = useState('')
+  const [secretLabel, setSecretLabel] = useState('')
+  const [secretValue, setSecretValue] = useState('')
+  const [confirmDeleteRefId, setConfirmDeleteRefId] = useState<string | null>(null)
   const loadSeqRef = useRef(0)
   const capsSeqRef = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      setSecretValue('')
+    }
+  }, [])
 
   useEffect(() => {
     if (!botId && defaultBotId) {
@@ -67,9 +83,13 @@ export function McpSettingsSection({
     setLoading(true)
     setError(null)
     try {
-      const res = await bridge.listMcpServers({ includeUserWide: true, limit: 100 })
+      const [res, keyStatus] = await Promise.all([
+        bridge.listMcpServers({ includeUserWide: true, limit: 100 }),
+        bridge.getSecretStoreStatus().catch(() => null),
+      ])
       if (seq !== loadSeqRef.current) return
       setServers(res.servers)
+      if (keyStatus) setSecretStatus(keyStatus)
     } catch (err) {
       if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load MCP servers')
@@ -193,6 +213,72 @@ export function McpSettingsSection({
     }
   }
 
+  const loadServerSecrets = async (serverId: string) => {
+    setBusyId(serverId)
+    setError(null)
+    setConfirmDeleteRefId(null)
+    try {
+      const res = await requireBridge().listMcpServerSecrets(serverId)
+      setSecretStatus(res.status)
+      setSecretServerId(serverId)
+      setSecretRefs(res.refs)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load MCP credential references')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleSaveSecretRef = async () => {
+    if (!secretServerId) return
+    setError(null)
+    setNotice(null)
+    const envVar = secretEnvVar.trim()
+    const refId = secretRefId.trim()
+    const label = secretLabel.trim()
+    const rawVal = secretValue
+    setSecretValue('')
+    if (!envVar || !refId || !rawVal) {
+      setError('Environment variable, reference ID, and secret value are required.')
+      return
+    }
+    setBusyId(`secret-${secretServerId}`)
+    try {
+      await requireBridge().setMcpServerSecret({
+        serverId: secretServerId,
+        envVar,
+        refId,
+        ...(label ? { label } : {}),
+        secretValue: rawVal,
+      })
+      setSecretEnvVar('')
+      setSecretRefId('')
+      setSecretLabel('')
+      setNotice(`Saved secret reference "${refId}" in OS keyring. Re-approve trust if configuration changed.`)
+      await Promise.all([loadServers(), loadServerSecrets(secretServerId)])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store secret in OS keyring')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleDeleteSecretRef = async (serverId: string, refId: string) => {
+    setError(null)
+    setNotice(null)
+    setBusyId(`secret-del-${refId}`)
+    try {
+      await requireBridge().deleteMcpServerSecret({ serverId, refId })
+      setConfirmDeleteRefId(null)
+      setNotice(`Deleted secret reference "${refId}" from OS keyring and server config.`)
+      await Promise.all([loadServers(), loadServerSecrets(serverId)])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete secret reference')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div data-testid="mcp-settings-section">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -226,6 +312,27 @@ export function McpSettingsSection({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {secretStatus && (
+        <div
+          data-testid="mcp-keyring-status"
+          style={{
+            padding: '8px 10px',
+            marginBottom: '10px',
+            borderRadius: '6px',
+            border: '1px solid var(--gb-border)',
+            fontSize: '12.5px',
+          }}
+        >
+          <strong>OS Keyring:</strong>{' '}
+          {secretStatus.available
+            ? `Available (${secretStatus.backend})`
+            : secretStatus.locked
+              ? `Locked (${secretStatus.backend})`
+              : `Unavailable (${secretStatus.backend})`}
+          {secretStatus.reason ? ` — ${secretStatus.reason}` : ' — Secret values stay in OS Secret Service and are never persisted in SQLite or displayed in UI.'}
         </div>
       )}
 
@@ -552,8 +659,163 @@ export function McpSettingsSection({
                   Error: {srv.lastError}
                 </div>
               )}
+              <div style={{ marginTop: '6px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="gb-btn"
+                  data-testid={`mcp-manage-secrets-${srv.id}`}
+                  disabled={busyId === srv.id}
+                  onClick={() =>
+                    secretServerId === srv.id
+                      ? (setSecretServerId(null), setSecretValue(''))
+                      : void loadServerSecrets(srv.id)
+                  }
+                >
+                  {secretServerId === srv.id ? 'Hide Credentials' : `Credentials (${srv.transport.secretRefs.length})`}
+                </button>
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {secretServerId && (
+        <div
+          data-testid="mcp-credentials-panel"
+          style={{
+            marginTop: '14px',
+            border: '1px solid var(--gb-border)',
+            borderRadius: '8px',
+            padding: '12px',
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: '13.5px', marginBottom: '6px' }}>
+            Credential References ({secretServerId})
+          </div>
+          {secretRefs.length === 0 ? (
+            <p className="gb-muted" style={{ fontSize: '12.5px', margin: '0 0 8px' }}>
+              No credential references configured for this server.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
+              {secretRefs.map((ref) => (
+                <div
+                  key={ref.refId}
+                  data-testid={`mcp-secret-ref-${ref.refId}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '6px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--gb-border)',
+                    fontSize: '12px',
+                  }}
+                >
+                  <div>
+                    <strong>{ref.envVar}</strong> · <code>{ref.refId}</code>
+                    {ref.label ? ` (${ref.label})` : ''}{' '}
+                    <span className="gb-badge">
+                      {ref.hasStoredSecret ? 'stored in keyring' : 'missing in keyring'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      className="gb-btn"
+                      data-testid={`mcp-secret-replace-${ref.refId}`}
+                      onClick={() => {
+                        setSecretEnvVar(ref.envVar)
+                        setSecretRefId(ref.refId)
+                        setSecretLabel(ref.label ?? '')
+                        setSecretValue('')
+                      }}
+                    >
+                      Replace
+                    </button>
+                    {confirmDeleteRefId === ref.refId ? (
+                      <button
+                        type="button"
+                        className="gb-btn"
+                        data-testid={`mcp-secret-confirm-delete-${ref.refId}`}
+                        disabled={busyId === `secret-del-${ref.refId}`}
+                        onClick={() => void handleDeleteSecretRef(secretServerId, ref.refId)}
+                      >
+                        Confirm Delete
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="gb-btn"
+                        data-testid={`mcp-secret-delete-${ref.refId}`}
+                        onClick={() => setConfirmDeleteRefId(ref.refId)}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <label style={{ fontSize: '12px' }}>
+              Env Var
+              <input
+                className="gb-input"
+                data-testid="mcp-secret-env-input"
+                value={secretEnvVar}
+                onChange={(e) => setSecretEnvVar(e.target.value)}
+                placeholder="GITHUB_TOKEN"
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </label>
+            <label style={{ fontSize: '12px' }}>
+              Reference ID
+              <input
+                className="gb-input"
+                data-testid="mcp-secret-refid-input"
+                value={secretRefId}
+                onChange={(e) => setSecretRefId(e.target.value)}
+                placeholder="github-token-1"
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </label>
+            <label style={{ fontSize: '12px' }}>
+              Label (optional)
+              <input
+                className="gb-input"
+                data-testid="mcp-secret-label-input"
+                value={secretLabel}
+                onChange={(e) => setSecretLabel(e.target.value)}
+                placeholder="GitHub PAT"
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </label>
+            <label style={{ fontSize: '12px' }}>
+              Secret Value (never displayed)
+              <input
+                type="password"
+                autoComplete="off"
+                className="gb-input"
+                data-testid="mcp-secret-value-input"
+                value={secretValue}
+                onChange={(e) => setSecretValue(e.target.value)}
+                placeholder="Enter secret value"
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="gb-btn gb-btn-primary"
+            data-testid="mcp-secret-save-btn"
+            disabled={busyId === `secret-${secretServerId}` || secretStatus?.available === false}
+            onClick={() => void handleSaveSecretRef()}
+          >
+            {busyId === `secret-${secretServerId}` ? 'Saving…' : 'Save Credential to Keyring'}
+          </button>
         </div>
       )}
 

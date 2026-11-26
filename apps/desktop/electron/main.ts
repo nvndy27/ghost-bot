@@ -82,6 +82,10 @@ import {
   ExecuteComputerUseActionResultDtoSchema,
   ComputerUseLedgerEntryDtoSchema,
   ComputerUseEmergencyStopInputSchema,
+  SecretStoreStatusDtoSchema,
+  ListMcpServerSecretsResponseSchema,
+  SetMcpServerSecretInputSchema,
+  DeleteMcpServerSecretInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -242,6 +246,12 @@ async function startDaemon(): Promise<void> {
       GHOST_BOT_RUNTIME_MODE: runtimeMode,
       ...(process.env.GHOST_CU_ENABLE_TEST_FIXTURE === '1'
         ? { GHOST_CU_ENABLE_TEST_FIXTURE: '1' }
+        : {}),
+      ...(process.env.GHOST_SECRET_NAMESPACE
+        ? { GHOST_SECRET_NAMESPACE: process.env.GHOST_SECRET_NAMESPACE }
+        : {}),
+      ...(process.env.GHOST_SECRET_STORE_MODE
+        ? { GHOST_SECRET_STORE_MODE: process.env.GHOST_SECRET_STORE_MODE }
         : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -1046,6 +1056,47 @@ function registerIpcHandlers(): void {
       method: 'POST',
       body: parsed,
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SECRET_STORE_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/secrets/status', SecretStoreStatusDtoSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVER_SECRETS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = McpServerIdParamSchema.parse(params)
+    return queryDaemon(
+      `/mcp/servers/${encodeURIComponent(id)}/secrets`,
+      ListMcpServerSecretsResponseSchema,
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVER_SECRETS_SET, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
+    const parsed = SetMcpServerSecretInputSchema.parse(params)
+    return queryDaemon(
+      `/mcp/servers/${encodeURIComponent(parsed.serverId)}/secrets`,
+      McpServerDtoSchema,
+      {
+        method: 'PUT',
+        body: parsed,
+      },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.MCP_SERVER_SECRETS_DELETE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMcpIpcPayload(params)
+    const parsed = DeleteMcpServerSecretInputSchema.parse(params)
+    return queryDaemon(
+      `/mcp/servers/${encodeURIComponent(parsed.serverId)}/secrets/${encodeURIComponent(parsed.refId)}`,
+      McpServerDtoSchema,
+      {
+        method: 'DELETE',
+      },
+    )
   })
 
   function assertBoundedTeamsIpcPayload(raw: unknown): void {

@@ -1,6 +1,7 @@
 import {
   buildCapabilityKey,
   createBorrowedMcpDatabaseHandle,
+  MCP_LIMITS,
   McpAuthorizationError,
   McpCancelledError,
   McpConnectionManager,
@@ -8,6 +9,7 @@ import {
   McpDuplicateError,
   McpError,
   McpNotFoundError,
+  McpSecretRefSchema,
   McpTimeoutError,
   McpToolExecutionError,
   McpTransportError,
@@ -52,20 +54,42 @@ import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
 import { deriveWorkspaceId, LOCAL_USER_ID } from '../memory/service.ts'
 import type { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
+import {
+  createDefaultSecretStore,
+  UnavailableSecretStore,
+  type SecretStore,
+  type SecretStoreStatus,
+} from '../secrets/store.ts'
 import type { SettingsRepository } from '../settings/repository.ts'
 
 const DAEMON_MCP_ACTOR_ID = 'daemon_mcp'
 
 export type McpSecretResolver = (server: McpServerConfig) => Record<string, string>
 
-export function createDefaultMcpSecretResolver(): McpSecretResolver {
+export function createDefaultMcpSecretResolver(secretStore?: SecretStore): McpSecretResolver {
+  const store = secretStore ?? new UnavailableSecretStore('OS secret store is unavailable; cannot resolve MCP server secret references')
   return (server) => {
-    if (server.transport.secretRefs.length > 0) {
+    if (server.transport.secretRefs.length === 0) {
+      return {}
+    }
+    if (
+      server.trustState !== 'trusted' ||
+      !server.enabled ||
+      server.trustedFingerprint !== server.configFingerprint
+    ) {
       throw new McpCredentialError(
-        'OS secret store is unavailable; cannot resolve MCP server secret references',
+        'Cannot resolve secrets for untrusted, disabled, or revoked MCP server',
       )
     }
-    return {}
+    const resolved: Record<string, string> = {}
+    for (const ref of server.transport.secretRefs) {
+      resolved[ref.envVar] = store.resolve({
+        ownerId: server.scope.userId,
+        serverId: server.id,
+        refId: ref.refId,
+      })
+    }
+    return resolved
   }
 }
 
@@ -73,6 +97,7 @@ export interface McpServiceOptions {
   db: DatabaseHandle
   settingsRepo: SettingsRepository
   policyBroker: RuntimePolicyBroker
+  secretStore?: SecretStore
   secretResolver?: McpSecretResolver
   hostEnv?: Record<string, string | undefined>
   gracefulShutdownMs?: number
@@ -187,6 +212,7 @@ export class McpService {
   private readonly policyBroker: RuntimePolicyBroker
   private readonly mcpHandle: McpDatabaseHandle
   private readonly registry: SqliteMcpRegistry
+  private readonly secretStore: SecretStore
   private readonly connectionManager: McpConnectionManager
   private readonly capabilitiesCache = new Map<string, McpCapabilitySnapshot>()
   private readonly activeRunPermissionByServer = new Map<string, PermissionMode>()
@@ -197,8 +223,9 @@ export class McpService {
     this.policyBroker = options.policyBroker
     this.mcpHandle = createBorrowedMcpDatabaseHandle(options.db.sqlite)
     this.registry = new SqliteMcpRegistry(this.mcpHandle)
+    this.secretStore = options.secretStore ?? createDefaultSecretStore()
 
-    const resolveSecrets = options.secretResolver ?? createDefaultMcpSecretResolver()
+    const resolveSecrets = options.secretResolver ?? createDefaultMcpSecretResolver(this.secretStore)
     this.connectionManager = new McpConnectionManager({
       registry: this.registry,
       hostEnv: options.hostEnv ?? {},
@@ -504,7 +531,174 @@ export class McpService {
       if (!deleted) {
         throw new DaemonError('MCP_NOT_FOUND', 'MCP server not found', { statusCode: 404 })
       }
+      for (const ref of existing.transport.secretRefs) {
+        try {
+          this.secretStore.delete({
+            ownerId: existing.scope.userId,
+            serverId: existing.id,
+            refId: ref.refId,
+          })
+        } catch {
+          // Best-effort cleanup if keyring is locked during server deletion
+        }
+      }
       return { deletedId: existing.id }
+    } catch (err) {
+      throw mapMcpError(err)
+    }
+  }
+
+  getSecretStoreStatus(): SecretStoreStatus {
+    return this.secretStore.getStatus()
+  }
+
+  listServerSecretRefs(serverId: string): {
+    status: SecretStoreStatus
+    refs: Array<{ envVar: string; refId: string; label?: string; hasStoredSecret: boolean }>
+  } {
+    try {
+      const server = this.getServerUnscopedForDaemon(serverId)
+      const status = this.secretStore.getStatus()
+      return {
+        status,
+        refs: server.transport.secretRefs.map((ref) => ({
+          envVar: ref.envVar,
+          refId: ref.refId,
+          ...(ref.label ? { label: ref.label } : {}),
+          hasStoredSecret: status.available
+            ? this.secretStore.exists({
+                ownerId: server.scope.userId,
+                serverId: server.id,
+                refId: ref.refId,
+              })
+            : false,
+        })),
+      }
+    } catch (err) {
+      throw mapMcpError(err)
+    }
+  }
+
+  setServerSecretRef(rawInput: {
+    serverId: string
+    envVar: string
+    refId: string
+    label?: string
+    secretValue: string
+  }): McpServerDto {
+    try {
+      const server = this.getServerUnscopedForDaemon(rawInput.serverId)
+      const parsedRef = McpSecretRefSchema.parse({
+        envVar: rawInput.envVar,
+        refId: rawInput.refId,
+        ...(rawInput.label?.trim() ? { label: rawInput.label.trim() } : {}),
+      })
+      const existingRefs = [...server.transport.secretRefs]
+      const existingIdx = existingRefs.findIndex((r) => r.refId === parsedRef.refId)
+      const duplicateEnv = existingRefs.some(
+        (r, idx) => idx !== existingIdx && r.envVar === parsedRef.envVar,
+      )
+      if (duplicateEnv) {
+        throw new McpCredentialError(
+          `Environment variable "${parsedRef.envVar}" is already bound to another secret reference`,
+        )
+      }
+      if (existingIdx === -1 && existingRefs.length >= MCP_LIMITS.maxSecretRefsCount) {
+        throw new McpValidationError(
+          `Cannot exceed ${MCP_LIMITS.maxSecretRefsCount} secret references per MCP server`,
+        )
+      }
+
+      const nextRefs =
+        existingIdx >= 0
+          ? existingRefs.map((r, idx) => (idx === existingIdx ? parsedRef : r))
+          : [...existingRefs, parsedRef]
+
+      const status = this.secretStore.getStatus()
+      if (!status.available) {
+        throw new McpCredentialError(
+          status.reason ?? 'OS Secret Service is unavailable or locked',
+        )
+      }
+
+      const auth = this.buildAuthForServer(server)
+      const existingSameMetadata =
+        existingIdx >= 0 &&
+        existingRefs[existingIdx]!.envVar === parsedRef.envVar &&
+        (existingRefs[existingIdx]!.label ?? undefined) === (parsedRef.label ?? undefined)
+
+      const updated = existingSameMetadata
+        ? server
+        : this.registry.update(auth, server.id, {
+            transport: {
+              ...server.transport,
+              secretRefs: nextRefs,
+            },
+          })
+
+      try {
+        this.secretStore.store(
+          {
+            ownerId: server.scope.userId,
+            serverId: server.id,
+            refId: parsedRef.refId,
+          },
+          parsedRef.label ?? `Ghost Bot MCP (${server.displayName}:${parsedRef.envVar})`,
+          rawInput.secretValue,
+        )
+      } catch (storeErr) {
+        if (!existingSameMetadata) {
+          try {
+            this.registry.update(auth, server.id, {
+              transport: {
+                ...server.transport,
+                secretRefs: existingRefs,
+              },
+            })
+          } catch {
+            // Best-effort rollback
+          }
+        }
+        throw storeErr
+      }
+
+      if (!existingSameMetadata) {
+        this.capabilitiesCache.delete(server.id)
+      }
+      return toServerDto(updated, this.connectionManager.getConnectionInfo(updated.id))
+    } catch (err) {
+      throw mapMcpError(err)
+    }
+  }
+
+  async deleteServerSecretRef(rawInput: {
+    serverId: string
+    refId: string
+  }): Promise<McpServerDto> {
+    try {
+      const server = this.getServerUnscopedForDaemon(rawInput.serverId)
+      const target = server.transport.secretRefs.find((r) => r.refId === rawInput.refId)
+      if (!target) {
+        throw new McpNotFoundError(`Secret reference "${rawInput.refId}" not found on server`)
+      }
+
+      this.secretStore.delete({
+        ownerId: server.scope.userId,
+        serverId: server.id,
+        refId: target.refId,
+      })
+
+      const auth = this.buildAuthForServer(server)
+      const nextRefs = server.transport.secretRefs.filter((r) => r.refId !== target.refId)
+      const updated = this.registry.update(auth, server.id, {
+        transport: {
+          ...server.transport,
+          secretRefs: nextRefs,
+        },
+      })
+      this.capabilitiesCache.delete(server.id)
+      await this.connectionManager.disconnect(server.id)
+      return toServerDto(updated, this.connectionManager.getConnectionInfo(updated.id))
     } catch (err) {
       throw mapMcpError(err)
     }

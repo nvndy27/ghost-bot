@@ -60,6 +60,10 @@ export const IPC_CHANNELS = {
   MCP_SERVERS_CAPABILITIES: 'ghost:mcp:servers:capabilities',
   MCP_SERVERS_READ_RESOURCE: 'ghost:mcp:servers:read-resource',
   MCP_SERVERS_GET_PROMPT: 'ghost:mcp:servers:get-prompt',
+  MCP_SECRET_STORE_STATUS: 'ghost:mcp:secrets:status',
+  MCP_SERVER_SECRETS_LIST: 'ghost:mcp:servers:secrets:list',
+  MCP_SERVER_SECRETS_SET: 'ghost:mcp:servers:secrets:set',
+  MCP_SERVER_SECRETS_DELETE: 'ghost:mcp:servers:secrets:delete',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1521,6 +1525,52 @@ export type PreviewTeamPlanIpcInput = z.infer<typeof PreviewTeamPlanIpcInputSche
 export type StartTeamRunIpcInput = z.infer<typeof StartTeamRunIpcInputSchema>
 export type ListTeamMessagesIpcInput = z.infer<typeof ListTeamMessagesIpcInputSchema>
 
+export const SecretStoreStatusDtoSchema = z.object({
+  available: z.boolean(),
+  locked: z.boolean(),
+  backend: z.enum(['linux-secret-service', 'memory-test-only', 'unavailable']),
+  reason: z.string().nullable(),
+})
+
+export type SecretStoreStatusDto = z.infer<typeof SecretStoreStatusDtoSchema>
+
+export const McpServerSecretRefStatusDtoSchema = z.object({
+  envVar: z.string(),
+  refId: z.string(),
+  label: z.string().optional(),
+  hasStoredSecret: z.boolean(),
+})
+
+export type McpServerSecretRefStatusDto = z.infer<typeof McpServerSecretRefStatusDtoSchema>
+
+export const ListMcpServerSecretsResponseSchema = z.object({
+  status: SecretStoreStatusDtoSchema,
+  refs: z.array(McpServerSecretRefStatusDtoSchema),
+})
+
+export type ListMcpServerSecretsResponse = z.infer<typeof ListMcpServerSecretsResponseSchema>
+
+export const SetMcpServerSecretInputSchema = z
+  .object({
+    serverId: McpIpcIdSchema,
+    envVar: z.string().trim().regex(/^[A-Z_][A-Z0-9_]{0,63}$/),
+    refId: McpIpcIdSchema,
+    label: z.string().trim().min(1).max(120).optional(),
+    secretValue: z.string().min(1).max(16384),
+  })
+  .strict()
+
+export type SetMcpServerSecretInput = z.infer<typeof SetMcpServerSecretInputSchema>
+
+export const DeleteMcpServerSecretInputSchema = z
+  .object({
+    serverId: McpIpcIdSchema,
+    refId: McpIpcIdSchema,
+  })
+  .strict()
+
+export type DeleteMcpServerSecretInput = z.infer<typeof DeleteMcpServerSecretInputSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1581,6 +1631,10 @@ export interface GhostBotBridge {
   getMcpCapabilities(id: string): Promise<McpCapabilitySnapshotDto | null>
   readMcpResource(input: ReadMcpResourceInput): Promise<ReadMcpResourceResponse>
   getMcpPrompt(input: GetMcpPromptInput): Promise<GetMcpPromptResponse>
+  getSecretStoreStatus(): Promise<SecretStoreStatusDto>
+  listMcpServerSecrets(serverId: string): Promise<ListMcpServerSecretsResponse>
+  setMcpServerSecret(input: SetMcpServerSecretInput): Promise<McpServerDto>
+  deleteMcpServerSecret(input: DeleteMcpServerSecretInput): Promise<McpServerDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>
