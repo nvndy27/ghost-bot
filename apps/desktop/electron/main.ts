@@ -67,6 +67,21 @@ import {
   RoutineImportCommitDtoSchema,
   RoutineExportBundleDtoSchema,
   RoutineNotificationDtoSchema,
+  ComputerUseCapabilitiesDtoSchema,
+  CreateComputerUseSessionInputSchema,
+  ComputerUseSessionDtoSchema,
+  ListComputerUseSessionsInputSchema,
+  ComputerUseSessionIdParamSchema,
+  ComputerUseSessionListParamSchema,
+  ComputerUseObserveInputSchema,
+  ComputerUseObservationDtoSchema,
+  RequestComputerUseApprovalInputSchema,
+  ComputerUseApprovalDtoSchema,
+  ResolveComputerUseApprovalInputSchema,
+  ExecuteComputerUseActionInputSchema,
+  ExecuteComputerUseActionResultDtoSchema,
+  ComputerUseLedgerEntryDtoSchema,
+  ComputerUseEmergencyStopInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1452,6 +1467,140 @@ function registerIpcHandlers(): void {
       `/routine-notifications/${encodeURIComponent(notificationId)}/dismiss`,
       RoutineNotificationDtoSchema,
       { method: 'POST', body: { botId } },
+    )
+  })
+
+  // ── Computer Use IPC Handlers (CU.4) ──────────────────────────────────────
+  const assertBoundedComputerUseIpcPayload = (raw: unknown): void => {
+    assertBoundedRoutinesIpcPayload(raw)
+  }
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_CAPABILITIES, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/computer-use/capabilities', ComputerUseCapabilitiesDtoSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_SESSION_CREATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const parsed = CreateComputerUseSessionInputSchema.parse(params)
+    return queryDaemon('/computer-use/sessions', ComputerUseSessionDtoSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_SESSION_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const parsed = ListComputerUseSessionsInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return queryDaemon(
+      `/computer-use/sessions${suffix}`,
+      z.object({ sessions: z.array(ComputerUseSessionDtoSchema).max(100) }),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_SESSION_GET, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId } = ComputerUseSessionIdParamSchema.parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}`,
+      ComputerUseSessionDtoSchema,
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_OBSERVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId, tabId } = ComputerUseObserveInputSchema.parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/observe`,
+      ComputerUseObservationDtoSchema,
+      { method: 'POST', body: tabId ? { tabId } : {} },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_APPROVAL_REQUEST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const parsed = RequestComputerUseApprovalInputSchema.parse(params)
+    const { sessionId, ...body } = parsed
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/approvals`,
+      ComputerUseApprovalDtoSchema,
+      { method: 'POST', body },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_APPROVAL_RESOLVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId, approvalId, decision } = ResolveComputerUseApprovalInputSchema.parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      ComputerUseApprovalDtoSchema,
+      { method: 'POST', body: { decision } },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_APPROVAL_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId, limit } = ComputerUseSessionListParamSchema.parse(params)
+    const qs = limit !== undefined ? `?limit=${limit}` : ''
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/approvals${qs}`,
+      z.object({ approvals: z.array(ComputerUseApprovalDtoSchema).max(100) }),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_ACTION_EXECUTE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const parsed = ExecuteComputerUseActionInputSchema.parse(params)
+    const { sessionId, ...body } = parsed
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/actions`,
+      ExecuteComputerUseActionResultDtoSchema,
+      { method: 'POST', body },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_LEDGER_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId, limit } = ComputerUseSessionListParamSchema.parse(params)
+    const qs = limit !== undefined ? `?limit=${limit}` : ''
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/ledger${qs}`,
+      z.object({ entries: z.array(ComputerUseLedgerEntryDtoSchema).max(100) }),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_SESSION_CLOSE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId } = ComputerUseSessionIdParamSchema.parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/close`,
+      ComputerUseSessionDtoSchema,
+      { method: 'POST', body: {} },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.COMPUTER_USE_EMERGENCY_STOP, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedComputerUseIpcPayload(params)
+    const { sessionId, reason } = ComputerUseEmergencyStopInputSchema.parse(params)
+    return queryDaemon(
+      `/computer-use/sessions/${encodeURIComponent(sessionId)}/emergency-stop`,
+      z.object({ session: ComputerUseSessionDtoSchema, confirmed: z.boolean() }),
+      { method: 'POST', body: reason ? { reason } : {} },
     )
   })
 }

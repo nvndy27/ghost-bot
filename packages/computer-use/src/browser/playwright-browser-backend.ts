@@ -96,7 +96,10 @@ const ALLOWED_BROWSER_KEYS = new Set([
   'PageDown',
 ])
 
-async function loadPlaywright(customPath?: string): Promise<PwModule> {
+async function loadPlaywright(customPath?: string, preloaded?: unknown): Promise<PwModule> {
+  if (preloaded && typeof preloaded === 'object' && 'chromium' in preloaded) {
+    return preloaded as PwModule
+  }
   const candidates = [customPath, 'playwright-core'].filter((p): p is string => Boolean(p))
 
   for (const candidate of candidates) {
@@ -137,9 +140,10 @@ export class PlaywrightBrowserBackend {
   async probeCapabilities(options?: {
     executablePath?: string
     playwrightModulePath?: string
+    playwrightModule?: unknown
   }): Promise<BrowserCapabilities> {
     try {
-      const pw = await loadPlaywright(options?.playwrightModulePath)
+      const pw = await loadPlaywright(options?.playwrightModulePath, options?.playwrightModule)
       const execPath = resolveExecutablePath(pw, options?.executablePath)
       return {
         engine: 'chromium',
@@ -183,9 +187,11 @@ export class PlaywrightBrowserBackend {
     return s
   }
 
-  async createSession(config: BrowserSessionConfig): Promise<{ sessionId: string; tempProfileDir: string }> {
+  async createSession(
+    config: BrowserSessionConfig & { playwrightModule?: unknown },
+  ): Promise<{ sessionId: string; tempProfileDir: string }> {
     const allowedOrigins = normalizeAllowedOrigins(config.scope.allowedOrigins)
-    const pw = await loadPlaywright(config.playwrightModulePath)
+    const pw = await loadPlaywright(config.playwrightModulePath, config.playwrightModule)
     const executablePath = resolveExecutablePath(pw, config.executablePath)
     const sessionId = config.sessionId ?? `cu_brow_${randomUUID()}`
     const viewport = config.viewport ?? { width: 1280, height: 720 }

@@ -8,17 +8,24 @@ import {
   AppearanceSettingsSchema,
   AppSettingsPatchSchema,
   BotIdSchema,
+  ComputerUseEmergencyStopInputSchema,
+  ComputerUseObserveInputSchema,
+  ComputerUseSessionIdParamSchema,
+  ComputerUseSessionListParamSchema,
   CreateBotInputSchema,
+  CreateComputerUseSessionInputSchema,
   CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
   CreateRoutineIpcInputSchema,
   CreateSessionInputSchema,
   CreateTeamIpcInputSchema,
+  ExecuteComputerUseActionInputSchema,
   GetMcpPromptInputSchema,
   ImportAvatarSvgInputSchema,
   ImportRoutineIpcInputSchema,
   IngestKnowledgeTextInputSchema,
   KnowledgeIdParamSchema,
+  ListComputerUseSessionsInputSchema,
   ListKnowledgeCollectionsInputSchema,
   ListKnowledgeDocsInputSchema,
   ListMcpServersInputSchema,
@@ -34,7 +41,9 @@ import {
   RegisterMcpServerIpcInputSchema,
   RenameSessionInputSchema,
   ReplaceKnowledgeDocTextInputSchema,
+  RequestComputerUseApprovalInputSchema,
   ResolveApprovalInputSchema,
+  ResolveComputerUseApprovalInputSchema,
   ResolveKnowledgeCitationInputSchema,
   RetryRunInputSchema,
   RoutineCountParamSchema,
@@ -80,6 +89,7 @@ import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
+import { ComputerUseService } from './computer-use/service.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -148,6 +158,7 @@ export class GhostBotDaemon {
   private mcpService: McpService | null = null
   private teamsService: TeamsService | null = null
   private schedulerService: SchedulerService | null = null
+  private computerUseService: ComputerUseService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -295,6 +306,9 @@ export class GhostBotDaemon {
     this.schedulerService.reconcileOnStartup()
     this.schedulerService.startTimer()
 
+    this.computerUseService = new ComputerUseService(dbHandle, this.botRepo, policyBroker)
+    this.computerUseService.reconcileOnStartup()
+
     const server = createServer((req, res) => {
       void this.handleRequest(req, res)
     })
@@ -326,6 +340,10 @@ export class GhostBotDaemon {
   }
 
   async stop(): Promise<void> {
+    if (this.computerUseService) {
+      await this.computerUseService.shutdownAll()
+      this.computerUseService = null
+    }
     if (this.schedulerService) {
       await this.schedulerService.stopTimer()
       this.schedulerService = null
@@ -1614,6 +1632,188 @@ export class GhostBotDaemon {
               ? schedulerService.markNotificationRead(parsed.data.notificationId, parsed.data.botId)
               : schedulerService.dismissNotification(parsed.data.notificationId, parsed.data.botId),
           )
+          return
+        }
+      }
+
+      if (this.computerUseService) {
+        const cuService = this.computerUseService
+
+        if (req.method === 'GET' && url.pathname === '/computer-use/capabilities') {
+          sendJson(res, 200, await cuService.getCapabilities())
+          return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/computer-use/sessions') {
+          const limitRaw = url.searchParams.get('limit')
+          const parsed = ListComputerUseSessionsInputSchema.safeParse({
+            botId: url.searchParams.get('botId') ?? undefined,
+            limit: limitRaw ? Number(limitRaw) : undefined,
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid computer-use sessions query', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, { sessions: cuService.listSessions(parsed.data.botId, parsed.data.limit) })
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/computer-use/sessions') {
+          const body = await readJsonBody(req)
+          const parsed = CreateComputerUseSessionInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid computer-use session payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, await cuService.createSession(parsed.data))
+          return
+        }
+
+        const cuApprovalResolveMatch =
+          /^\/computer-use\/sessions\/([^/]+)\/approvals\/([^/]+)\/resolve$/.exec(url.pathname)
+        if (cuApprovalResolveMatch && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const parsed = ResolveComputerUseApprovalInputSchema.safeParse({
+            ...(typeof body === 'object' && body !== null ? body : {}),
+            sessionId: decodeURIComponent(cuApprovalResolveMatch[1]!),
+            approvalId: decodeURIComponent(cuApprovalResolveMatch[2]!),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid approval resolve payload', {
+              statusCode: 400,
+            })
+          }
+          sendJson(
+            res,
+            200,
+            cuService.resolveActionApproval(
+              parsed.data.sessionId,
+              parsed.data.approvalId,
+              parsed.data.decision,
+            ),
+          )
+          return
+        }
+
+        const cuSubMatch =
+          /^\/computer-use\/sessions\/([^/]+)\/(observe|approvals|actions|ledger|close|emergency-stop)$/.exec(
+            url.pathname,
+          )
+        if (cuSubMatch) {
+          const sessionId = decodeURIComponent(cuSubMatch[1]!)
+          const sub = cuSubMatch[2]!
+
+          if (sub === 'observe' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = ComputerUseObserveInputSchema.safeParse({
+              ...(typeof body === 'object' && body !== null ? body : {}),
+              sessionId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid observe payload', { statusCode: 400 })
+            }
+            sendJson(res, 200, await cuService.observeTab(parsed.data.sessionId, parsed.data.tabId))
+            return
+          }
+
+          if (sub === 'approvals' && req.method === 'GET') {
+            const limitRaw = url.searchParams.get('limit')
+            const parsed = ComputerUseSessionListParamSchema.safeParse({
+              sessionId,
+              limit: limitRaw ? Number(limitRaw) : undefined,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid approvals query', { statusCode: 400 })
+            }
+            sendJson(res, 200, { approvals: cuService.listApprovals(parsed.data.sessionId, parsed.data.limit) })
+            return
+          }
+
+          if (sub === 'approvals' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = RequestComputerUseApprovalInputSchema.safeParse({
+              ...(typeof body === 'object' && body !== null ? body : {}),
+              sessionId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError(
+                'VALIDATION_ERROR',
+                parsed.error.issues[0]?.message ?? 'Invalid approval request payload',
+                { statusCode: 400 },
+              )
+            }
+            sendJson(res, 201, cuService.requestActionApproval(parsed.data))
+            return
+          }
+
+          if (sub === 'actions' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = ExecuteComputerUseActionInputSchema.safeParse({
+              ...(typeof body === 'object' && body !== null ? body : {}),
+              sessionId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError(
+                'VALIDATION_ERROR',
+                parsed.error.issues[0]?.message ?? 'Invalid action payload',
+                { statusCode: 400 },
+              )
+            }
+            sendJson(res, 200, await cuService.executeAction(parsed.data))
+            return
+          }
+
+          if (sub === 'ledger' && req.method === 'GET') {
+            const limitRaw = url.searchParams.get('limit')
+            const parsed = ComputerUseSessionListParamSchema.safeParse({
+              sessionId,
+              limit: limitRaw ? Number(limitRaw) : undefined,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid ledger query', { statusCode: 400 })
+            }
+            sendJson(res, 200, { entries: cuService.listLedger(parsed.data.sessionId, parsed.data.limit) })
+            return
+          }
+
+          if (sub === 'close' && req.method === 'POST') {
+            const parsed = ComputerUseSessionIdParamSchema.safeParse({ sessionId })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid sessionId', { statusCode: 400 })
+            }
+            sendJson(res, 200, await cuService.closeSession(parsed.data.sessionId))
+            return
+          }
+
+          if (sub === 'emergency-stop' && req.method === 'POST') {
+            const body = await readJsonBody(req)
+            const parsed = ComputerUseEmergencyStopInputSchema.safeParse({
+              ...(typeof body === 'object' && body !== null ? body : {}),
+              sessionId,
+            })
+            if (!parsed.success) {
+              throw new DaemonError('VALIDATION_ERROR', 'Invalid emergency-stop payload', {
+                statusCode: 400,
+              })
+            }
+            sendJson(res, 200, await cuService.emergencyStop(parsed.data.sessionId, parsed.data.reason))
+            return
+          }
+        }
+
+        const cuSessionMatch = /^\/computer-use\/sessions\/([^/]+)$/.exec(url.pathname)
+        if (cuSessionMatch && req.method === 'GET') {
+          const parsed = ComputerUseSessionIdParamSchema.safeParse({
+            sessionId: decodeURIComponent(cuSessionMatch[1]!),
+          })
+          if (!parsed.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid sessionId', { statusCode: 400 })
+          }
+          sendJson(res, 200, cuService.getSession(parsed.data.sessionId))
           return
         }
       }

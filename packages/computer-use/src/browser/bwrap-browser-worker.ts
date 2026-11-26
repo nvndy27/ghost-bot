@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,124 +24,9 @@ interface RpcResponse {
   error?: { code?: string; message?: string }
 }
 
-const WORKER_SCRIPT = `
-import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
-import http from 'node:http';
-import net from 'node:net';
-import readline from 'node:readline';
-import { PlaywrightBrowserBackend } from '/pkg/src/browser/playwright-browser-backend.ts';
-
-const backend = new PlaywrightBrowserBackend();
-let fixtureServer = null;
-let fixtureBaseUrl = null;
-
-const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + '\\n');
+export interface BwrapWorkerOptions {
+  workerScriptPath?: string
 }
-
-rl.on('line', async (line) => {
-  if (!line.trim()) return;
-  let req;
-  try {
-    req = JSON.parse(line);
-  } catch {
-    return;
-  }
-  try {
-    let result;
-    switch (req.method) {
-      case 'probeCapabilities': {
-        result = await backend.probeCapabilities({
-          playwrightModulePath: '/nm/playwright-core/index.mjs',
-          executablePath: '/usr/bin/google-chrome',
-        });
-        break;
-      }
-      case 'startFixtureServer': {
-        const routes = req.params.routes || {};
-        fixtureServer = http.createServer((hReq, hRes) => {
-          const body = routes[hReq.url || '/'] ?? routes['/'] ?? '<h1>Missing</h1>';
-          hRes.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          hRes.end(body);
-        });
-        await new Promise((resolve) => fixtureServer.listen(0, '127.0.0.1', resolve));
-        const addr = fixtureServer.address();
-        fixtureBaseUrl = 'http://127.0.0.1:' + addr.port;
-        result = { baseUrl: fixtureBaseUrl };
-        break;
-      }
-      case 'inspectIsolation': {
-        const { canaryPath, hostPort } = req.params;
-        let canaryReadable = false;
-        try { fs.readFileSync(canaryPath, 'utf8'); canaryReadable = true; } catch {}
-        const hostReachable = await new Promise((resolve) => {
-          const s = net.connect(hostPort, '127.0.0.1');
-          s.on('connect', () => { s.destroy(); resolve(true); });
-          s.on('error', () => resolve(false));
-          setTimeout(() => { s.destroy(); resolve(false); }, 300);
-        });
-        const ns = {
-          user: fs.readlinkSync('/proc/self/ns/user'),
-          net: fs.readlinkSync('/proc/self/ns/net'),
-          pid: fs.readlinkSync('/proc/self/ns/pid'),
-        };
-        result = {
-          canaryReadable,
-          hostReachable,
-          ns,
-          home: process.env.HOME ?? null,
-          wayland: process.env.WAYLAND_DISPLAY ?? null,
-          display: process.env.DISPLAY ?? null,
-          dbus: process.env.DBUS_SESSION_BUS_ADDRESS ?? null,
-        };
-        break;
-      }
-      case 'createSession': {
-        const cfg = {
-          ...req.params,
-          executablePath: '/usr/bin/google-chrome',
-          playwrightModulePath: '/nm/playwright-core/index.mjs',
-        };
-        const created = await backend.createSession(cfg);
-        const cmdline = execFileSync('pgrep', ['-af', created.tempProfileDir], { encoding: 'utf8' });
-        result = { ...created, hasNoSandboxFlag: cmdline.includes('--no-sandbox') };
-        break;
-      }
-      case 'openTab':
-        result = await backend.openTab(req.params.sessionId, req.params.ownerId, req.params.botId);
-        break;
-      case 'observeTab': {
-        const obs = await backend.observeTab(req.params.sessionId, req.params.ownerId, req.params.botId, req.params.tabId);
-        result = { ...obs, bufferBase64: Buffer.from(obs.buffer).toString('base64'), buffer: undefined };
-        break;
-      }
-      case 'executeBatch':
-        result = await backend.executeBatch(req.params);
-        break;
-      case 'cancelBatch':
-        backend.cancelBatch(req.params.sessionId, req.params.batchId);
-        result = { ok: true };
-        break;
-      case 'closeSession':
-        await backend.closeSession(req.params.sessionId, req.params.ownerId);
-        result = { ok: true };
-        break;
-      case 'closeAll':
-        await backend.closeAll();
-        if (fixtureServer) await new Promise((r) => fixtureServer.close(r));
-        result = { ok: true };
-        break;
-      default:
-        throw new Error('Unknown method: ' + req.method);
-    }
-    send({ id: req.id, ok: true, result });
-  } catch (err) {
-    send({ id: req.id, ok: false, error: { code: err?.code || 'BACKEND_FAILED', message: err?.message || 'Worker error' } });
-  }
-});
-`
 
 /**
  * Composed isolated browser worker:
@@ -148,6 +34,7 @@ rl.on('line', async (line) => {
  * Never falls back to an unisolated host browser.
  */
 export class BwrapIsolatedBrowserWorker {
+  private readonly options: BwrapWorkerOptions
   private child: ChildProcess | null = null
   private workDir: string | null = null
   private nextId = 1
@@ -158,15 +45,66 @@ export class BwrapIsolatedBrowserWorker {
   private buffer = ''
   private closed = false
 
+  constructor(options: BwrapWorkerOptions = {}) {
+    this.options = options
+  }
+
+  getPid(): number | null {
+    return this.child?.pid ?? null
+  }
+
+  private resolveWorkerBindsAndEntry(): { binds: string[]; entryArg: string } {
+    const thisDir = path.dirname(fileURLToPath(import.meta.url))
+    const bundledCandidates = [
+      this.options.workerScriptPath,
+      process.env.GHOST_CU_WORKER_PATH,
+      path.join(thisDir, 'computer-use-worker.mjs'),
+    ].filter((p): p is string => Boolean(p))
+
+    for (const candidate of bundledCandidates) {
+      if (fs.existsSync(candidate)) {
+        const real = fs.realpathSync(candidate)
+        return {
+          binds: ['--ro-bind', path.dirname(real), '/cu-worker'],
+          entryArg: `/cu-worker/${path.basename(real)}`,
+        }
+      }
+    }
+
+    // Development / workspace source execution
+    const pkgDir = path.resolve(thisDir, '../..')
+    const entryFile = path.join(pkgDir, 'src', 'browser', 'worker-entry.ts')
+    if (!fs.existsSync(entryFile)) {
+      throw new ComputerUseError(
+        'BACKEND_FAILED',
+        'Computer Use browser worker script not found in packaged or workspace layout',
+      )
+    }
+    const req = createRequire(import.meta.url)
+    let nmDir: string
+    try {
+      const pwPkg = req.resolve('playwright-core/package.json')
+      nmDir = path.dirname(path.dirname(pwPkg))
+    } catch {
+      const fallbackNm = path.resolve(pkgDir, '../../node_modules')
+      if (!fs.existsSync(fallbackNm)) {
+        throw new ComputerUseError(
+          'BACKEND_FAILED',
+          'playwright-core node_modules directory not found for isolated worker',
+        )
+      }
+      nmDir = fallbackNm
+    }
+
+    return {
+      binds: ['--ro-bind', pkgDir, '/pkg', '--ro-bind', nmDir, '/nm'],
+      entryArg: '/pkg/src/browser/worker-entry.ts',
+    }
+  }
+
   async start(): Promise<void> {
     if (this.child) return
-    const thisDir = path.dirname(fileURLToPath(import.meta.url))
-    const pkgDir = path.resolve(thisDir, '../..')
-    const rootDir = path.resolve(pkgDir, '../..')
-    const nmDir = path.join(rootDir, 'node_modules')
-    if (!fs.existsSync(nmDir)) {
-      throw new ComputerUseError('BACKEND_FAILED', 'Workspace node_modules not found for isolated worker')
-    }
+    const { binds, entryArg } = this.resolveWorkerBindsAndEntry()
 
     this.workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-cu-bwrap-brow-'))
     fs.chmodSync(this.workDir, 0o700)
@@ -199,43 +137,68 @@ export class BwrapIsolatedBrowserWorker {
       '/tmp',
       '--tmpfs',
       '/dev/shm',
-      '--ro-bind',
-      pkgDir,
-      '/pkg',
-      '--ro-bind',
-      nmDir,
-      '/nm',
+      ...binds,
       '--bind',
       this.workDir,
       '/work',
       '--chdir',
       '/work',
       '/usr/bin/node',
-      '--input-type=module',
-      '-e',
-      WORKER_SCRIPT,
+      entryArg,
     ]
 
-    const child = spawn('bwrap', args, {
+    const bwrapPath = ['/usr/bin/bwrap', '/bin/bwrap'].find((p) => fs.existsSync(p))
+    if (!bwrapPath) {
+      fs.rmSync(this.workDir, { recursive: true, force: true })
+      this.workDir = null
+      throw new ComputerUseError(
+        'BACKEND_FAILED',
+        'Bubblewrap (bwrap) binary not available; isolated browser disabled without fallback',
+      )
+    }
+
+    const child = spawn(bwrapPath, args, {
       env: { PATH: '/usr/bin:/bin', HOME: '/work', TMPDIR: '/tmp' },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     this.child = child
 
+    let stderrTail = ''
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString('utf8')).slice(-8192)
+    })
+
     child.stdout.on('data', (chunk: Buffer) => {
-      this.buffer += chunk.toString('utf8')
-      if (Buffer.byteLength(this.buffer, 'utf8') > MAX_RPC_LINE_BYTES) {
+      if (Buffer.byteLength(this.buffer, 'utf8') + chunk.length > MAX_RPC_LINE_BYTES) {
+        this.buffer = ''
         this.rejectAll(new ComputerUseError('BACKEND_FAILED', 'Isolated browser worker exceeded max RPC frame size'))
         void this.emergencyStop()
         return
       }
+      this.buffer += chunk.toString('utf8')
       let idx = this.buffer.indexOf('\n')
       while (idx !== -1) {
         const line = this.buffer.slice(0, idx)
         this.buffer = this.buffer.slice(idx + 1)
         idx = this.buffer.indexOf('\n')
         if (!line.trim()) continue
-        const msg = JSON.parse(line) as RpcResponse
+        let msg: RpcResponse
+        try {
+          msg = JSON.parse(line) as RpcResponse
+        } catch {
+          this.rejectAll(new ComputerUseError('BACKEND_FAILED', 'Isolated browser worker emitted malformed JSON'))
+          void this.emergencyStop()
+          return
+        }
+        if (
+          !msg ||
+          typeof msg !== 'object' ||
+          typeof msg.id !== 'number' ||
+          !Number.isInteger(msg.id) ||
+          typeof msg.ok !== 'boolean'
+        ) {
+          continue
+        }
         const entry = this.pending.get(msg.id)
         if (!entry) continue
         clearTimeout(entry.timer)
@@ -249,8 +212,22 @@ export class BwrapIsolatedBrowserWorker {
       }
     })
 
+    child.once('error', (err) => {
+      this.rejectAll(
+        new ComputerUseError(
+          'BACKEND_DISCONNECTED',
+          `Isolated browser worker process error: ${err.message}`,
+        ),
+      )
+    })
+
     child.once('exit', () => {
-      this.rejectAll(new ComputerUseError('BACKEND_DISCONNECTED', 'Isolated browser worker exited unexpectedly'))
+      this.rejectAll(
+        new ComputerUseError(
+          'BACKEND_DISCONNECTED',
+          stderrTail ? `Isolated browser worker exited (${stderrTail.slice(-200)})` : 'Isolated browser worker exited unexpectedly',
+        ),
+      )
     })
   }
 

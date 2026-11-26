@@ -114,6 +114,19 @@ const bridge: GhostBotBridge = {
     ipcRenderer.invoke('ghost:routine-notifications:mark-read', input),
   dismissRoutineNotification: (input) =>
     ipcRenderer.invoke('ghost:routine-notifications:dismiss', input),
+  getComputerUseCapabilities: () => ipcRenderer.invoke('ghost:computer-use:capabilities'),
+  createComputerUseSession: (input) => ipcRenderer.invoke('ghost:computer-use:session-create', input),
+  listComputerUseSessions: (input) => ipcRenderer.invoke('ghost:computer-use:session-list', input ?? {}),
+  getComputerUseSession: (input) => ipcRenderer.invoke('ghost:computer-use:session-get', input),
+  observeComputerUseTab: (input) => ipcRenderer.invoke('ghost:computer-use:observe', input),
+  requestComputerUseApproval: (input) => ipcRenderer.invoke('ghost:computer-use:approval-request', input),
+  resolveComputerUseApproval: (input) => ipcRenderer.invoke('ghost:computer-use:approval-resolve', input),
+  listComputerUseApprovals: (input) => ipcRenderer.invoke('ghost:computer-use:approval-list', input),
+  executeComputerUseAction: (input) => ipcRenderer.invoke('ghost:computer-use:action-execute', input),
+  listComputerUseLedger: (input) => ipcRenderer.invoke('ghost:computer-use:ledger-list', input),
+  closeComputerUseSession: (input) => ipcRenderer.invoke('ghost:computer-use:session-close', input),
+  emergencyStopComputerUseSession: (input) =>
+    ipcRenderer.invoke('ghost:computer-use:emergency-stop', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

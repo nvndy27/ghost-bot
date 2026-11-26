@@ -97,6 +97,18 @@ export const IPC_CHANNELS = {
   ROUTINE_NOTIFICATIONS_UNREAD_COUNT: 'ghost:routine-notifications:unread-count',
   ROUTINE_NOTIFICATIONS_MARK_READ: 'ghost:routine-notifications:mark-read',
   ROUTINE_NOTIFICATIONS_DISMISS: 'ghost:routine-notifications:dismiss',
+  COMPUTER_USE_CAPABILITIES: 'ghost:computer-use:capabilities',
+  COMPUTER_USE_SESSION_CREATE: 'ghost:computer-use:session-create',
+  COMPUTER_USE_SESSION_LIST: 'ghost:computer-use:session-list',
+  COMPUTER_USE_SESSION_GET: 'ghost:computer-use:session-get',
+  COMPUTER_USE_OBSERVE: 'ghost:computer-use:observe',
+  COMPUTER_USE_APPROVAL_REQUEST: 'ghost:computer-use:approval-request',
+  COMPUTER_USE_APPROVAL_RESOLVE: 'ghost:computer-use:approval-resolve',
+  COMPUTER_USE_APPROVAL_LIST: 'ghost:computer-use:approval-list',
+  COMPUTER_USE_ACTION_EXECUTE: 'ghost:computer-use:action-execute',
+  COMPUTER_USE_LEDGER_LIST: 'ghost:computer-use:ledger-list',
+  COMPUTER_USE_SESSION_CLOSE: 'ghost:computer-use:session-close',
+  COMPUTER_USE_EMERGENCY_STOP: 'ghost:computer-use:emergency-stop',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -1605,6 +1617,18 @@ export interface GhostBotBridge {
   getRoutineUnreadNotificationCount(input: { botId: string }): Promise<{ unreadCount: number }>
   markRoutineNotificationRead(input: z.infer<typeof RoutineNotificationParamSchema>): Promise<Record<string, unknown>>
   dismissRoutineNotification(input: z.infer<typeof RoutineNotificationParamSchema>): Promise<Record<string, unknown>>
+  getComputerUseCapabilities(): Promise<z.infer<typeof ComputerUseCapabilitiesDtoSchema>>
+  createComputerUseSession(input: z.infer<typeof CreateComputerUseSessionInputSchema>): Promise<z.infer<typeof ComputerUseSessionDtoSchema>>
+  listComputerUseSessions(input?: z.infer<typeof ListComputerUseSessionsInputSchema>): Promise<{ sessions: Array<z.infer<typeof ComputerUseSessionDtoSchema>> }>
+  getComputerUseSession(input: z.infer<typeof ComputerUseSessionIdParamSchema>): Promise<z.infer<typeof ComputerUseSessionDtoSchema>>
+  observeComputerUseTab(input: z.infer<typeof ComputerUseObserveInputSchema>): Promise<z.infer<typeof ComputerUseObservationDtoSchema>>
+  requestComputerUseApproval(input: z.infer<typeof RequestComputerUseApprovalInputSchema>): Promise<z.infer<typeof ComputerUseApprovalDtoSchema>>
+  resolveComputerUseApproval(input: z.infer<typeof ResolveComputerUseApprovalInputSchema>): Promise<z.infer<typeof ComputerUseApprovalDtoSchema>>
+  listComputerUseApprovals(input: z.infer<typeof ComputerUseSessionListParamSchema>): Promise<{ approvals: Array<z.infer<typeof ComputerUseApprovalDtoSchema>> }>
+  executeComputerUseAction(input: z.infer<typeof ExecuteComputerUseActionInputSchema>): Promise<z.infer<typeof ExecuteComputerUseActionResultDtoSchema>>
+  listComputerUseLedger(input: z.infer<typeof ComputerUseSessionListParamSchema>): Promise<{ entries: Array<z.infer<typeof ComputerUseLedgerEntryDtoSchema>> }>
+  closeComputerUseSession(input: z.infer<typeof ComputerUseSessionIdParamSchema>): Promise<z.infer<typeof ComputerUseSessionDtoSchema>>
+  emergencyStopComputerUseSession(input: z.infer<typeof ComputerUseEmergencyStopInputSchema>): Promise<{ session: z.infer<typeof ComputerUseSessionDtoSchema>; confirmed: boolean }>
 }
 
 export const RoutineIpcIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{3,128}$/)
@@ -1968,5 +1992,282 @@ export const RoutineNotificationDtoSchema = z.object({
 export type RoutineRecordDto = z.infer<typeof RoutineRecordDtoSchema>
 export type RoutineTaskDto = z.infer<typeof RoutineTaskDtoSchema>
 export type RoutineNotificationDto = z.infer<typeof RoutineNotificationDtoSchema>
+
+// ── Computer Use Strict Contracts (CU.4) ──────────────────────────────────────
+const CuIdSchema = z.string().min(1).max(128)
+
+export const ComputerUseActionSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('navigate'),
+      tabId: CuIdSchema,
+      url: z.string().min(1).max(2048),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('click_selector'),
+      tabId: CuIdSchema,
+      selector: z.string().min(1).max(512),
+      observationId: CuIdSchema.optional(),
+      navigationGeneration: z.number().int().nonnegative().optional(),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('click_point'),
+      tabId: CuIdSchema,
+      x: z.number().finite().min(0).max(8192),
+      y: z.number().finite().min(0).max(8192),
+      observationId: CuIdSchema.optional(),
+      navigationGeneration: z.number().int().nonnegative().optional(),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('type_text'),
+      tabId: CuIdSchema,
+      selector: z.string().min(1).max(512),
+      text: z.string().max(4096),
+      observationId: CuIdSchema.optional(),
+      navigationGeneration: z.number().int().nonnegative().optional(),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('scroll'),
+      tabId: CuIdSchema,
+      deltaX: z.number().finite().min(-10_000).max(10_000),
+      deltaY: z.number().finite().min(-10_000).max(10_000),
+      observationId: CuIdSchema.optional(),
+      navigationGeneration: z.number().int().nonnegative().optional(),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actionId: CuIdSchema,
+      kind: z.literal('key_press'),
+      tabId: CuIdSchema,
+      key: z.string().min(1).max(32),
+      observationId: CuIdSchema.optional(),
+      navigationGeneration: z.number().int().nonnegative().optional(),
+      description: z.string().max(240).optional(),
+    })
+    .strict(),
+])
+
+export const CreateComputerUseSessionInputSchema = z
+  .object({
+    botId: BotIdSchema,
+    runId: RunIdSchema,
+    explicitConsent: z.boolean(),
+    inheritedFromTeamOrRoutine: z.boolean().optional(),
+    allowObservation: z.boolean(),
+    allowNavigation: z.boolean(),
+    allowInteraction: z.boolean(),
+    allowedOrigins: z.array(z.string().min(1).max(512)).max(25),
+    viewport: z
+      .object({
+        width: z.number().int().min(320).max(3840),
+        height: z.number().int().min(240).max(2160),
+      })
+      .strict()
+      .optional(),
+    liveModelDriven: z.boolean().optional(),
+  })
+  .strict()
+
+export const ListComputerUseSessionsInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+
+export const ComputerUseSessionIdParamSchema = z
+  .object({
+    sessionId: CuIdSchema,
+  })
+  .strict()
+
+export const ComputerUseSessionListParamSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    limit: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+
+export const ComputerUseObserveInputSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    tabId: CuIdSchema.optional(),
+  })
+  .strict()
+
+export const RequestComputerUseApprovalInputSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    tabId: CuIdSchema,
+    observationId: CuIdSchema,
+    navigationGeneration: z.number().int().nonnegative(),
+    action: ComputerUseActionSchema,
+    ttlMs: z.number().int().min(5_000).max(300_000).optional(),
+  })
+  .strict()
+
+export const ResolveComputerUseApprovalInputSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    approvalId: CuIdSchema,
+    decision: z.enum(['approved', 'denied']),
+  })
+  .strict()
+
+export const ExecuteComputerUseActionInputSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    approvalId: CuIdSchema,
+    observationId: CuIdSchema,
+    navigationGeneration: z.number().int().nonnegative(),
+    action: ComputerUseActionSchema,
+  })
+  .strict()
+
+export const ComputerUseEmergencyStopInputSchema = z
+  .object({
+    sessionId: CuIdSchema,
+    reason: z.string().min(1).max(240).optional(),
+  })
+  .strict()
+
+export const ComputerUseCapabilitiesDtoSchema = z.object({
+  browser: z.object({
+    engine: z.literal('chromium'),
+    executablePath: z.string().nullable(),
+    sandboxed: z.boolean(),
+    headless: z.boolean(),
+    contextIsolation: z.boolean(),
+    temporaryProfileSupported: z.boolean(),
+    networkPolicyMode: z.literal('allowlist'),
+    notes: z.array(z.string()),
+  }),
+  virtualDesktop: z.object({
+    backendKind: z.enum(['weston-headless', 'xvfb', 'podman-desktop']),
+    compositorAvailable: z.boolean(),
+    isolatedSocketSupported: z.boolean(),
+    frameCaptureSupported: z.literal(false),
+    inputInjectionSupported: z.literal(false),
+    hostDesktopIsolated: z.literal(true),
+    notes: z.array(z.string()),
+  }),
+  liveModelDrivenEnabled: z.literal(false),
+  hostDesktopControlSupported: z.literal(false),
+})
+
+export const ComputerUseSessionDtoSchema = z.object({
+  id: CuIdSchema,
+  ownerId: z.string(),
+  botId: z.string(),
+  runId: z.string(),
+  sessionKind: z.literal('isolated-browser'),
+  state: z.enum(['created', 'active', 'stopped', 'emergency_stopped', 'failed', 'interrupted']),
+  allowObservation: z.boolean(),
+  allowNavigation: z.boolean(),
+  allowInteraction: z.boolean(),
+  allowedOrigins: z.array(z.string()),
+  inheritedFromTeamOrRoutine: z.literal(false),
+  workerPid: z.number().int().nullable(),
+  emergencyStopReason: z.string().nullable(),
+  activeTabId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  closedAt: z.string().nullable(),
+})
+
+export const LiveViewerFrameDtoSchema = z.object({
+  sessionId: z.string(),
+  frameSeq: z.number().int().nonnegative(),
+  timestamp: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  mimeType: z.enum(['image/png', 'image/raw']),
+  byteLength: z.number().int().nonnegative().max(2 * 1024 * 1024),
+  captureStatus: z.enum(['streaming', 'paused', 'stopped', 'error']),
+  backpressureDropCount: z.number().int().nonnegative(),
+  stale: z.boolean(),
+  executionStatus: z.enum(['idle', 'completed', 'failed', 'denied', 'cancelled', 'uncertain']),
+  emergencyStopSignaled: z.boolean(),
+})
+
+export const ComputerUseObservationDtoSchema = z.object({
+  observationId: z.string(),
+  sessionId: z.string(),
+  tabId: z.string(),
+  url: z.string(),
+  navigationGeneration: z.number().int().nonnegative(),
+  viewport: z.object({ width: z.number().int(), height: z.number().int() }),
+  mimeType: z.literal('image/png'),
+  byteLength: z.number().int().nonnegative().max(2 * 1024 * 1024),
+  sha256: z.string(),
+  capturedAt: z.string(),
+  sanitizedSummary: z.string(),
+  isIsolatedBrowser: z.literal(true),
+  imageBase64: z.string().max(3 * 1024 * 1024),
+  viewerFrame: LiveViewerFrameDtoSchema,
+})
+
+export const ComputerUseApprovalDtoSchema = z.object({
+  id: z.string(),
+  cuSessionId: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  runId: z.string(),
+  tabId: z.string(),
+  observationId: z.string(),
+  navigationGeneration: z.number().int().nonnegative(),
+  actionId: z.string(),
+  actionKind: z.string(),
+  actionHash: z.string(),
+  status: z.enum(['pending', 'approved', 'denied', 'consumed', 'revoked', 'expired']),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+})
+
+export const ExecuteComputerUseActionResultDtoSchema = z.object({
+  outcomeStatus: z.enum(['completed', 'failed', 'cancelled', 'uncertain']),
+  navigationGeneration: z.number().int().nonnegative(),
+  errorCode: z.string().optional(),
+  sanitizedSummary: z.string(),
+})
+
+export const ComputerUseLedgerEntryDtoSchema = z.object({
+  id: z.string(),
+  cuSessionId: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  runId: z.string(),
+  tabId: z.string().nullable(),
+  observationId: z.string().nullable(),
+  navigationGeneration: z.number().int().nullable(),
+  actionId: z.string().nullable(),
+  actionKind: z.string(),
+  approvalId: z.string().nullable(),
+  outcomeStatus: z.enum(['completed', 'failed', 'denied', 'cancelled', 'uncertain']),
+  sanitizedSummary: z.string(),
+  errorCode: z.string().nullable(),
+  replayAllowed: z.literal(false),
+  createdAt: z.string(),
+})
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

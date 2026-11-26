@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from 'node:fs/promises'
+import { copyFile, cp, mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,26 @@ await build({
   banner: {
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
   },
+  sourcemap: false,
+  minify: false,
+})
+
+// Bundle self-contained Computer Use isolated browser worker next to daemon.mjs for bwrap execution.
+const requireFromCu = createRequire(join(repoRoot, 'packages', 'computer-use', 'src', 'browser', 'worker-entry.ts'))
+const pwCorePkgDir = dirname(requireFromCu.resolve('playwright-core/package.json'))
+await cp(pwCorePkgDir, join(daemonOutDir, 'vendor', 'playwright-core'), {
+  recursive: true,
+  dereference: true,
+})
+
+await build({
+  entryPoints: [join(repoRoot, 'packages', 'computer-use', 'src', 'browser', 'worker-entry.ts')],
+  outfile: join(daemonOutDir, 'computer-use-worker.mjs'),
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'esm',
+  external: ['node:*', 'electron', 'playwright-core'],
   sourcemap: false,
   minify: false,
 })

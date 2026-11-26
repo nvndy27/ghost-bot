@@ -142,6 +142,94 @@ export class RuntimePolicyBroker {
   createMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {
     return createHostMcpPolicyAdapter(permissionMode)
   }
+
+  /**
+   * Authorizes Computer Use session creation and capability boundaries.
+   * Separates observation from side-effecting navigation/interaction, rejects inherited
+   * Teams/Scheduler consent, and keeps live model-driven Computer Use disabled.
+   */
+  evaluateComputerUsePolicy(input: {
+    requestedPermission: PermissionMode
+    explicitConsent: boolean
+    inheritedFromTeamOrRoutine: boolean
+    allowObservation: boolean
+    allowNavigation: boolean
+    allowInteraction: boolean
+    liveModelDriven?: boolean
+  }): {
+    allowed: boolean
+    reasonCode: string
+    reason: string
+    allowObservation: boolean
+    allowNavigation: boolean
+    allowInteraction: boolean
+    requiresSingleUseApproval: boolean
+  } {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reasonCode: 'CU_FULL_ACCESS_DENIED',
+        reason: 'Full Access is disabled for Computer Use',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.inheritedFromTeamOrRoutine !== false) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_INHERITED_CONSENT_FORBIDDEN',
+        reason: 'Computer Use consent cannot be inherited from Teams or Scheduler routines',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.explicitConsent !== true) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_CONSENT_REQUIRED',
+        reason: 'Explicit user consent is required to start a Computer Use session',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.liveModelDriven === true) {
+      return {
+        allowed: false,
+        reasonCode: 'LIVE_MODEL_DRIVEN_CU_DISABLED',
+        reason: 'Live model-driven Computer Use is disabled in CU.4',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.requestedPermission === 'read-only' && (input.allowNavigation || input.allowInteraction)) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_READ_ONLY_BLOCKS_MUTATION',
+        reason: 'Read-Only permission mode permits observation only, not browser navigation or interaction',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    return {
+      allowed: true,
+      reasonCode: 'CU_AUTHORIZED',
+      reason: 'Authorized under isolated Computer Use policy with single-use action approval',
+      allowObservation: input.allowObservation,
+      allowNavigation: input.allowNavigation,
+      allowInteraction: input.allowInteraction,
+      requiresSingleUseApproval: true,
+    }
+  }
 }
 
 export function createHostMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {

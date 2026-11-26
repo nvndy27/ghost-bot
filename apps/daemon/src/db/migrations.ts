@@ -778,6 +778,74 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE scheduler_tasks ADD COLUMN daemon_approval_id TEXT;
     `,
   },
+  {
+    version: 12,
+    name: '0012_computer_use_sessions_audit',
+    sql: `
+      CREATE TABLE IF NOT EXISTS cu_sessions (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+        run_id TEXT NOT NULL,
+        session_kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        allow_observation INTEGER NOT NULL,
+        allow_navigation INTEGER NOT NULL,
+        allow_interaction INTEGER NOT NULL,
+        allowed_origins_json TEXT NOT NULL,
+        inherited_from_team_or_routine INTEGER NOT NULL DEFAULT 0,
+        worker_pid INTEGER,
+        emergency_stop_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_cu_sessions_owner_bot ON cu_sessions(owner_id, bot_id, state);
+
+      CREATE TABLE IF NOT EXISTS cu_action_approvals (
+        id TEXT PRIMARY KEY,
+        cu_session_id TEXT NOT NULL REFERENCES cu_sessions(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        tab_id TEXT NOT NULL,
+        observation_id TEXT NOT NULL,
+        navigation_generation INTEGER NOT NULL,
+        action_id TEXT NOT NULL,
+        action_kind TEXT NOT NULL,
+        action_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT,
+        UNIQUE(cu_session_id, action_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_cu_approvals_session ON cu_action_approvals(cu_session_id, status);
+
+      CREATE TABLE IF NOT EXISTS cu_action_ledger (
+        id TEXT PRIMARY KEY,
+        cu_session_id TEXT NOT NULL REFERENCES cu_sessions(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        tab_id TEXT,
+        observation_id TEXT,
+        navigation_generation INTEGER,
+        action_id TEXT,
+        action_kind TEXT NOT NULL,
+        approval_id TEXT,
+        outcome_status TEXT NOT NULL,
+        sanitized_summary TEXT NOT NULL,
+        error_code TEXT,
+        replay_allowed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_cu_ledger_session ON cu_action_ledger(cu_session_id, created_at);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {
