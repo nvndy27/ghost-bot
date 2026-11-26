@@ -212,6 +212,12 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
     this.activeControllers.clear()
   }
 
+  abortActiveRuns(): void {
+    for (const ctrl of this.activeControllers.values()) {
+      ctrl.abort()
+    }
+  }
+
   async reconnect(): Promise<AuthState> {
     await this.disconnect()
     return this.getAuthStatus()
@@ -514,13 +520,55 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
         }
       }
 
+      // Re-verify credential generation, accountRef, authorization, and key immediately before dispatch
+      if (this.getCredentialGeneration() !== startGeneration || this.getAccountRef() !== startAccountRef) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'GEMINI_CREDENTIAL_ROTATED',
+          message: 'Gemini credential rotated before request dispatch',
+        }
+        return
+      }
+      if (!this.isExecutionAuthorized()) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'GEMINI_EXECUTION_GATED',
+          message: 'Gemini execution authorization revoked before request dispatch',
+        }
+        return
+      }
+      const latestKey = this.resolveApiKey()?.trim()
+      if (!latestKey) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'GEMINI_CREDENTIAL_MISSING',
+          message: 'Gemini API key deleted before request dispatch',
+        }
+        return
+      }
+
       const response = await this.transport(url, {
         method: 'POST',
         redirect: 'error',
         signal: ctrl.signal,
         headers: {
           'content-type': 'application/json',
-          'x-goog-api-key': apiKey.trim(),
+          'x-goog-api-key': latestKey,
         },
         body: JSON.stringify(bodyPayload),
       })
@@ -774,8 +822,22 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
         return { events, abort: false }
       }
 
+      const readWithAbort = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+        if (ctrl.signal.aborted) {
+          return Promise.reject(new Error('Aborted'))
+        }
+        return new Promise((resolve, reject) => {
+          const onAbort = () => reject(new Error('Aborted'))
+          ctrl.signal.addEventListener('abort', onAbort, { once: true })
+          reader
+            .read()
+            .then(resolve, reject)
+            .finally(() => ctrl.signal.removeEventListener('abort', onAbort))
+        })
+      }
+
       while (true) {
-        const { done, value } = await reader.read()
+        const { done, value } = await readWithAbort()
         if (done) break
         totalStreamBytes += value.byteLength
         if (totalStreamBytes > GEMINI_MAX_STREAM_BYTES) {

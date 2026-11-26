@@ -593,6 +593,14 @@ export class RuntimeRegistry {
     ]
   }
 
+  abortProviderRuns(runtimeId: 'claude-api' | 'gemini-api'): void {
+    if (runtimeId === 'claude-api') {
+      this.options.claudeAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'gemini-api') {
+      this.options.geminiAdapter?.abortActiveRuns()
+    }
+  }
+
   async stop(): Promise<void> {
     this.stopped = true
     this.lifecycleState = 'disconnected'

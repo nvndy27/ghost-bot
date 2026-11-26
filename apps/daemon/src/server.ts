@@ -676,6 +676,7 @@ export class GhostBotDaemon {
           credentialGeneration: prevMeta.credentialGeneration + 1,
           executionAuthorized: false,
         })
+        this.runtimeRegistry.abortProviderRuns('claude-api')
         sendJson(res, 200, await this.getClaudeStatusDto())
         return
       }
@@ -705,6 +706,7 @@ export class GhostBotDaemon {
           credentialGeneration: prevMeta.credentialGeneration + 1,
           executionAuthorized: false,
         })
+        this.runtimeRegistry.abortProviderRuns('claude-api')
         sendJson(res, 200, await this.getClaudeStatusDto())
         return
       }
@@ -748,6 +750,9 @@ export class GhostBotDaemon {
           ...meta,
           executionAuthorized: parsed.data.authorized,
         })
+        if (!parsed.data.authorized) {
+          this.runtimeRegistry.abortProviderRuns('claude-api')
+        }
         sendJson(res, 200, await this.getClaudeStatusDto())
         return
       }
@@ -807,6 +812,7 @@ export class GhostBotDaemon {
           credentialGeneration: prevMeta.credentialGeneration + 1,
           executionAuthorized: false,
         })
+        this.runtimeRegistry.abortProviderRuns('gemini-api')
         sendJson(res, 200, await this.getGeminiStatusDto())
         return
       }
@@ -836,6 +842,7 @@ export class GhostBotDaemon {
           credentialGeneration: prevMeta.credentialGeneration + 1,
           executionAuthorized: false,
         })
+        this.runtimeRegistry.abortProviderRuns('gemini-api')
         sendJson(res, 200, await this.getGeminiStatusDto())
         return
       }
@@ -879,6 +886,9 @@ export class GhostBotDaemon {
           ...meta,
           executionAuthorized: parsed.data.authorized,
         })
+        if (!parsed.data.authorized) {
+          this.runtimeRegistry.abortProviderRuns('gemini-api')
+        }
         sendJson(res, 200, await this.getGeminiStatusDto())
         return
       }

@@ -192,6 +192,12 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
     this.activeControllers.clear()
   }
 
+  abortActiveRuns(): void {
+    for (const ctrl of this.activeControllers.values()) {
+      ctrl.abort()
+    }
+  }
+
   async reconnect(): Promise<AuthState> {
     await this.disconnect()
     return this.getAuthStatus()
@@ -458,13 +464,55 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
         bodyPayload.system = state.config.instructions.trim()
       }
 
+      // Re-verify credential generation, authorization, and key immediately before outgoing request
+      if (this.getCredentialGeneration() !== startGeneration) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'CLAUDE_CREDENTIAL_ROTATED',
+          message: 'Anthropic credential rotated before request dispatch',
+        }
+        return
+      }
+      if (!this.isExecutionAuthorized()) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'CLAUDE_EXECUTION_GATED',
+          message: 'Anthropic execution authorization revoked before request dispatch',
+        }
+        return
+      }
+      const latestKey = this.resolveApiKey()?.trim()
+      if (!latestKey) {
+        terminalEmitted = true
+        seq += 1
+        yield {
+          type: 'run.failed',
+          runId: request.runId,
+          seq,
+          timestamp: new Date().toISOString(),
+          code: 'CLAUDE_CREDENTIAL_MISSING',
+          message: 'Anthropic API key deleted before request dispatch',
+        }
+        return
+      }
+
       const response = await this.transport(url, {
         method: 'POST',
         redirect: 'error',
         signal: ctrl.signal,
         headers: {
           'content-type': 'application/json',
-          'x-api-key': apiKey.trim(),
+          'x-api-key': latestKey,
           'anthropic-version': ANTHROPIC_API_VERSION,
         },
         body: JSON.stringify(bodyPayload),
@@ -681,8 +729,22 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
         return { events, done: false }
       }
 
+      const readWithAbort = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+        if (ctrl.signal.aborted) {
+          return Promise.reject(new Error('Aborted'))
+        }
+        return new Promise((resolve, reject) => {
+          const onAbort = () => reject(new Error('Aborted'))
+          ctrl.signal.addEventListener('abort', onAbort, { once: true })
+          reader
+            .read()
+            .then(resolve, reject)
+            .finally(() => ctrl.signal.removeEventListener('abort', onAbort))
+        })
+      }
+
       while (true) {
-        const { done, value } = await reader.read()
+        const { done, value } = await readWithAbort()
         if (done) break
         totalStreamBytes += value.byteLength
         if (totalStreamBytes > CLAUDE_MAX_STREAM_BYTES) {
