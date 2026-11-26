@@ -75,3 +75,39 @@ export interface DaemonComputerUseBridgeContract {
   triggerEmergencyStop(stop: DaemonComputerUseEmergencyStop): Promise<void>
   recordAuditEvent(event: ActionAuditEvent): Promise<void>
 }
+
+export interface DaemonBrowserSessionOwnership {
+  browserSessionId: string
+  ownerId: string
+  botId: string
+  runId: string
+  allowedOrigins: string[]
+  inheritedFromTeamOrRoutine: false
+}
+
+export interface DaemonBrowserCapabilityAuth {
+  browserSessionId: string
+  allowNavigation: boolean
+  allowObservation: boolean
+  allowInteraction: boolean
+  expiresAt: string
+}
+
+export interface DaemonLiveObservationFrame {
+  browserSessionId: string
+  tabId: string
+  navigationGeneration: number
+  observationId: string
+  capturedAt: string
+  mimeType: 'image/png' | 'image/raw'
+  byteLength: number
+}
+
+export interface DaemonBrowserBridgeContract {
+  authorizeBrowserSession(
+    ownership: DaemonBrowserSessionOwnership,
+    requested: Omit<DaemonBrowserCapabilityAuth, 'expiresAt'>,
+  ): Promise<DaemonBrowserCapabilityAuth>
+  publishObservationMetadata(frame: DaemonLiveObservationFrame): Promise<void>
+  emergencyStopBrowser(sessionId: string, ownerId: string, reason: string): Promise<void>
+}

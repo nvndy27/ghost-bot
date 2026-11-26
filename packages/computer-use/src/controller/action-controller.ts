@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   ComputerUseError,
   type ActionBatch,
@@ -13,6 +14,13 @@ import {
 import type { ComputerUseAuditLog } from '../audit/audit-log.ts'
 import type { ComputerUseSessionManager } from '../session/session-state-machine.ts'
 import { validateActionBatch } from '../validation/actions.ts'
+
+export const DEFAULT_MAX_OBSERVATION_AGE_MS = 30_000
+export const DEFAULT_MAX_OBSERVATIONS_CACHED = 200
+
+function hashActionPayload(action: ComputerUseAction): string {
+  return createHash('sha256').update(JSON.stringify(action)).digest('hex')
+}
 
 function actionToCapability(action: ComputerUseAction): {
   category: 'pointer' | 'keyboard' | 'wait'
@@ -42,22 +50,89 @@ export class ComputerUseActionController {
   private readonly backend: ComputerUseBackend
   private readonly sessions: ComputerUseSessionManager
   private readonly audit: ComputerUseAuditLog
+  private readonly maxObservationAgeMs: number
   private readonly observationsById = new Map<string, ScreenshotMetadata>()
-  private readonly seenActionIdsBySession = new Map<string, Set<string>>()
+  private readonly seenActionsBySession = new Map<string, Map<string, string>>()
+  private readonly sessionLocks = new Map<string, Promise<void>>()
   private readonly cancelledBatches = new Set<string>()
 
   constructor(
     backend: ComputerUseBackend,
     sessions: ComputerUseSessionManager,
     audit: ComputerUseAuditLog,
+    options?: { maxObservationAgeMs?: number },
   ) {
     this.backend = backend
     this.sessions = sessions
     this.audit = audit
+    this.maxObservationAgeMs = options?.maxObservationAgeMs ?? DEFAULT_MAX_OBSERVATION_AGE_MS
+  }
+
+  private async withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sessionLocks.get(sessionId) ?? Promise.resolve()
+    let release!: () => void
+    const next = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.sessionLocks.set(sessionId, prev.then(() => next))
+    await prev
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
+  }
+
+  async emergencyStopSession(
+    sessionId: string,
+    ownerId: string,
+    nowMs = Date.now(),
+  ): Promise<{ backendConfirmed: boolean }> {
+    const stopped = this.sessions.emergencyStop(sessionId, ownerId, nowMs)
+    let backendConfirmed = false
+    try {
+      const res = await this.backend.cancelSession(sessionId)
+      backendConfirmed = res.confirmed
+    } catch {
+      backendConfirmed = false
+    }
+    for (const [obsId, obs] of this.observationsById.entries()) {
+      if (obs.sessionId === sessionId) {
+        this.observationsById.delete(obsId)
+      }
+    }
+    this.audit.record(
+      {
+        sessionId,
+        ownerId,
+        botId: stopped.botId,
+        actionId: `estop_${sessionId}`,
+        category: 'session',
+        capability: 'discovery',
+        outcome: 'emergency_stop',
+        error: backendConfirmed ? null : 'Backend stop unconfirmed',
+        isSimulation: stopped.consent.isSimulated,
+      },
+      nowMs,
+    )
+    return { backendConfirmed }
   }
 
   cancelBatch(batchId: string): void {
     this.cancelledBatches.add(batchId)
+  }
+
+  private pruneExpiredObservations(nowMs: number): void {
+    for (const [id, obs] of this.observationsById.entries()) {
+      if (nowMs - Date.parse(obs.capturedAt) > this.maxObservationAgeMs) {
+        this.observationsById.delete(id)
+      }
+    }
+    while (this.observationsById.size > DEFAULT_MAX_OBSERVATIONS_CACHED) {
+      const oldestKey = this.observationsById.keys().next().value
+      if (!oldestKey) break
+      this.observationsById.delete(oldestKey)
+    }
   }
 
   async captureScreen(req: CaptureRequest, nowMs = Date.now()): Promise<ObservationResult> {
@@ -82,6 +157,7 @@ export class ComputerUseActionController {
         region: req.region,
         includeCursor: req.includeCursor,
       })
+      this.pruneExpiredObservations(nowMs)
       this.observationsById.set(obs.metadata.observationId, obs.metadata)
       this.audit.record(
         {
@@ -117,22 +193,34 @@ export class ComputerUseActionController {
   }
 
   async executeBatch(batch: ActionBatch, nowMs = Date.now()): Promise<BatchExecutionResult> {
+    return this.withSessionLock(batch.sessionId, () => this.executeBatchSerialized(batch, nowMs))
+  }
+
+  private async executeBatchSerialized(
+    batch: ActionBatch,
+    nowMs: number,
+  ): Promise<BatchExecutionResult> {
+    this.pruneExpiredObservations(nowMs)
     const caps = await this.backend.getCapabilities()
     const displays = await this.backend.listDisplays()
 
     // Validate batch structure, bounds, coordinates, and observation freshness before starting
     validateActionBatch(batch, displays, this.observationsById)
 
-    let sessionSeen = this.seenActionIdsBySession.get(batch.sessionId)
+    let sessionSeen = this.seenActionsBySession.get(batch.sessionId)
     if (!sessionSeen) {
-      sessionSeen = new Set<string>()
-      this.seenActionIdsBySession.set(batch.sessionId, sessionSeen)
+      sessionSeen = new Map<string, string>()
+      this.seenActionsBySession.set(batch.sessionId, sessionSeen)
     }
     for (const action of batch.actions) {
-      if (sessionSeen.has(action.actionId)) {
+      const existingHash = sessionSeen.get(action.actionId)
+      if (existingHash !== undefined) {
+        const nextHash = hashActionPayload(action)
         throw new ComputerUseError(
           'DUPLICATE_ACTION',
-          `Action "${action.actionId}" was already submitted in session "${batch.sessionId}" (no automatic replay)`,
+          existingHash !== nextHash
+            ? `Action "${action.actionId}" conflicts with previously submitted payload`
+            : `Action "${action.actionId}" was already submitted in session "${batch.sessionId}" (no automatic replay)`,
         )
       }
     }
@@ -243,7 +331,7 @@ export class ComputerUseActionController {
         break
       }
 
-      sessionSeen.add(action.actionId)
+      sessionSeen.set(action.actionId, hashActionPayload(action))
       const startedAt = new Date(nowMs).toISOString()
 
       try {
@@ -257,6 +345,22 @@ export class ComputerUseActionController {
                 sessionId: batch.sessionId,
                 action: action as Exclude<ComputerUseAction, { coordinateSpace: unknown }>,
               })
+
+        // Re-check if consent was revoked or emergency stop triggered during in-flight backend call
+        let revokedMidFlight: string | null = null
+        try {
+          const displayId = action.kind === 'wait' ? undefined : action.displayId
+          this.sessions.assertAuthorizedFor(
+            batch.sessionId,
+            batch.ownerId,
+            batch.botId,
+            capability,
+            displayId,
+            nowMs,
+          )
+        } catch (authErr) {
+          revokedMidFlight = authErr instanceof Error ? authErr.message : 'Revoked during execution'
+        }
 
         const endedAt = new Date(nowMs).toISOString()
         if (outcome.ok) {
@@ -287,6 +391,29 @@ export class ComputerUseActionController {
             },
             nowMs,
           )
+          if (revokedMidFlight) {
+            halted = true
+            haltReason = revokedMidFlight
+            for (let j = i + 1; j < batch.actions.length; j += 1) {
+              const rem = batch.actions[j]!
+              const remMeta = actionToCapability(rem)
+              results.push({
+                actionId: rem.actionId,
+                category: remMeta.category,
+                capability: remMeta.capability,
+                status: 'cancelled',
+                startedAt: null,
+                endedAt,
+                durationMs: 0,
+                uncertain: false,
+                replayAllowed: false,
+                errorCode: 'CONSENT_REVOKED',
+                errorMessage: 'Halted after mid-flight consent revocation',
+                isSimulation: caps.isSimulation,
+              })
+            }
+            break
+          }
         } else {
           const isUncertain = Boolean(outcome.uncertain)
           results.push({

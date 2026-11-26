@@ -5,13 +5,16 @@
   "type": "module",
   "exports": {
     "./contracts": "./src/contracts/types.ts",
+    "./browser-contracts": "./src/contracts/browser.ts",
     "./daemon-contracts": "./src/contracts/daemon-integration.ts",
     "./coordinates": "./src/validation/coordinates.ts",
     "./actions": "./src/validation/actions.ts",
     "./session": "./src/session/session-state-machine.ts",
     "./simulated": "./src/backends/simulated-backend.ts",
     "./controller": "./src/controller/action-controller.ts",
-    "./audit": "./src/audit/audit-log.ts"
+    "./audit": "./src/audit/audit-log.ts",
+    "./browser-policy": "./src/browser/network-policy.ts",
+    "./browser": "./src/browser/playwright-browser-backend.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
