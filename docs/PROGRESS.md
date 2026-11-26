@@ -1,5 +1,15 @@
 # Progress log
 
+## Provider.5 — Kimi Code ACP Runtime Integration
+
+2026-11-27. Branched `feat/provider5-kimi-acp` from `c65a621` (`feat/provider4-gemini-api`). Commit 1 (`42b708b`) closed shared provider pre-request credential revalidation, proactive abort on rotation/revocation, and stalled stream cancellation; Commit 2 implemented `KimiAcpAdapter` (`kimi-acp`), `RuntimePolicyBroker.authorizeKimiAcpExecution()`, `GET /kimi/status`, `IPC_CHANNELS.KIMI_STATUS`, and Desktop Settings & BotEditorModal UI with zero live inference or CLI installation. See [Provider.5 report](extensions/provider5-kimi-acp.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Shared provider security hardening (`42b708b`): immediate pre-request `credentialGeneration`/`isExecutionAuthorized()`/`resolveApiKey()` verification, `abortActiveRuns()` on rotation/deletion/revocation, and abort-raced `readWithAbort()` for stalled SSE streams (`tests/shared-provider-security.test.ts` PASS). |
+| Implemented | Added `KimiAcpAdapter` (`packages/runtime-adapters/kimi/kimi-acp.ts`) speaking ACP v1 JSON-RPC over stdio (`initialize`, `session/new`, `session/load`, `session/prompt`, `session/update`, `session/request_permission`, `session/cancel`) with `fs/*` & `terminal/*` callback rejection, `allow_always` stripping, `agent_thought_chunk` suppression, session quarantine on unexpected exit, `RuntimePolicyBroker.authorizeKimiAcpExecution()`, and Desktop Settings / BotEditorModal UI. `kimi` CLI is not installed on host. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider5-kimi-production.test.ts` (2/2), 3 consecutive full-workspace regression runs (**228/228** per run: `root` 135/135, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 13 Electron E2E/IPC scripts (`verify-provider5-kimi-desktop.mjs` + 12 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
 ## Provider.4 — Google Gemini API Production Integration
 
 2026-11-27. Branched `feat/provider4-gemini-api` from `fcded26` (`feat/provider3-claude-api`). Implemented `GoogleGeminiApiAdapter` (`v1beta/models`, `streamGenerateContent?alt=sse`, `x-goog-api-key`), shared provider credential hardening, Desktop Settings & BotEditorModal UI, and read-only Gemini CLI assessment with zero live inference or external API requests. See [Provider.4 report](extensions/provider4-gemini-api.md).

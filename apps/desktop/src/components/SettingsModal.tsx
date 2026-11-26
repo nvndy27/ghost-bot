@@ -106,6 +106,9 @@ export function SettingsModal({
   >(null)
   const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
   const [geminiBusy, setGeminiBusy] = useState(false)
+  const [kimiStatus, setKimiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').KimiStatusDto | null
+  >(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -146,6 +149,14 @@ export function SettingsModal({
         .then(setGeminiStatus)
         .catch(() => {
           setGeminiStatus(null)
+        })
+    }
+    if (window.ghostBot?.getKimiStatus) {
+      void window.ghostBot
+        .getKimiStatus()
+        .then(setKimiStatus)
+        .catch(() => {
+          setKimiStatus(null)
         })
     }
   }, [open, initialSection])
@@ -777,6 +788,38 @@ export function SettingsModal({
                     {geminiStatus.policyCompatibility.gatedReason && (
                       <small className="gb-muted" data-testid="gemini-gated-reason">
                         Execution gate: {geminiStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {kimiStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="kimi-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        Kimi Code ACP {kimiStatus.cliVersion ?? '(not installed)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="kimi-auth-badge">
+                        {kimiStatus.cliAvailable ? kimiStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{kimiStatus.detail}</small>
+                    <small className="gb-muted">{kimiStatus.loginGuidance}</small>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        ACP v{kimiStatus.protocolVersion ?? '?'}:{' '}
+                        {kimiStatus.acpProtocolSupported ? 'verified' : 'unverified'}
+                      </span>
+                      <span className="gb-badge">client fs/terminal: disabled</span>
+                      <span className="gb-badge">allow_always: rejected</span>
+                    </div>
+                    {kimiStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="kimi-gated-reason">
+                        Execution gate: {kimiStatus.policyCompatibility.gatedReason}
                       </small>
                     )}
                   </div>

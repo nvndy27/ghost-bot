@@ -621,6 +621,11 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/kimi/status') {
+        sendJson(res, 200, await this.runtimeRegistry.getKimiStatus())
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/claude/status') {
         sendJson(res, 200, await this.getClaudeStatusDto())
         return

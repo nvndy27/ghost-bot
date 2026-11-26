@@ -98,6 +98,7 @@ const bridge: GhostBotBridge = {
   setGeminiCredential: (input) => ipcRenderer.invoke('ghost:gemini:credential:set', input),
   deleteGeminiCredential: () => ipcRenderer.invoke('ghost:gemini:credential:delete'),
   setGeminiExecutionAuthorized: (input) => ipcRenderer.invoke('ghost:gemini:auth:set', input),
+  getKimiStatus: () => ipcRenderer.invoke('ghost:kimi:status'),
   listTeams: (input) => ipcRenderer.invoke('ghost:teams:list', input ?? {}),
   createTeam: (input) => ipcRenderer.invoke('ghost:teams:create', input),
   updateTeam: (input) => ipcRenderer.invoke('ghost:teams:update', input),

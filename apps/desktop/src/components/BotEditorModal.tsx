@@ -61,7 +61,7 @@ export function BotEditorModal({
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
   const [runtimeId, setRuntimeId] = useState<
-    'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api'
+    'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'kimi-acp'
   >('mock-offline')
   const [ollamaStatus, setOllamaStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
@@ -115,7 +115,8 @@ export function BotEditorModal({
           initialBot.runtimeId === 'openclaw' ||
           initialBot.runtimeId === 'ollama' ||
           initialBot.runtimeId === 'claude-api' ||
-          initialBot.runtimeId === 'gemini-api'
+          initialBot.runtimeId === 'gemini-api' ||
+          initialBot.runtimeId === 'kimi-acp'
           ? initialBot.runtimeId
           : 'mock-offline',
       )
@@ -562,6 +563,7 @@ export function BotEditorModal({
                     | 'ollama'
                     | 'claude-api'
                     | 'gemini-api'
+                    | 'kimi-acp'
                   setDirty(true)
                   setRuntimeId(next)
                   if (next === 'ollama') {
@@ -579,6 +581,8 @@ export function BotEditorModal({
                     if (geminiStatus && geminiStatus.models.length > 0) {
                       setModelId(geminiStatus.models[0].id)
                     }
+                  } else if (next === 'kimi-acp') {
+                    setPermission('read-only')
                   }
                 }}
               >
@@ -588,6 +592,7 @@ export function BotEditorModal({
                 <option value="ollama">Ollama Local</option>
                 <option value="claude-api">Anthropic Claude API (API-key billed)</option>
                 <option value="gemini-api">Google Gemini API (API key)</option>
+                <option value="kimi-acp">Kimi Code ACP</option>
               </select>
             </label>
 

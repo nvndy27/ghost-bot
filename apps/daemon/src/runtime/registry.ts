@@ -12,6 +12,7 @@ import {
   GEMINI_API_VERSION,
   GoogleGeminiApiAdapter,
 } from '@ghost-bot/runtime-adapters/gemini'
+import { KimiAcpAdapter } from '@ghost-bot/runtime-adapters/kimi'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
@@ -66,6 +67,7 @@ export interface RuntimeRegistryOptions {
   ollamaAdapter?: OllamaLocalAdapter
   claudeAdapter?: AnthropicClaudeApiAdapter
   geminiAdapter?: GoogleGeminiApiAdapter
+  kimiAdapter?: KimiAcpAdapter
   cacheTtlMs?: number
 }
 
@@ -522,6 +524,59 @@ export class RuntimeRegistry {
       models: input.models ?? [],
       resourceLimits: adapter.getResourceLimits(),
       diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getKimiStatus(): Promise<import('@ghost-bot/shared-types/ipc').KimiStatusDto> {
+    const kimi = this.options.kimiAdapter ?? new KimiAcpAdapter()
+    const info = await kimi.inspectRuntime()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeKimiAcpExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      kimiExecutionAuthorized: false,
+      kimiCliAvailable: info.cliAvailable,
+      kimiAcpProtocolVerified: info.acpProtocolSupported,
+      kimiAuthenticated: info.authenticated,
+      kimiContainmentVerified: false,
+    })
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !info.cliAvailable
+      ? 'disconnected'
+      : info.authenticated
+        ? 'connected'
+        : 'pending'
+
+    return {
+      cliAvailable: info.cliAvailable,
+      cliVersion: info.cliVersion,
+      protocolVersion: info.protocolVersion,
+      acpProtocolSupported: info.acpProtocolSupported,
+      authenticated: info.authenticated,
+      authStatus,
+      detail: info.detail,
+      loginGuidance: 'Run `kimi login` in your local terminal (Ghost Bot never reads Kimi token files).',
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: info.loadSessionSupported,
+        approvals: true,
+        usage: true,
+        clientFsSupported: false,
+        clientTerminalSupported: false,
+      },
+      models: info.models.map((m) => ({ id: m.id, label: m.label })),
+      diagnostics: [
+        'ACP protocol v1 over stdio (`kimi acp`); client fs/* and terminal/* callbacks disabled.',
+        'allow_always permission options are rejected; single-use approvals only.',
+      ],
       policyCompatibility: {
         readOnlyAllowed: readOnlyDecision.allowed,
         askApprovalAllowed: false,

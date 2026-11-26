@@ -104,6 +104,7 @@ import {
   GeminiStatusDtoSchema,
   SetGeminiCredentialInputSchema,
   SetGeminiAuthInputSchema,
+  KimiStatusDtoSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1286,6 +1287,11 @@ function registerIpcHandlers(): void {
       body: parsed,
       timeoutMs: 12_000,
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KIMI_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/kimi/status', KimiStatusDtoSchema, { timeoutMs: 12_000 })
   })
 
   function assertBoundedTeamsIpcPayload(raw: unknown): void {

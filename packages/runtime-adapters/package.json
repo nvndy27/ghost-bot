@@ -10,6 +10,7 @@
     "./ollama": "./ollama/ollama-adapter.ts",
     "./claude": "./claude/anthropic-claude-api.ts",
     "./gemini": "./gemini/google-gemini-api.ts",
+    "./kimi": "./kimi/kimi-acp.ts",
     "./mock": "./mock/mock-runtime.ts"
   },
   "dependencies": {

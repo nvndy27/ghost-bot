@@ -22,7 +22,7 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'mock'
+  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'kimi-acp' | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
@@ -43,6 +43,11 @@ export interface PolicyAuthorizationInput {
   geminiCredentialConfigured?: boolean
   geminiKeyringAvailable?: boolean
   geminiEndpointVerified?: boolean
+  kimiExecutionAuthorized?: boolean
+  kimiCliAvailable?: boolean
+  kimiAcpProtocolVerified?: boolean
+  kimiAuthenticated?: boolean
+  kimiContainmentVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -123,6 +128,18 @@ export class RuntimePolicyBroker {
         geminiCredentialConfigured: input.geminiCredentialConfigured ?? false,
         geminiKeyringAvailable: input.geminiKeyringAvailable ?? false,
         geminiEndpointVerified: input.geminiEndpointVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'kimi-acp') {
+      return this.authorizeKimiAcpExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        kimiExecutionAuthorized: input.kimiExecutionAuthorized ?? false,
+        kimiCliAvailable: input.kimiCliAvailable ?? false,
+        kimiAcpProtocolVerified: input.kimiAcpProtocolVerified ?? false,
+        kimiAuthenticated: input.kimiAuthenticated ?? false,
+        kimiContainmentVerified: input.kimiContainmentVerified ?? false,
       })
     }
 
@@ -401,6 +418,65 @@ export class RuntimePolicyBroker {
       allowed: true,
       reason: 'Authorized for bounded read-only Google Gemini API chat without tools',
       verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeKimiAcpExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    kimiExecutionAuthorized: boolean
+    kimiCliAvailable: boolean
+    kimiAcpProtocolVerified: boolean
+    kimiAuthenticated: boolean
+    kimiContainmentVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reason: 'Full Access is disabled for Kimi Code ACP',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiCliAvailable) {
+      return {
+        allowed: false,
+        reason: 'Kimi Code CLI (`kimi`) is not installed or unreachable on host',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiAcpProtocolVerified) {
+      return {
+        allowed: false,
+        reason: 'Kimi ACP protocol version 1 handshake is not verified',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiAuthenticated) {
+      return {
+        allowed: false,
+        reason: 'Kimi CLI authentication required (`kimi login`)',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiContainmentVerified || !input.kimiExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Kimi Code ACP execution is gated until runtime-level containment and explicit opt-in are verified',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded Kimi Code ACP execution',
+      verifiedModes: ['read-only', 'ask-approval'],
     }
   }
 

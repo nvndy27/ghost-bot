@@ -1,5 +1,10 @@
 # Next steps
 
+## Provider.5 — Kimi Code ACP Runtime Integration (Completed Offline / Host CLI Absent)
+
+1. Install Kimi Code CLI (`kimi`) and run `kimi login` when explicitly authorized to verify live `kimi acp` interoperability using `docs/extensions/provider5-kimi-acp.md`.
+2. Consider a shared OpenAI-compatible provider adapter (`OpenRouter`, `LM Studio`, `llama.cpp`) reusing `ghost-bot.provider` `SecretStore`, `assertApprovedHttpsUrl`, and SSE parsing.
+
 ## Provider.4 — Google Gemini API Integration (Completed Offline / Execution Gated)
 
 1. When explicitly authorized for live API testing, configure a Gemini API key in Settings -> Accounts & Providers and run the 2-request bounded live acceptance procedure in `docs/extensions/provider4-gemini-api.md`.

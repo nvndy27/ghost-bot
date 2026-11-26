@@ -84,6 +84,7 @@ export const IPC_CHANNELS = {
   GEMINI_CREDENTIAL_SET: 'ghost:gemini:credential:set',
   GEMINI_CREDENTIAL_DELETE: 'ghost:gemini:credential:delete',
   GEMINI_AUTH_SET: 'ghost:gemini:auth:set',
+  KIMI_STATUS: 'ghost:kimi:status',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1929,6 +1930,42 @@ export const GeminiStatusDtoSchema = z.object({
 
 export type GeminiStatusDto = z.infer<typeof GeminiStatusDtoSchema>
 
+export const KimiStatusDtoSchema = z.object({
+  cliAvailable: z.boolean(),
+  cliVersion: z.string().nullable(),
+  protocolVersion: z.number().nullable(),
+  acpProtocolSupported: z.boolean(),
+  authenticated: z.boolean(),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  detail: z.string(),
+  loginGuidance: z.string(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    resume: z.boolean(),
+    approvals: z.boolean(),
+    usage: z.boolean(),
+    clientFsSupported: z.literal(false),
+    clientTerminalSupported: z.literal(false),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+    }),
+  ),
+  diagnostics: z.array(z.string()),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.boolean(),
+    workspaceAllowed: z.literal(false),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type KimiStatusDto = z.infer<typeof KimiStatusDtoSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -2013,6 +2050,7 @@ export interface GhostBotBridge {
   setGeminiCredential(input: SetGeminiCredentialInput): Promise<GeminiStatusDto>
   deleteGeminiCredential(): Promise<GeminiStatusDto>
   setGeminiExecutionAuthorized(input: SetGeminiAuthInput): Promise<GeminiStatusDto>
+  getKimiStatus(): Promise<KimiStatusDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>
