@@ -61,3 +61,8 @@ Measured on an isolated SQLite database (`node:sqlite` + FTS5) with 250 active b
 - `MemoryService.searchMemories`: `13.61 ms`
 - `MemoryService.prepareExecutionContext` (search + per-record `getById` revalidation + `buildMemoryContext`): `7.14 ms` (`selectedCount: 6`, `totalBytes: 2628`).
 - Limitation: synchronous `node:sqlite` search runs on the daemon event loop; bounded by `MEMORY_LIMITS` (`maxQueryLength`, `maxSearchLimit`, `maxContextBytes`). Phase 3D.2 Knowledge corpus indexing/chunking will require explicit candidate caps and/or bounded batching.
+
+## 9. Closure Gate & Environment Clarification
+
+- **Adapter-Level Dispatch Revalidation**: Added trusted server-side `AgentRequest.prepareReferenceContext` (`packages/shared-types/runtime.ts`, never exposed via IPC), invoked inside `CodexAppServerAdapter.run()` (`packages/runtime-adapters/codex/codex-app-server.ts`) after `requireVerifiedChatGptAccount()`, `canonicalizeWorkspace()`, and `ensureInitialized()`, immediately before the `active.cancelled` guard and `turn/start` transmission. Deterministic barrier tests in `tests/phase-3d1-memory.test.ts` confirm stale memory is never sent on consent revocation, retrieval disable, update, archive, delete, or cancel.
+- **Coding-Agent Sandbox vs Electron Sandbox**: Outer coding-agent `BypassSandbox` permissions used to run `@ghost-bot/mcp` and Electron E2E on the host (avoiding user-namespace `nobody` UID mapping on `/usr/bin/node` and missing container DBus) are strictly distinct from Ghost Bot's Electron security configuration (`sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`, no `--no-sandbox`).

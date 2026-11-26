@@ -677,3 +677,178 @@ test('Phase 3D.1 hardening: workspace symlink canonicalization, missing workspac
     await rm(symlinkParent, { recursive: true, force: true })
   }
 })
+
+test('Phase 3D.1 closure gate: deterministic barrier inside CodexAppServerAdapter.run prevents stale memory on consent revocation, disable, delete, archive, update, and cancel', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { MemoryService } = await import('../apps/daemon/src/memory/service.ts')
+  const { SettingsRepository } = await import('../apps/daemon/src/settings/repository.ts')
+  const { BotRepository } = await import('../apps/daemon/src/bots/repository.ts')
+  const { SessionRepository } = await import('../apps/daemon/src/sessions/repository.ts')
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'gb-3d1-gate-data-'))
+  const ws = await mkdtemp(join(tmpdir(), 'gb-3d1-gate-ws-'))
+  const profileDir = await mkdtemp(join(tmpdir(), 'gb-3d1-gate-prof-'))
+  const captureLogPath = join(profileDir, 'turns.jsonl')
+
+  const dbHandle = await openGhostBotDatabase(dataDir)
+  const settingsRepo = new SettingsRepository(dbHandle)
+  const botRepo = new BotRepository(dbHandle)
+  const sessionRepo = new SessionRepository(dbHandle)
+  const memoryService = new MemoryService(dbHandle, settingsRepo)
+
+  const fixtureScript = `
+    const fs = require('node:fs');
+    const rl = require('node:readline').createInterface({ input: process.stdin });
+    let turnN = 0;
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-fixture/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'user@example.invalid', planType: 'plus', workspaceName: null }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr_gate' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        turnN += 1;
+        fs.appendFileSync(${JSON.stringify(captureLogPath)}, JSON.stringify({ turnN, input: msg.params.input }) + '\\n');
+        const turnId = 'turn_gate_' + turnN;
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId } } }) + '\\n');
+        process.stdout.write(JSON.stringify({
+          method: 'turn/completed',
+          params: { threadId: 'thr_gate', turn: { id: turnId, status: 'completed' } }
+        }) + '\\n');
+      }
+    });
+  `
+
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', fixtureScript],
+    permissionEvidence: {
+      sandboxEnforced: true,
+      approvalEnforced: true,
+      sensitiveActionsEnforced: true,
+      verifiedModes: ['read-only'],
+    },
+  })
+
+  try {
+    const bot = await botRepo.createBot({
+      name: 'Gate Bot',
+      description: 'Gate',
+      instructions: '',
+      avatar: {
+        kind: 'preset',
+        shape: 'ghost',
+        color: '#111827',
+        eyes: 'classic',
+        rotation: 0,
+        animation: false,
+      },
+      runtimeId: 'codex',
+      modelId: 'gpt-5',
+      effort: 'medium',
+      workspacePath: ws,
+      permission: 'read-only',
+    })
+    const sess = sessionRepo.createSession({ agentId: bot.id, title: 'Gate Session' })
+    settingsRepo.updateSettings({
+      memory: { enabled: true, automaticRetrieval: true, externalProviderConsent: true },
+    })
+
+    const mem = await memoryService.createMemory({
+      scope: { kind: 'bot', botId: bot.id },
+      category: 'fact',
+      content: 'Initial gate target memory v1',
+      tags: ['gate'],
+    })
+
+    const codexSess = await adapter.createSession({
+      agentId: bot.id,
+      accountId: 'chatgpt:plus:',
+      modelId: 'gpt-5',
+      effort: 'medium',
+      permission: 'read-only',
+      workspace: ws,
+      instructions: 'Be concise.',
+    })
+
+    const runWithBarrier = async (runId: string, mutateBeforeDispatch: () => Promise<void> | void) => {
+      const events: string[] = []
+      for await (const ev of adapter.run({
+        runId,
+        session: codexSess,
+        text: 'Query gate target memory',
+        prepareReferenceContext: async () => {
+          await mutateBeforeDispatch()
+          const ctx = await memoryService.prepareExecutionContext({
+            sessionId: sess.id,
+            agentId: bot.id,
+            runtimeId: 'codex',
+            queryText: 'gate target memory',
+            isMock: false,
+          })
+          return ctx.envelopeJson ?? undefined
+        },
+      })) {
+        events.push(ev.type)
+      }
+      return events
+    }
+
+    // 1. Update memory before dispatch -> latest v2 content is sent
+    await runWithBarrier('run_gate_1', async () => {
+      await memoryService.updateMemory({ id: mem.id, content: 'Updated gate target memory v2' })
+    })
+    // 2. Revoke externalProviderConsent before dispatch -> only user prompt sent
+    await runWithBarrier('run_gate_2', () => {
+      settingsRepo.updateSettings({ memory: { externalProviderConsent: false } })
+    })
+    // 3. Re-grant consent, then disable automaticRetrieval before dispatch -> only user prompt sent
+    settingsRepo.updateSettings({ memory: { externalProviderConsent: true } })
+    await runWithBarrier('run_gate_3', () => {
+      settingsRepo.updateSettings({ memory: { automaticRetrieval: false } })
+    })
+    // 4. Re-enable retrieval, then archive memory before dispatch -> only user prompt sent
+    settingsRepo.updateSettings({ memory: { automaticRetrieval: true } })
+    await runWithBarrier('run_gate_4', async () => {
+      await memoryService.archiveMemory(mem.id)
+    })
+    // 5. Create new memory and delete it before dispatch -> only user prompt sent
+    const mem2 = await memoryService.createMemory({
+      scope: { kind: 'bot', botId: bot.id },
+      category: 'fact',
+      content: 'Ephemeral gate target memory',
+      tags: ['gate'],
+    })
+    await runWithBarrier('run_gate_5', async () => {
+      await memoryService.deleteMemory(mem2.id)
+    })
+    // 6. Cancel inside adapter before turn/start -> turn/start is never transmitted
+    const cancelEvents = await runWithBarrier('run_gate_6_cancel', async () => {
+      await adapter.cancel('run_gate_6_cancel')
+    })
+    assert.equal(cancelEvents.includes('run.cancelled'), true)
+
+    const lines = (await readFile(captureLogPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { turnN: number; input: Array<{ type: string; text: string }> })
+    assert.equal(lines.length, 5, 'Cancelled run_gate_6_cancel must not transmit turn/start')
+    assert.equal(lines[0]?.input.length, 2)
+    assert.equal(lines[0]?.input[0]?.text.includes('Updated gate target memory v2'), true)
+    assert.equal(lines[0]?.input[0]?.text.includes('v1'), false)
+    for (const idx of [1, 2, 3, 4]) {
+      assert.equal(lines[idx]?.input.length, 1, `Turn ${idx + 1} must omit memory context`)
+      assert.equal(lines[idx]?.input[0]?.text, 'Query gate target memory')
+    }
+  } finally {
+    await adapter.close().catch(() => undefined)
+    memoryService.close()
+    dbHandle.close()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(ws, { recursive: true, force: true })
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})

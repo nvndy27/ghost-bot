@@ -2103,7 +2103,26 @@ export class RunOrchestrator {
         runId,
         session: providerSession,
         text: prompt,
-        referenceContext: preparedMemory.envelopeJson ?? undefined,
+        prepareReferenceContext: async () => {
+          if (signal.aborted || this.stopping) {
+            throw new DaemonError('RUN_CANCELLED', 'Run cancelled before turn dispatch', {
+              statusCode: 409,
+            })
+          }
+          const latestMemory = await this.prepareExecutionMemorySafely({
+            sessionId,
+            agentId,
+            runtimeId: 'codex',
+            queryText: prompt,
+            isMock: false,
+          })
+          if (signal.aborted || this.stopping) {
+            throw new DaemonError('RUN_CANCELLED', 'Run cancelled during memory preparation', {
+              statusCode: 409,
+            })
+          }
+          return latestMemory.envelopeJson ?? undefined
+        },
       })) {
         if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
           throw new DaemonError(

@@ -581,11 +581,26 @@ export class CodexAppServerAdapter implements AgentRuntime {
     this.activeRunsById.set(active.runId, active)
 
     try {
+      if (active.cancelled) {
+        this.pushEvent(active, { type: 'run.cancelled' })
+        active.done = true
+        yield active.queue.shift()!
+        return
+      }
+      const resolvedReferenceContext = request.prepareReferenceContext
+        ? await request.prepareReferenceContext()
+        : request.referenceContext
+      if (active.cancelled) {
+        this.pushEvent(active, { type: 'run.cancelled' })
+        active.done = true
+        yield active.queue.shift()!
+        return
+      }
       const { approvalPolicy } = mapPermissionToCodex(config.permission)
       const sandboxPolicy = buildCodexSandboxPolicy(config.permission, canonicalWorkspace)
       const turnInput: Array<{ type: 'text'; text: string }> = []
-      if (request.referenceContext && request.referenceContext.trim().length > 0) {
-        turnInput.push({ type: 'text', text: request.referenceContext })
+      if (resolvedReferenceContext && resolvedReferenceContext.trim().length > 0) {
+        turnInput.push({ type: 'text', text: resolvedReferenceContext })
       }
       turnInput.push({ type: 'text', text: request.text })
       const turnRes = await client.request<Record<string, unknown>>('turn/start', {
