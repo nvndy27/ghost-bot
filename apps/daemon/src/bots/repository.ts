@@ -305,7 +305,10 @@ export class BotRepository {
     })
   }
 
-  deleteBot(id: string): { deletedId: string; activeBotId: string | null } {
+  deleteBot(
+    id: string,
+    options?: { onArchiveBot?: (botId: string, archivedAt: string) => void },
+  ): { deletedId: string; activeBotId: string | null } {
     const existing = this.getBot(id)
     if (!existing) {
       throw new DaemonError('NOT_FOUND', `Bot ${id} not found`, { statusCode: 404 })
@@ -330,6 +333,7 @@ export class BotRepository {
       this.handle.sqlite
         .prepare('UPDATE agents SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL')
         .run(now, now, id)
+      options?.onArchiveBot?.(id, now)
       const remaining = this.handle.sqlite
         .prepare(
           'SELECT id FROM agents WHERE archived_at IS NULL ORDER BY created_at ASC, name ASC LIMIT 1',

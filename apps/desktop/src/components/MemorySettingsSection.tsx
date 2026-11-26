@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   AppSettings,
   AppSettingsPatch,
@@ -66,6 +66,7 @@ export function MemorySettingsSection({
   const [editCategory, setEditCategory] = useState<MemoryCategory>('fact')
   const [editTags, setEditTags] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const loadSeqRef = useRef(0)
 
   useEffect(() => {
     if (!selectedBotId && defaultBotId) {
@@ -73,11 +74,18 @@ export function MemorySettingsSection({
     }
   }, [defaultBotId, selectedBotId])
 
+  useEffect(() => {
+    setEditingId(null)
+    setConfirmDeleteId(null)
+  }, [scopeFilter, selectedBotId])
+
   const loadMemories = useCallback(async () => {
     const bridge = window.ghostBot
     if (!bridge) return
+    const seq = ++loadSeqRef.current
     if ((scopeFilter === 'bot' || scopeFilter === 'workspace') && !selectedBotId) {
       setRecords([])
+      setLoading(false)
       return
     }
     setLoading(true)
@@ -92,6 +100,7 @@ export function MemorySettingsSection({
           includeUserWide: scopeFilter === 'user',
           limit: 30,
         })
+        if (seq !== loadSeqRef.current) return
         setRecords(res.matches.map((m) => m.record))
       } else {
         const res = await bridge.listMemories({
@@ -102,12 +111,16 @@ export function MemorySettingsSection({
           limit: 50,
           offset: 0,
         })
+        if (seq !== loadSeqRef.current) return
         setRecords(res.records)
       }
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load memories')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) {
+        setLoading(false)
+      }
     }
   }, [includeArchived, scopeFilter, searchQuery, selectedBotId])
 
@@ -260,7 +273,8 @@ export function MemorySettingsSection({
           <div style={{ fontWeight: 500 }}>Send memory to external providers</div>
           <div className="gb-muted" style={{ fontSize: '12px' }}>
             Required before including retrieved memory in Codex or other external requests.
-            Deleting local memory later cannot remove data already sent to a provider.
+            Deleting local memory later cannot remove data already sent to a provider; start a New
+            chat to avoid reusing an existing provider thread that already received earlier memory.
           </div>
         </div>
         <input

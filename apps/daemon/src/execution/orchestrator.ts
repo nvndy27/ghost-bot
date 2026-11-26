@@ -1662,6 +1662,8 @@ export class RunOrchestrator {
             truncated: false,
           }
 
+      if (finalizeIfCancelled()) return
+
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
         type: 'run.started',
@@ -2063,6 +2065,21 @@ export class RunOrchestrator {
         queryText: prompt,
         isMock: false,
       })
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
 
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',

@@ -439,6 +439,11 @@ export class MemoryService {
 
   async updateMemory(rawInput: UpdateMemoryIpcInput): Promise<MemoryRecordDto> {
     this.assertOpen()
+    if (!this.settingsRepo.getSettings().memory.enabled) {
+      throw new DaemonError('MEMORY_DISABLED', 'Memory storage is disabled in Settings.', {
+        statusCode: 409,
+      })
+    }
     const parsed = UpdateMemoryIpcInputSchema.safeParse(rawInput)
     if (!parsed.success) {
       throw new DaemonError(
@@ -497,26 +502,33 @@ export class MemoryService {
   }
 
   /**
+   * Archives active bot-scoped memories inside an active caller transaction.
+   * Never touches user-wide memories.
+   */
+  archiveMemoriesForBotInTx(botId: string, now = new Date().toISOString()): number {
+    this.assertOpen()
+    const result = this.dbHandle.sqlite
+      .prepare(
+        `UPDATE memories
+         SET status = 'archived', archived_at = ?, updated_at = ?
+         WHERE user_id = ? AND scope_kind = 'bot' AND bot_id = ? AND status = 'active'`,
+      )
+      .run(now, now, LOCAL_USER_ID, botId)
+    const count = Number(result.changes ?? 0)
+    if (count > 0) {
+      this.writeAudit('memory.archive_bot', botId, 'ok', { archivedCount: count })
+    }
+    return count
+  }
+
+  /**
    * Archives active bot-scoped memories when a bot is soft-archived/deleted.
    * Never touches user-wide memories.
    */
   archiveMemoriesForBot(botId: string): number {
     this.assertOpen()
     const now = new Date().toISOString()
-    return this.dbHandle.transaction(() => {
-      const result = this.dbHandle.sqlite
-        .prepare(
-          `UPDATE memories
-           SET status = 'archived', archived_at = ?, updated_at = ?
-           WHERE user_id = ? AND scope_kind = 'bot' AND bot_id = ? AND status = 'active'`,
-        )
-        .run(now, now, LOCAL_USER_ID, botId)
-      const count = Number(result.changes ?? 0)
-      if (count > 0) {
-        this.writeAudit('memory.archive_bot', botId, 'ok', { archivedCount: count })
-      }
-      return count
-    })
+    return this.dbHandle.transaction(() => this.archiveMemoriesForBotInTx(botId, now))
   }
 
   /**

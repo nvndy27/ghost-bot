@@ -46,4 +46,18 @@ Phase 3D.1 integrates `@ghost-bot/memory` into the daemon-owned Ghost Bot applic
 
 - All retrieved records are serialized inside `untrusted_memory_reference_data` (`authority: "none"`). Memory cannot alter `permissionMode`, `approvals`, `accountId`, or `workspacePath`.
 - Structured JSON envelopes do not independently guarantee downstream LLM prompt-injection resistance.
-- Once memory is sent to an external provider with user consent, local deletion cannot retroactively remove data retained by the provider.
+- Once memory is sent to an external provider with user consent, local deletion cannot retroactively remove data retained by the provider; users should start a **New chat** to avoid reusing an existing provider-managed thread that already received earlier memory.
+
+## 7. Review & Hardening Findings Fixed
+
+1. **Zod v4 Partial Settings Patch Overwrite (`packages/shared-types/ipc.ts`)**: Replaced `MemorySettingsSchema.partial()` in `AppSettingsPatchSchema` with explicit optional `MemorySettingsPatchSchema` (without `.default(...)`) so patching a single memory preference preserves all other persisted memory preferences.
+2. **Atomic Bot Deletion & Memory Archival (`apps/daemon/src/bots/repository.ts`, `apps/daemon/src/memory/service.ts`, `apps/daemon/src/server.ts`)**: Added `onArchiveBot` callback inside `BotRepository.deleteBot()`'s transaction invoking `memoryService.archiveMemoriesForBotInTx()`, ensuring bot archival and bot-scoped memory archival succeed or fail atomically while preserving user-wide and shared workspace memories.
+3. **Dispatch-Time Cancellation & Update Gate (`apps/daemon/src/execution/orchestrator.ts`, `apps/daemon/src/memory/service.ts`)**: Added post-preparation `signal.aborted || this.stopping` guards in `executeMockRun` and `executeCodexRun` before runtime dispatch, and gated `MemoryService.updateMemory` when `memory.enabled === false` while keeping `archiveMemory` and `deleteMemory` available for cleanup.
+4. **Desktop UI Async Race & IPC Pre-Bounds (`apps/desktop/src/components/MemorySettingsSection.tsx`, `apps/desktop/electron/main.ts`)**: Added `loadSeqRef` sequence guarding in `MemorySettingsSection` so stale async list/search results cannot overwrite newer scope/bot state, reset edit/delete confirmation state on scope/bot switch, and added `assertBoundedMemoryIpcPayload()` before Zod parsing in Electron main.
+
+## 8. Synthetic Performance Measurement (250-Record Corpus)
+
+Measured on an isolated SQLite database (`node:sqlite` + FTS5) with 250 active bot-scoped memories:
+- `MemoryService.searchMemories`: `13.61 ms`
+- `MemoryService.prepareExecutionContext` (search + per-record `getById` revalidation + `buildMemoryContext`): `7.14 ms` (`selectedCount: 6`, `totalBytes: 2628`).
+- Limitation: synchronous `node:sqlite` search runs on the daemon event loop; bounded by `MEMORY_LIMITS` (`maxQueryLength`, `maxSearchLimit`, `maxContextBytes`). Phase 3D.2 Knowledge corpus indexing/chunking will require explicit candidate caps and/or bounded batching.

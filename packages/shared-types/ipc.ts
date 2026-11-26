@@ -239,6 +239,15 @@ export const MemorySettingsSchema = z.object({
   externalProviderConsent: z.boolean().default(false),
 })
 
+export const MemorySettingsPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    automaticRetrieval: z.boolean().optional(),
+    includeUserWide: z.boolean().optional(),
+    externalProviderConsent: z.boolean().optional(),
+  })
+  .strict()
+
 export const AppSettingsSchema = z.object({
   general: GeneralSettingsSchema.prefault({}),
   appearance: AppearanceSettingsSchema.prefault({}),
@@ -257,7 +266,7 @@ export const AppSettingsPatchSchema = z
     personalization: PersonalizationSettingsSchema.partial().optional(),
     permissions: PermissionsSettingsSchema.partial().optional(),
     privacy: PrivacySettingsSchema.partial().optional(),
-    memory: MemorySettingsSchema.partial().optional(),
+    memory: MemorySettingsPatchSchema.optional(),
   })
   .strict()
 

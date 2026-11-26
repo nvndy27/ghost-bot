@@ -380,8 +380,11 @@ export class GhostBotDaemon {
           return
         }
         if (req.method === 'DELETE') {
-          const result = repo.deleteBot(idCheck.data)
-          this.memoryService?.archiveMemoriesForBot(idCheck.data)
+          const result = repo.deleteBot(idCheck.data, {
+            onArchiveBot: (botId, now) => {
+              this.memoryService?.archiveMemoriesForBotInTx(botId, now)
+            },
+          })
           sendJson(res, 200, result)
           return
         }

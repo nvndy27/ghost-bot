@@ -574,8 +574,25 @@ function registerIpcHandlers(): void {
     )
   })
 
+  function assertBoundedMemoryIpcPayload(raw: unknown): void {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Invalid memory payload')
+    }
+    const rec = raw as Record<string, unknown>
+    if (Array.isArray(rec.tags) && rec.tags.length > 32) {
+      throw new Error('Memory tags array exceeds pre-validation limit')
+    }
+    if (typeof rec.content === 'string' && rec.content.length > 16_384) {
+      throw new Error('Memory content exceeds pre-validation limit')
+    }
+    if (typeof rec.query === 'string' && rec.query.length > 1024) {
+      throw new Error('Memory query exceeds pre-validation limit')
+    }
+  }
+
   ipcMain.handle(IPC_CHANNELS.MEMORY_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMemoryIpcPayload(params ?? {})
     const parsed = ListMemoriesIpcInputSchema.parse(params ?? {})
     const qs = new URLSearchParams()
     if (parsed.botId) qs.set('botId', parsed.botId)
@@ -590,6 +607,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MEMORY_SEARCH, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMemoryIpcPayload(params)
     const parsed = SearchMemoriesIpcInputSchema.parse(params)
     return queryDaemon('/memories/search', SearchMemoriesResponseSchema, {
       method: 'POST',
@@ -599,6 +617,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MEMORY_CREATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMemoryIpcPayload(params)
     const parsed = CreateMemoryIpcInputSchema.parse(params)
     return queryDaemon('/memories', MemoryRecordDtoSchema, {
       method: 'POST',
@@ -608,6 +627,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.MEMORY_UPDATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedMemoryIpcPayload(params)
     const parsed = UpdateMemoryIpcInputSchema.parse(params)
     const { id, ...patch } = parsed
     return queryDaemon(`/memories/${encodeURIComponent(id)}`, MemoryRecordDtoSchema, {

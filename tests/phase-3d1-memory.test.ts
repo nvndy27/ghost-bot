@@ -473,3 +473,207 @@ test('Phase 3D.1 execution context assembly, untrusted boundary, retry revalidat
     await rm(ws, { recursive: true, force: true })
   }
 })
+
+test('Phase 3D.1 hardening: workspace symlink canonicalization, missing workspace fail-closed, consent gates, and 250-record search benchmark', async () => {
+  const { symlink } = await import('node:fs/promises')
+  const { MemoryService } = await import('../apps/daemon/src/memory/service.ts')
+  const { SettingsRepository } = await import('../apps/daemon/src/settings/repository.ts')
+  const { BotRepository } = await import('../apps/daemon/src/bots/repository.ts')
+  const { SessionRepository } = await import('../apps/daemon/src/sessions/repository.ts')
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'gb-3d1-hard-data-'))
+  const realWs = await mkdtemp(join(tmpdir(), 'gb-3d1-realws-'))
+  const symlinkParent = await mkdtemp(join(tmpdir(), 'gb-3d1-sym-'))
+  const aliasWs = join(symlinkParent, 'ws-alias')
+  await symlink(realWs, aliasWs)
+
+  const dbHandle = await openGhostBotDatabase(dataDir)
+  const settingsRepo = new SettingsRepository(dbHandle)
+  const botRepo = new BotRepository(dbHandle)
+  const sessionRepo = new SessionRepository(dbHandle)
+  const memoryService = new MemoryService(dbHandle, settingsRepo)
+
+  try {
+    const validAvatar = {
+      kind: 'preset' as const,
+      shape: 'ghost' as const,
+      color: '#111827',
+      eyes: 'classic' as const,
+      rotation: 0,
+      animation: false,
+    }
+    const botA = await botRepo.createBot({
+      name: 'WS Bot A',
+      description: 'A',
+      instructions: '',
+      avatar: validAvatar,
+      runtimeId: 'codex',
+      modelId: 'gpt-5',
+      effort: 'medium',
+      workspacePath: realWs,
+      permission: 'read-only',
+    })
+    const botB = await botRepo.createBot({
+      name: 'WS Bot B',
+      description: 'B',
+      instructions: '',
+      avatar: validAvatar,
+      runtimeId: 'mock',
+      modelId: 'mock-model',
+      effort: 'medium',
+      workspacePath: aliasWs,
+      permission: 'read-only',
+    })
+
+    // Workspace-scoped memory created via botA is visible to botB (same canonical realpath)
+    const wsMem = await memoryService.createMemory({
+      scope: { kind: 'workspace', botId: botA.id },
+      category: 'project_context',
+      content: 'Shared repository uses pnpm workspace and node:sqlite.',
+      tags: ['repo'],
+    })
+    const botBList = await memoryService.listMemories({
+      botId: botB.id,
+      scopeKind: 'workspace',
+      includeUserWide: false,
+      includeArchived: false,
+      limit: 20,
+      offset: 0,
+    })
+    assert.equal(botBList.records.length, 1)
+    assert.equal(botBList.records[0]?.id, wsMem.id)
+
+    // Deleting botA atomically archives botA's bot-scoped memory while preserving shared workspace memory
+    const botAMem = await memoryService.createMemory({
+      scope: { kind: 'bot', botId: botA.id },
+      category: 'fact',
+      content: 'Private note for bot A only.',
+      tags: ['private'],
+    })
+    botRepo.deleteBot(botA.id, {
+      onArchiveBot: (id, now) => {
+        memoryService.archiveMemoriesForBotInTx(id, now)
+      },
+    })
+    const botBWorkspaceAfter = await memoryService.listMemories({
+      botId: botB.id,
+      scopeKind: 'workspace',
+      includeUserWide: false,
+      includeArchived: false,
+      limit: 20,
+      offset: 0,
+    })
+    assert.equal(botBWorkspaceAfter.records.length, 1)
+    const archivedRow = dbHandle.sqlite
+      .prepare('SELECT status FROM memories WHERE id = ?')
+      .get(botAMem.id) as { status: string }
+    assert.equal(archivedRow.status, 'archived')
+
+    // Disabling memory.enabled blocks updateMemory while allowing cleanup deleteMemory
+    settingsRepo.updateSettings({ memory: { enabled: false } })
+    await assert.rejects(
+      () => memoryService.updateMemory({ id: wsMem.id, content: 'Should fail while disabled' }),
+      /disabled/i,
+    )
+    const deletedRes = await memoryService.deleteMemory(botAMem.id)
+    assert.equal(deletedRes.deletedId, botAMem.id)
+
+    // Re-enable memory + automaticRetrieval; verify externalProviderConsent gate for codex & unsupported runtimes
+    settingsRepo.updateSettings({
+      memory: { enabled: true, automaticRetrieval: true, externalProviderConsent: false },
+    })
+    const sessB = sessionRepo.createSession({ agentId: botB.id, title: 'Consent Check' })
+    const codexBlocked = await memoryService.prepareExecutionContext({
+      sessionId: sessB.id,
+      agentId: botB.id,
+      runtimeId: 'codex',
+      queryText: 'pnpm workspace',
+      isMock: false,
+    })
+    assert.equal(codexBlocked.status, 'consent_required')
+    assert.equal(codexBlocked.envelopeJson, null)
+
+    const openclawUnsupported = await memoryService.prepareExecutionContext({
+      sessionId: sessB.id,
+      agentId: botB.id,
+      runtimeId: 'openclaw',
+      queryText: 'pnpm workspace',
+      isMock: false,
+    })
+    assert.equal(openclawUnsupported.status, 'unsupported_runtime')
+
+    settingsRepo.updateSettings({ memory: { externalProviderConsent: true } })
+    const codexAllowed = await memoryService.prepareExecutionContext({
+      sessionId: sessB.id,
+      agentId: botB.id,
+      runtimeId: 'codex',
+      queryText: 'pnpm workspace',
+      isMock: false,
+    })
+    assert.equal(codexAllowed.status, 'attached')
+    assert.equal(codexAllowed.selectedCount, 1)
+
+    // Synthetic 250-record corpus performance measurement
+    for (let i = 0; i < 250; i += 1) {
+      await memoryService.createMemory({
+        scope: { kind: 'bot', botId: botB.id },
+        category: 'fact',
+        content: `Synthetic benchmark record #${i}: deterministic local memory retrieval target-${i % 25}.`,
+        tags: [`bench-${i % 10}`],
+      })
+    }
+    const t0 = performance.now()
+    const searchRes = await memoryService.searchMemories({
+      query: 'deterministic retrieval target-7',
+      botId: botB.id,
+      scopeKind: 'bot',
+      includeUserWide: false,
+      limit: 20,
+    })
+    const searchMs = performance.now() - t0
+    const t1 = performance.now()
+    const prepRes = await memoryService.prepareExecutionContext({
+      sessionId: sessB.id,
+      agentId: botB.id,
+      runtimeId: 'mock',
+      queryText: 'deterministic retrieval target-7',
+      isMock: true,
+    })
+    const prepareMs = performance.now() - t1
+    assert.equal(searchRes.matches.length > 0, true)
+    assert.equal(prepRes.status, 'attached')
+    assert.equal(searchMs < 250, true, `Expected bounded search <250ms, got ${searchMs.toFixed(2)}ms`)
+    assert.equal(prepareMs < 250, true, `Expected bounded prepare <250ms, got ${prepareMs.toFixed(2)}ms`)
+    console.log(
+      JSON.stringify({
+        benchmark: 'phase-3d1-250-records',
+        searchMs: Number(searchMs.toFixed(2)),
+        prepareMs: Number(prepareMs.toFixed(2)),
+        selectedCount: prepRes.selectedCount,
+        totalBytes: prepRes.totalBytes,
+      }),
+    )
+
+    // Removing workspace directory fails closed for workspace-scoped operations
+    await rm(realWs, { recursive: true, force: true })
+    await assert.rejects(
+      () =>
+        memoryService.createMemory({
+          scope: { kind: 'workspace', botId: botB.id },
+          category: 'fact',
+          content: 'Missing workspace check',
+          tags: [],
+        }),
+      /unavailable/i,
+    )
+  } finally {
+    memoryService.close()
+    // Verify closing borrowed MemoryService did not close daemon's SQLite handle
+    const stillOpen = dbHandle.sqlite.prepare('SELECT 1 AS ok').get() as { ok: number }
+    assert.equal(stillOpen.ok, 1)
+    dbHandle.close()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(realWs, { recursive: true, force: true }).catch(() => undefined)
+    await rm(symlinkParent, { recursive: true, force: true })
+  }
+})
