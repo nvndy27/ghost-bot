@@ -22,7 +22,7 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'mock'
+  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
@@ -39,6 +39,10 @@ export interface PolicyAuthorizationInput {
   claudeCredentialConfigured?: boolean
   claudeKeyringAvailable?: boolean
   claudeEndpointVerified?: boolean
+  geminiExecutionAuthorized?: boolean
+  geminiCredentialConfigured?: boolean
+  geminiKeyringAvailable?: boolean
+  geminiEndpointVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -108,6 +112,17 @@ export class RuntimePolicyBroker {
         claudeCredentialConfigured: input.claudeCredentialConfigured ?? false,
         claudeKeyringAvailable: input.claudeKeyringAvailable ?? false,
         claudeEndpointVerified: input.claudeEndpointVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'gemini-api') {
+      return this.authorizeGeminiApiExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        geminiExecutionAuthorized: input.geminiExecutionAuthorized ?? false,
+        geminiCredentialConfigured: input.geminiCredentialConfigured ?? false,
+        geminiKeyringAvailable: input.geminiKeyringAvailable ?? false,
+        geminiEndpointVerified: input.geminiEndpointVerified ?? false,
       })
     }
 
@@ -327,6 +342,64 @@ export class RuntimePolicyBroker {
     return {
       allowed: true,
       reason: 'Authorized for bounded API-billed read-only Anthropic Claude chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeGeminiApiExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    geminiExecutionAuthorized: boolean
+    geminiCredentialConfigured: boolean
+    geminiKeyringAvailable: boolean
+    geminiEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Google Gemini API initial integration supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'Gemini API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Google Gemini API execution is gated until explicit API usage authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://generativelanguage.googleapis.com endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded read-only Google Gemini API chat without tools',
       verifiedModes: ['read-only'],
     }
   }

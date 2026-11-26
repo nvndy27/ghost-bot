@@ -101,6 +101,9 @@ import {
   ClaudeStatusDtoSchema,
   SetClaudeCredentialInputSchema,
   SetClaudeAuthInputSchema,
+  GeminiStatusDtoSchema,
+  SetGeminiCredentialInputSchema,
+  SetGeminiAuthInputSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1246,6 +1249,39 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = SetClaudeAuthInputSchema.parse(rawInput)
     return queryDaemon('/claude/authorization', ClaudeStatusDtoSchema, {
+      method: 'PUT',
+      body: parsed,
+      timeoutMs: 12_000,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.GEMINI_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/gemini/status', GeminiStatusDtoSchema, { timeoutMs: 12_000 })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.GEMINI_CREDENTIAL_SET, async (event, rawInput) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetGeminiCredentialInputSchema.parse(rawInput)
+    return queryDaemon('/gemini/credential', GeminiStatusDtoSchema, {
+      method: 'PUT',
+      body: parsed,
+      timeoutMs: 12_000,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.GEMINI_CREDENTIAL_DELETE, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/gemini/credential', GeminiStatusDtoSchema, {
+      method: 'DELETE',
+      timeoutMs: 12_000,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.GEMINI_AUTH_SET, async (event, rawInput) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = SetGeminiAuthInputSchema.parse(rawInput)
+    return queryDaemon('/gemini/authorization', GeminiStatusDtoSchema, {
       method: 'PUT',
       body: parsed,
       timeoutMs: 12_000,

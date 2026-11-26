@@ -1,5 +1,14 @@
 # Progress log
 
+## Provider.4 — Google Gemini API Production Integration
+
+2026-11-27. Branched `feat/provider4-gemini-api` from `fcded26` (`feat/provider3-claude-api`). Implemented `GoogleGeminiApiAdapter` (`v1beta/models`, `streamGenerateContent?alt=sse`, `x-goog-api-key`), shared provider credential hardening, Desktop Settings & BotEditorModal UI, and read-only Gemini CLI assessment with zero live inference or external API requests. See [Provider.4 report](extensions/provider4-gemini-api.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added `GoogleGeminiApiAdapter` (`packages/runtime-adapters/gemini/google-gemini-api.ts`) pinned to `https://generativelanguage.googleapis.com` (`v1beta`), `x-goog-api-key` header (query `?key=` rejected), paginated `generateContent` model discovery, `read-only` tool-free SSE streaming, non-cumulative `usageMetadata` snapshot emission, safety/`MAX_TOKENS`/`thought` handling, mid-stream credential rotation abort (hardened across both Claude and Gemini adapters), stale `accountRef` cleanup in `apps/daemon/src/server.ts`, `RuntimePolicyBroker.authorizeGeminiApiExecution()`, `/gemini/*` daemon routes, `IPC_CHANNELS.GEMINI_*`, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider4-gemini-production.test.ts` (2/2), 3 consecutive full-workspace regression runs (**225/225** per run: `root` 132/132, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 12 Electron E2E/IPC scripts (`verify-provider4-gemini-desktop.mjs` + 11 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
 ## Provider.3 — Anthropic Claude API Integration & Targeted Core Hardening
 
 2026-11-27. Branched `feat/provider3-claude-api` from `94a71dc` (`feat/provider2-ollama-local`). Commit 1 (`edfbad1`) closed `CORE2-TERM-01` and `CORE1-SS-01`; Commit 2 implemented `AnthropicClaudeApiAdapter` and provider credential namespace with zero live inference or external API calls. See [Provider.3 report](extensions/provider3-claude-api.md).

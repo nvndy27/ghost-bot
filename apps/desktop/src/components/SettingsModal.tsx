@@ -101,6 +101,11 @@ export function SettingsModal({
   >(null)
   const [claudeApiKeyInput, setClaudeApiKeyInput] = useState('')
   const [claudeBusy, setClaudeBusy] = useState(false)
+  const [geminiStatus, setGeminiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').GeminiStatusDto | null
+  >(null)
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
+  const [geminiBusy, setGeminiBusy] = useState(false)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -109,6 +114,7 @@ export function SettingsModal({
     setConfirmReset(false)
     setErrorMsg(null)
     setClaudeApiKeyInput('')
+    setGeminiApiKeyInput('')
     if (window.ghostBot?.getOpenClawStatus) {
       void window.ghostBot
         .getOpenClawStatus()
@@ -132,6 +138,14 @@ export function SettingsModal({
         .then(setClaudeStatus)
         .catch(() => {
           setClaudeStatus(null)
+        })
+    }
+    if (window.ghostBot?.getGeminiStatus) {
+      void window.ghostBot
+        .getGeminiStatus()
+        .then(setGeminiStatus)
+        .catch(() => {
+          setGeminiStatus(null)
         })
     }
   }, [open, initialSection])
@@ -643,6 +657,126 @@ export function SettingsModal({
                     {claudeStatus.policyCompatibility.gatedReason && (
                       <small className="gb-muted" data-testid="claude-gated-reason">
                         Execution gate: {claudeStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {geminiStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="gemini-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>Google Gemini API (API key)</strong>
+                      <span className="gb-badge" data-testid="gemini-auth-badge">
+                        {geminiStatus.authStatus}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{geminiStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Endpoint: {geminiStatus.endpoint}</span>
+                      <span>
+                        Keyring:{' '}
+                        {geminiStatus.keyringAvailable
+                          ? 'available'
+                          : geminiStatus.keyringLocked
+                            ? 'locked'
+                            : 'unavailable'}
+                      </span>
+                      <span>Key: {geminiStatus.maskedKeyHint ?? 'not configured'}</span>
+                      <span>Gen: {geminiStatus.credentialGeneration}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">billing: API key (free-tier eligibility varies; not Google AI sub)</span>
+                      <span className="gb-badge">tools: disabled (read-only chat)</span>
+                      <span className="gb-badge">gemini cli: disabled</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="password"
+                        data-testid="gemini-api-key-input"
+                        value={geminiApiKeyInput}
+                        onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                        placeholder={
+                          geminiStatus.credentialConfigured
+                            ? 'Replace Gemini API key (AIza...)'
+                            : 'Enter Gemini API key (AIza...)'
+                        }
+                        autoComplete="off"
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="gemini-save-key-btn"
+                        disabled={geminiBusy || geminiApiKeyInput.trim().length < 8}
+                        onClick={() => {
+                          if (!window.ghostBot?.setGeminiCredential) return
+                          setGeminiBusy(true)
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setGeminiCredential({ apiKey: geminiApiKeyInput.trim(), accountRef: 'default' })
+                            .then((next) => {
+                              setGeminiStatus(next)
+                              setGeminiApiKeyInput('')
+                            })
+                            .catch((err: unknown) => {
+                              setErrorMsg(err instanceof Error ? err.message : 'Failed to save Gemini API key')
+                            })
+                            .finally(() => setGeminiBusy(false))
+                        }}
+                      >
+                        {geminiStatus.credentialConfigured ? 'Replace key' : 'Save key'}
+                      </button>
+                      {geminiStatus.credentialConfigured && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="gemini-delete-key-btn"
+                            disabled={geminiBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.deleteGeminiCredential) return
+                              setGeminiBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .deleteGeminiCredential()
+                                .then(setGeminiStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to delete Gemini API key')
+                                })
+                                .finally(() => setGeminiBusy(false))
+                            }}
+                          >
+                            Delete key
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="gemini-toggle-auth-btn"
+                            disabled={geminiBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.setGeminiExecutionAuthorized) return
+                              setGeminiBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .setGeminiExecutionAuthorized({
+                                  authorized: !geminiStatus.executionAuthorized,
+                                })
+                                .then(setGeminiStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
+                                })
+                                .finally(() => setGeminiBusy(false))
+                            }}
+                          >
+                            {geminiStatus.executionAuthorized ? 'Revoke API opt-in' : 'Authorize Gemini API'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {geminiStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="gemini-gated-reason">
+                        Execution gate: {geminiStatus.policyCompatibility.gatedReason}
                       </small>
                     )}
                   </div>

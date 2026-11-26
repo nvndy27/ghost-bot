@@ -1,5 +1,10 @@
 # Next steps
 
+## Provider.4 — Google Gemini API Integration (Completed Offline / Execution Gated)
+
+1. When explicitly authorized for live API testing, configure a Gemini API key in Settings -> Accounts & Providers and run the 2-request bounded live acceptance procedure in `docs/extensions/provider4-gemini-api.md`.
+2. Proceed to **Provider.5: Moonshot Kimi ACP Integration** (protocol-tested offline with `kimi` CLI availability check and strict ACP framing/approval boundaries).
+
 ## Provider.3 — Anthropic Claude API Integration (Completed Offline / Execution Gated)
 
 1. When explicitly authorized for billed API testing, configure an Anthropic API key in Settings -> Accounts & Providers and run the bounded one-turn live acceptance procedure in `docs/extensions/provider3-claude-api.md`.

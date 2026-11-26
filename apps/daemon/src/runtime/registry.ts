@@ -7,6 +7,11 @@ import {
 } from '@ghost-bot/runtime-adapters/claude'
 import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
 import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
+import {
+  APPROVED_GEMINI_ORIGIN,
+  GEMINI_API_VERSION,
+  GoogleGeminiApiAdapter,
+} from '@ghost-bot/runtime-adapters/gemini'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
@@ -60,6 +65,7 @@ export interface RuntimeRegistryOptions {
   openclawAdapter?: OpenClawGatewayAdapter
   ollamaAdapter?: OllamaLocalAdapter
   claudeAdapter?: AnthropicClaudeApiAdapter
+  geminiAdapter?: GoogleGeminiApiAdapter
   cacheTtlMs?: number
 }
 
@@ -427,6 +433,91 @@ export class RuntimeRegistry {
         sandbox: false,
         tools: false,
         claudeCodeCli: false,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getGeminiStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').GeminiStatusDto> {
+    const adapter =
+      this.options.geminiAdapter ??
+      new GoogleGeminiApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+        getAccountRef: () => input.accountRef,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeGeminiApiExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      geminiExecutionAuthorized: input.executionAuthorized,
+      geminiCredentialConfigured: input.credentialConfigured,
+      geminiKeyringAvailable: input.keyringAvailable,
+      geminiEndpointVerified: adapter.getEndpointOrigin() === APPROVED_GEMINI_ORIGIN,
+    })
+
+    const diagnostics: string[] = [
+      'Uses official Gemini API v1beta streamGenerateContent (x-goog-api-key header, never query params or Google account cookies).',
+      'Initial execution is tool-free read-only chat; Gemini CLI and Google AI subscription login are disabled.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_GEMINI_ORIGIN,
+      apiVersion: GEMINI_API_VERSION,
+      billingMode: 'api-key',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'Gemini API key configured and authorized for bounded read-only chat'
+            : 'Gemini API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No Gemini API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: true,
+        sandbox: false,
+        tools: false,
+        geminiCli: false,
       },
       models: input.models ?? [],
       resourceLimits: adapter.getResourceLimits(),

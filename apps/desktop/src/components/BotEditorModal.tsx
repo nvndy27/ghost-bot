@@ -60,14 +60,17 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
-  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api'>(
-    'mock-offline',
-  )
+  const [runtimeId, setRuntimeId] = useState<
+    'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api'
+  >('mock-offline')
   const [ollamaStatus, setOllamaStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
   >(null)
   const [claudeStatus, setClaudeStatus] = useState<
     import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
+  >(null)
+  const [geminiStatus, setGeminiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').GeminiStatusDto | null
   >(null)
   const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
   const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
@@ -97,6 +100,12 @@ export function BotEditorModal({
         .then(setClaudeStatus)
         .catch(() => setClaudeStatus(null))
     }
+    if (window.ghostBot?.getGeminiStatus) {
+      void window.ghostBot
+        .getGeminiStatus()
+        .then(setGeminiStatus)
+        .catch(() => setGeminiStatus(null))
+    }
     if (mode === 'edit' && initialBot) {
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
@@ -105,7 +114,8 @@ export function BotEditorModal({
         initialBot.runtimeId === 'codex' ||
           initialBot.runtimeId === 'openclaw' ||
           initialBot.runtimeId === 'ollama' ||
-          initialBot.runtimeId === 'claude-api'
+          initialBot.runtimeId === 'claude-api' ||
+          initialBot.runtimeId === 'gemini-api'
           ? initialBot.runtimeId
           : 'mock-offline',
       )
@@ -551,6 +561,7 @@ export function BotEditorModal({
                     | 'openclaw'
                     | 'ollama'
                     | 'claude-api'
+                    | 'gemini-api'
                   setDirty(true)
                   setRuntimeId(next)
                   if (next === 'ollama') {
@@ -563,6 +574,11 @@ export function BotEditorModal({
                     if (claudeStatus && claudeStatus.models.length > 0) {
                       setModelId(claudeStatus.models[0].id)
                     }
+                  } else if (next === 'gemini-api') {
+                    setPermission('read-only')
+                    if (geminiStatus && geminiStatus.models.length > 0) {
+                      setModelId(geminiStatus.models[0].id)
+                    }
                   }
                 }}
               >
@@ -571,6 +587,7 @@ export function BotEditorModal({
                 <option value="openclaw">OpenClaw Gateway</option>
                 <option value="ollama">Ollama Local</option>
                 <option value="claude-api">Anthropic Claude API (API-key billed)</option>
+                <option value="gemini-api">Google Gemini API (API key)</option>
               </select>
             </label>
 
@@ -580,7 +597,9 @@ export function BotEditorModal({
                   ? 'Model (Ollama)'
                   : runtimeId === 'claude-api'
                     ? 'Model (Claude API)'
-                    : 'Model (mock)'}
+                    : runtimeId === 'gemini-api'
+                      ? 'Model (Gemini API)'
+                      : 'Model (mock)'}
               </span>
               <select
                 data-testid="bot-model-select"
@@ -617,6 +636,20 @@ export function BotEditorModal({
                       {claudeStatus?.credentialConfigured
                         ? 'API-billed model discovery requires explicit opt-in'
                         : 'Configure Anthropic API key in Settings'}
+                    </option>
+                  )
+                ) : runtimeId === 'gemini-api' ? (
+                  geminiStatus && geminiStatus.models.length > 0 ? (
+                    geminiStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {geminiStatus?.credentialConfigured
+                        ? 'API model discovery requires explicit opt-in'
+                        : 'Configure Gemini API key in Settings'}
                     </option>
                   )
                 ) : (

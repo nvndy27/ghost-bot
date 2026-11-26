@@ -349,7 +349,8 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
     if (!state) {
       throw new Error(`Unknown Anthropic Claude session "${request.session.externalId}"`)
     }
-    if (state.credentialGeneration !== this.getCredentialGeneration()) {
+    const startGeneration = this.getCredentialGeneration()
+    if (state.credentialGeneration !== startGeneration) {
       yield {
         type: 'run.failed',
         runId: request.runId,
@@ -518,6 +519,19 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
       ): { events: AgentEvent[]; done: boolean } => {
         const events: AgentEvent[] = []
         if (!rawData) return { events, done: false }
+        if (this.getCredentialGeneration() !== startGeneration) {
+          terminalEmitted = true
+          seq += 1
+          events.push({
+            type: 'run.failed',
+            runId: request.runId,
+            seq,
+            timestamp: new Date().toISOString(),
+            code: 'CLAUDE_CREDENTIAL_ROTATED',
+            message: 'Anthropic credential rotated during active run; aborting stream',
+          })
+          return { events, done: true }
+        }
         let parsed: Record<string, unknown>
         try {
           const val = JSON.parse(rawData) as unknown

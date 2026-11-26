@@ -64,6 +64,8 @@ import {
   SetMcpServerEnabledInputSchema,
   SetClaudeAuthInputSchema,
   SetClaudeCredentialInputSchema,
+  SetGeminiAuthInputSchema,
+  SetGeminiCredentialInputSchema,
   SetMcpServerSecretInputSchema,
   SetSkillEnabledInputSchema,
   SkillIdParamSchema,
@@ -449,6 +451,89 @@ export class GhostBotDaemon {
     })
   }
 
+  private readGeminiProviderMeta(): {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  } {
+    const row = this.dbHandle?.sqlite
+      .prepare(`SELECT value_json FROM settings WHERE key = 'provider.gemini.v1'`)
+      .get() as { value_json: string } | undefined
+    if (!row) {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+    try {
+      const parsed = JSON.parse(row.value_json) as Record<string, unknown>
+      return {
+        accountRef:
+          typeof parsed.accountRef === 'string' && parsed.accountRef ? parsed.accountRef : 'default',
+        maskedKeyHint: typeof parsed.maskedKeyHint === 'string' ? parsed.maskedKeyHint : null,
+        credentialGeneration:
+          typeof parsed.credentialGeneration === 'number' ? parsed.credentialGeneration : 0,
+        executionAuthorized: parsed.executionAuthorized === true,
+      }
+    } catch {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+  }
+
+  private writeGeminiProviderMeta(meta: {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  }): void {
+    const nowIso = new Date().toISOString()
+    this.dbHandle?.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES ('provider.gemini.v1', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(JSON.stringify(meta), nowIso)
+  }
+
+  private async getGeminiStatusDto(): Promise<import('@ghost-bot/shared-types/ipc').GeminiStatusDto> {
+    const meta = this.readGeminiProviderMeta()
+    const store = this.providerSecretStore
+    const status = store?.getStatus() ?? {
+      available: false,
+      locked: false,
+      backend: 'unavailable' as const,
+      reason: 'Secret store not initialized',
+    }
+    const credentialConfigured =
+      status.available &&
+      Boolean(
+        store?.existsProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'gemini',
+          accountRef: meta.accountRef,
+        }),
+      )
+    return this.runtimeRegistry.getGeminiStatus({
+      keyringAvailable: status.available,
+      keyringLocked: status.locked,
+      keyringReason: status.reason,
+      credentialConfigured,
+      accountRef: meta.accountRef,
+      maskedKeyHint: credentialConfigured ? meta.maskedKeyHint : null,
+      credentialGeneration: meta.credentialGeneration,
+      executionAuthorized: credentialConfigured ? meta.executionAuthorized : false,
+    })
+  }
+
   async stop(): Promise<void> {
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
@@ -569,6 +654,13 @@ export class GhostBotDaemon {
         }
         const prevMeta = this.readClaudeProviderMeta()
         const accountRef = parsed.data.accountRef
+        if (prevMeta.accountRef !== accountRef) {
+          store.deleteProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'anthropic',
+            accountRef: prevMeta.accountRef,
+          })
+        }
         store.storeProviderSecret(
           { ownerId: LOCAL_USER_ID, providerId: 'anthropic', accountRef },
           `Ghost Bot Anthropic API (${accountRef})`,
@@ -657,6 +749,137 @@ export class GhostBotDaemon {
           executionAuthorized: parsed.data.authorized,
         })
         sendJson(res, 200, await this.getClaudeStatusDto())
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/gemini/status') {
+        sendJson(res, 200, await this.getGeminiStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/gemini/credential') {
+        const body = await readJsonBody(req)
+        const parsed = SetGeminiCredentialInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid credential payload', {
+            statusCode: 400,
+          })
+        }
+        const apiKey = parsed.data.apiKey.trim()
+        if (!apiKey || apiKey.includes('\0') || /\s/.test(apiKey)) {
+          throw new DaemonError('VALIDATION_ERROR', 'Gemini API key format is invalid', {
+            statusCode: 400,
+          })
+        }
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readGeminiProviderMeta()
+        const accountRef = parsed.data.accountRef
+        if (prevMeta.accountRef !== accountRef) {
+          store.deleteProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'gemini',
+            accountRef: prevMeta.accountRef,
+          })
+        }
+        store.storeProviderSecret(
+          { ownerId: LOCAL_USER_ID, providerId: 'gemini', accountRef },
+          `Ghost Bot Gemini API (${accountRef})`,
+          apiKey,
+        )
+        const maskedKeyHint =
+          apiKey.length >= 10
+            ? `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`
+            : `...${apiKey.slice(-4)}`
+        this.writeGeminiProviderMeta({
+          accountRef,
+          maskedKeyHint,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        sendJson(res, 200, await this.getGeminiStatusDto())
+        return
+      }
+
+      if (req.method === 'DELETE' && url.pathname === '/gemini/credential') {
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readGeminiProviderMeta()
+        store.deleteProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'gemini',
+          accountRef: prevMeta.accountRef,
+        })
+        this.writeGeminiProviderMeta({
+          accountRef: prevMeta.accountRef,
+          maskedKeyHint: null,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        sendJson(res, 200, await this.getGeminiStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/gemini/authorization') {
+        const body = await readJsonBody(req)
+        const parsed = SetGeminiAuthInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', 'Invalid authorization payload', { statusCode: 400 })
+        }
+        const meta = this.readGeminiProviderMeta()
+        const store = this.providerSecretStore
+        const storeStatus = store?.getStatus() ?? {
+          available: false,
+          locked: false,
+          backend: 'unavailable' as const,
+          reason: 'Secret store not initialized',
+        }
+        if (parsed.data.authorized) {
+          if (!storeStatus.available) {
+            throw new DaemonError(
+              storeStatus.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+              storeStatus.reason ?? 'OS Secret Service is unavailable or locked',
+              { statusCode: 503 },
+            )
+          }
+          const exists = store!.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'gemini',
+            accountRef: meta.accountRef,
+          })
+          if (!exists) {
+            throw new DaemonError(
+              'GEMINI_CREDENTIAL_MISSING',
+              'Configure a Gemini API key before authorizing execution',
+              { statusCode: 400 },
+            )
+          }
+        }
+        this.writeGeminiProviderMeta({
+          ...meta,
+          executionAuthorized: parsed.data.authorized,
+        })
+        sendJson(res, 200, await this.getGeminiStatusDto())
         return
       }
 
