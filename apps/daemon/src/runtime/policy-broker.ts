@@ -22,7 +22,17 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'kimi-acp' | 'mock'
+  runtimeMode:
+    | 'codex'
+    | 'openclaw'
+    | 'ollama'
+    | 'claude-api'
+    | 'gemini-api'
+    | 'kimi-acp'
+    | 'lmstudio'
+    | 'llamacpp'
+    | 'openrouter'
+    | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
@@ -48,6 +58,13 @@ export interface PolicyAuthorizationInput {
   kimiAcpProtocolVerified?: boolean
   kimiAuthenticated?: boolean
   kimiContainmentVerified?: boolean
+  localCompatAuthorized?: boolean
+  localCompatAvailable?: boolean
+  localCompatLoopbackVerified?: boolean
+  openRouterExecutionAuthorized?: boolean
+  openRouterCredentialConfigured?: boolean
+  openRouterKeyringAvailable?: boolean
+  openRouterEndpointVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -140,6 +157,28 @@ export class RuntimePolicyBroker {
         kimiAcpProtocolVerified: input.kimiAcpProtocolVerified ?? false,
         kimiAuthenticated: input.kimiAuthenticated ?? false,
         kimiContainmentVerified: input.kimiContainmentVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'lmstudio' || input.runtimeMode === 'llamacpp') {
+      return this.authorizeLocalOpenAiCompatExecution({
+        providerLabel: input.runtimeMode === 'lmstudio' ? 'LM Studio' : 'llama.cpp',
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        executionAuthorized: input.localCompatAuthorized ?? false,
+        available: input.localCompatAvailable ?? false,
+        loopbackVerified: input.localCompatLoopbackVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'openrouter') {
+      return this.authorizeOpenRouterExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        openRouterExecutionAuthorized: input.openRouterExecutionAuthorized ?? false,
+        openRouterCredentialConfigured: input.openRouterCredentialConfigured ?? false,
+        openRouterKeyringAvailable: input.openRouterKeyringAvailable ?? false,
+        openRouterEndpointVerified: input.openRouterEndpointVerified ?? false,
       })
     }
 
@@ -477,6 +516,114 @@ export class RuntimePolicyBroker {
       allowed: true,
       reason: 'Authorized for bounded Kimi Code ACP execution',
       verifiedModes: ['read-only', 'ask-approval'],
+    }
+  }
+
+  authorizeLocalOpenAiCompatExecution(input: {
+    providerLabel: 'LM Studio' | 'llama.cpp'
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    executionAuthorized: boolean
+    available: boolean
+    loopbackVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.loopbackVerified) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} endpoint must be verified on literal loopback`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.available) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} local server is not reachable on loopback`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.executionAuthorized) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} execution is gated until explicit local-runtime opt-in`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: `Authorized for bounded read-only ${input.providerLabel} chat without tools`,
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeOpenRouterExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    openRouterExecutionAuthorized: boolean
+    openRouterCredentialConfigured: boolean
+    openRouterKeyringAvailable: boolean
+    openRouterEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `OpenRouter API supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'OpenRouter API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'OpenRouter execution is gated until explicit cloud data-transfer and API-billing authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://openrouter.ai/api/v1 endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded API-billed read-only OpenRouter chat without tools',
+      verifiedModes: ['read-only'],
     }
   }
 

@@ -1,5 +1,14 @@
 # Progress log
 
+## Provider.6 — Shared OpenAI-Compatible Runtime Integration
+
+2026-11-27. Branched `feat/provider6-openai-compatible` from `d13e686` (`feat/provider5-kimi-acp`). Implemented shared OpenAI-compatible transport (`OpenAiCompatibleRuntimeBase`) and three provider runtimes (`lmstudio`, `llamacpp`, `openrouter`), `RuntimePolicyBroker` gates, daemon routes, Electron IPC, and Desktop Settings/`BotEditorModal` UI with zero live inference or paid API spend. See [Provider.6 report](extensions/provider6-openai-compatible.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added `OpenAiCompatibleRuntimeBase` (`packages/runtime-adapters/openai-compat/openai-compatible-transport.ts`), `LmStudioLocalAdapter` (`lmstudio`, `http://127.0.0.1:1234/v1`), `LlamaCppLocalAdapter` (`llamacpp`, `http://127.0.0.1:8080/v1`), and `OpenRouterApiAdapter` (`openrouter`, pinned `https://openrouter.ai/api/v1`, `provider.allow_fallbacks: false`, `ghost-bot.provider` OS Secret Service key isolation). Enforces pre-request endpoint/credential/auth checks, `redirect: 'error'` + `3xx` mapping, fragmented UTF-8 SSE parsing, idle/total timeouts, abort-raced stream reads, tool-call rejection, reasoning suppression, non-cumulative usage, and `RuntimePolicyBroker` gating. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider6-openai-compat-production.test.ts` (3/3), 3 consecutive full-workspace regression runs (**231/231** per run: `root` 138/138, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 14 Electron E2E/IPC scripts (`verify-provider6-openai-compat-desktop.mjs` + 13 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
 ## Provider.5 — Kimi Code ACP Runtime Integration
 
 2026-11-27. Branched `feat/provider5-kimi-acp` from `c65a621` (`feat/provider4-gemini-api`). Commit 1 (`42b708b`) closed shared provider pre-request credential revalidation, proactive abort on rotation/revocation, and stalled stream cancellation; Commit 2 implemented `KimiAcpAdapter` (`kimi-acp`), `RuntimePolicyBroker.authorizeKimiAcpExecution()`, `GET /kimi/status`, `IPC_CHANNELS.KIMI_STATUS`, and Desktop Settings & BotEditorModal UI with zero live inference or CLI installation. See [Provider.5 report](extensions/provider5-kimi-acp.md).

@@ -61,7 +61,16 @@ export function BotEditorModal({
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
   const [runtimeId, setRuntimeId] = useState<
-    'mock-offline' | 'codex' | 'openclaw' | 'ollama' | 'claude-api' | 'gemini-api' | 'kimi-acp'
+    | 'mock-offline'
+    | 'codex'
+    | 'openclaw'
+    | 'ollama'
+    | 'claude-api'
+    | 'gemini-api'
+    | 'kimi-acp'
+    | 'lmstudio'
+    | 'llamacpp'
+    | 'openrouter'
   >('mock-offline')
   const [ollamaStatus, setOllamaStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
@@ -116,7 +125,10 @@ export function BotEditorModal({
           initialBot.runtimeId === 'ollama' ||
           initialBot.runtimeId === 'claude-api' ||
           initialBot.runtimeId === 'gemini-api' ||
-          initialBot.runtimeId === 'kimi-acp'
+          initialBot.runtimeId === 'kimi-acp' ||
+          initialBot.runtimeId === 'lmstudio' ||
+          initialBot.runtimeId === 'llamacpp' ||
+          initialBot.runtimeId === 'openrouter'
           ? initialBot.runtimeId
           : 'mock-offline',
       )
@@ -564,6 +576,9 @@ export function BotEditorModal({
                     | 'claude-api'
                     | 'gemini-api'
                     | 'kimi-acp'
+                    | 'lmstudio'
+                    | 'llamacpp'
+                    | 'openrouter'
                   setDirty(true)
                   setRuntimeId(next)
                   if (next === 'ollama') {
@@ -581,7 +596,12 @@ export function BotEditorModal({
                     if (geminiStatus && geminiStatus.models.length > 0) {
                       setModelId(geminiStatus.models[0].id)
                     }
-                  } else if (next === 'kimi-acp') {
+                  } else if (
+                    next === 'kimi-acp' ||
+                    next === 'lmstudio' ||
+                    next === 'llamacpp' ||
+                    next === 'openrouter'
+                  ) {
                     setPermission('read-only')
                   }
                 }}
@@ -593,6 +613,9 @@ export function BotEditorModal({
                 <option value="claude-api">Anthropic Claude API (API-key billed)</option>
                 <option value="gemini-api">Google Gemini API (API key)</option>
                 <option value="kimi-acp">Kimi Code ACP</option>
+                <option value="lmstudio">LM Studio (Local)</option>
+                <option value="llamacpp">llama.cpp Server (Local)</option>
+                <option value="openrouter">OpenRouter API (API-key billed)</option>
               </select>
             </label>
 

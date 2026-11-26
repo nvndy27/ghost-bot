@@ -85,6 +85,14 @@ export const IPC_CHANNELS = {
   GEMINI_CREDENTIAL_DELETE: 'ghost:gemini:credential:delete',
   GEMINI_AUTH_SET: 'ghost:gemini:auth:set',
   KIMI_STATUS: 'ghost:kimi:status',
+  LMSTUDIO_STATUS: 'ghost:lmstudio:status',
+  LMSTUDIO_CONFIG_SET: 'ghost:lmstudio:config:set',
+  LLAMACPP_STATUS: 'ghost:llamacpp:status',
+  LLAMACPP_CONFIG_SET: 'ghost:llamacpp:config:set',
+  OPENROUTER_STATUS: 'ghost:openrouter:status',
+  OPENROUTER_CREDENTIAL_SET: 'ghost:openrouter:credential:set',
+  OPENROUTER_CREDENTIAL_DELETE: 'ghost:openrouter:credential:delete',
+  OPENROUTER_AUTH_SET: 'ghost:openrouter:auth:set',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1966,6 +1974,118 @@ export const KimiStatusDtoSchema = z.object({
 
 export type KimiStatusDto = z.infer<typeof KimiStatusDtoSchema>
 
+export const SetLocalCompatConfigInputSchema = z
+  .object({
+    baseUrl: z.string().min(10).max(256),
+    executionAuthorized: z.boolean().optional(),
+  })
+  .strict()
+
+export type SetLocalCompatConfigInput = z.infer<typeof SetLocalCompatConfigInputSchema>
+
+export const LocalOpenAiCompatStatusDtoSchema = z.object({
+  id: z.enum(['lmstudio', 'llamacpp']),
+  available: z.boolean(),
+  baseUrl: z.string(),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  detail: z.string(),
+  loopbackVerified: z.boolean(),
+  executionAuthorized: z.boolean(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    usage: z.boolean(),
+    tools: z.literal(false),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+    }),
+  ),
+  resourceLimits: z.object({
+    maxConcurrentRuns: z.number(),
+    maxHistoryMessages: z.number(),
+    maxHistoryBytes: z.number(),
+    maxOutputTokens: z.number(),
+    maxDurationMs: z.number(),
+    maxStreamBytes: z.number(),
+  }),
+  diagnostics: z.array(z.string()),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.literal(false),
+    workspaceAllowed: z.literal(false),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type LocalOpenAiCompatStatusDto = z.infer<typeof LocalOpenAiCompatStatusDtoSchema>
+
+export const SetOpenRouterCredentialInputSchema = z
+  .object({
+    apiKey: z.string().min(8).max(4096),
+    accountRef: z.string().min(1).max(64).default('default'),
+  })
+  .strict()
+
+export type SetOpenRouterCredentialInput = z.infer<typeof SetOpenRouterCredentialInputSchema>
+
+export const SetOpenRouterAuthInputSchema = z
+  .object({
+    authorized: z.boolean(),
+  })
+  .strict()
+
+export type SetOpenRouterAuthInput = z.infer<typeof SetOpenRouterAuthInputSchema>
+
+export const OpenRouterStatusDtoSchema = z.object({
+  available: z.boolean(),
+  endpoint: z.string(),
+  billingMode: z.literal('api-key-billed'),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  detail: z.string(),
+  keyringAvailable: z.boolean(),
+  keyringLocked: z.boolean(),
+  credentialConfigured: z.boolean(),
+  accountRef: z.string(),
+  maskedKeyHint: z.string().nullable(),
+  credentialGeneration: z.number().int().min(0),
+  executionAuthorized: z.boolean(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    usage: z.boolean(),
+    tools: z.literal(false),
+    fallbacksDisabled: z.literal(true),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+    }),
+  ),
+  resourceLimits: z.object({
+    maxConcurrentRuns: z.number(),
+    maxHistoryMessages: z.number(),
+    maxHistoryBytes: z.number(),
+    maxOutputTokens: z.number(),
+    maxDurationMs: z.number(),
+    maxStreamBytes: z.number(),
+  }),
+  diagnostics: z.array(z.string()),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.literal(false),
+    workspaceAllowed: z.literal(false),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type OpenRouterStatusDto = z.infer<typeof OpenRouterStatusDtoSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -2051,6 +2171,14 @@ export interface GhostBotBridge {
   deleteGeminiCredential(): Promise<GeminiStatusDto>
   setGeminiExecutionAuthorized(input: SetGeminiAuthInput): Promise<GeminiStatusDto>
   getKimiStatus(): Promise<KimiStatusDto>
+  getLmStudioStatus(): Promise<LocalOpenAiCompatStatusDto>
+  setLmStudioConfig(input: SetLocalCompatConfigInput): Promise<LocalOpenAiCompatStatusDto>
+  getLlamaCppStatus(): Promise<LocalOpenAiCompatStatusDto>
+  setLlamaCppConfig(input: SetLocalCompatConfigInput): Promise<LocalOpenAiCompatStatusDto>
+  getOpenRouterStatus(): Promise<OpenRouterStatusDto>
+  setOpenRouterCredential(input: SetOpenRouterCredentialInput): Promise<OpenRouterStatusDto>
+  deleteOpenRouterCredential(): Promise<OpenRouterStatusDto>
+  setOpenRouterExecutionAuthorized(input: SetOpenRouterAuthInput): Promise<OpenRouterStatusDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

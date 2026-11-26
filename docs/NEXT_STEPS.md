@@ -1,5 +1,10 @@
 # Next steps
 
+## Provider.6 — Shared OpenAI-Compatible Runtime Integration (Completed Offline / Execution Gated)
+
+1. When explicitly authorized, test live loopback inference against LM Studio or `llama-server` or bounded 2-request live OpenRouter verification per `docs/extensions/provider6-openai-compatible.md`.
+2. Proceed to **Agent 2 Cross-Provider Security Audit & Main Integration** (or Phase 6 Packaging/Release Candidate sign-off) once all stacked PRs #6–#11 are reviewed.
+
 ## Provider.5 — Kimi Code ACP Runtime Integration (Completed Offline / Host CLI Absent)
 
 1. Install Kimi Code CLI (`kimi`) and run `kimi login` when explicitly authorized to verify live `kimi acp` interoperability using `docs/extensions/provider5-kimi-acp.md`.

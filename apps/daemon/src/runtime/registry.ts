@@ -13,6 +13,12 @@ import {
   GoogleGeminiApiAdapter,
 } from '@ghost-bot/runtime-adapters/gemini'
 import { KimiAcpAdapter } from '@ghost-bot/runtime-adapters/kimi'
+import { DEFAULT_LLAMACPP_BASE_URL, LlamaCppLocalAdapter } from '@ghost-bot/runtime-adapters/llamacpp'
+import { DEFAULT_LMSTUDIO_BASE_URL, LmStudioLocalAdapter } from '@ghost-bot/runtime-adapters/lmstudio'
+import {
+  APPROVED_OPENROUTER_BASE_URL,
+  OpenRouterApiAdapter,
+} from '@ghost-bot/runtime-adapters/openrouter'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
@@ -68,6 +74,9 @@ export interface RuntimeRegistryOptions {
   claudeAdapter?: AnthropicClaudeApiAdapter
   geminiAdapter?: GoogleGeminiApiAdapter
   kimiAdapter?: KimiAcpAdapter
+  lmstudioAdapter?: LmStudioLocalAdapter
+  llamacppAdapter?: LlamaCppLocalAdapter
+  openrouterAdapter?: OpenRouterApiAdapter
   cacheTtlMs?: number
 }
 
@@ -648,11 +657,156 @@ export class RuntimeRegistry {
     ]
   }
 
-  abortProviderRuns(runtimeId: 'claude-api' | 'gemini-api'): void {
+  abortProviderRuns(runtimeId: 'claude-api' | 'gemini-api' | 'openrouter' | 'lmstudio' | 'llamacpp'): void {
     if (runtimeId === 'claude-api') {
       this.options.claudeAdapter?.abortActiveRuns()
     } else if (runtimeId === 'gemini-api') {
       this.options.geminiAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'openrouter') {
+      this.options.openrouterAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'lmstudio') {
+      this.options.lmstudioAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'llamacpp') {
+      this.options.llamacppAdapter?.abortActiveRuns()
+    }
+  }
+
+  async getLocalOpenAiCompatStatus(input: {
+    id: 'lmstudio' | 'llamacpp'
+    baseUrl?: string
+    executionAuthorized: boolean
+  }): Promise<import('@ghost-bot/shared-types/ipc').LocalOpenAiCompatStatusDto> {
+    const isLm = input.id === 'lmstudio'
+    const defaultUrl = isLm ? DEFAULT_LMSTUDIO_BASE_URL : DEFAULT_LLAMACPP_BASE_URL
+    const adapter = isLm
+      ? (this.options.lmstudioAdapter ??
+        new LmStudioLocalAdapter({
+          baseUrl: input.baseUrl ?? defaultUrl,
+          isExecutionAuthorized: () => input.executionAuthorized,
+        }))
+      : (this.options.llamacppAdapter ??
+        new LlamaCppLocalAdapter({
+          baseUrl: input.baseUrl ?? defaultUrl,
+          isExecutionAuthorized: () => input.executionAuthorized,
+        }))
+    const avail = await adapter.checkAvailability()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeLocalOpenAiCompatExecution({
+      providerLabel: isLm ? 'LM Studio' : 'llama.cpp',
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      executionAuthorized: input.executionAuthorized,
+      available: avail.available,
+      loopbackVerified: true,
+    })
+    return {
+      id: input.id,
+      available: avail.available,
+      baseUrl: adapter.getBaseUrl(),
+      authStatus: avail.available ? 'connected' : 'disconnected',
+      detail: avail.detail,
+      loopbackVerified: true,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        usage: true,
+        tools: false,
+      },
+      models: avail.models.slice(0, 100).map((m) => ({ id: m.id, label: m.label })),
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics: [
+        'Loopback-only OpenAI-compatible HTTP transport; transport locality does not prove upstream routing.',
+        'Initial execution is tool-free read-only chat; no cloud fallback.',
+      ],
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getOpenRouterStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').OpenRouterStatusDto> {
+    const adapter =
+      this.options.openrouterAdapter ??
+      new OpenRouterApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+        getAccountRef: () => input.accountRef,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOpenRouterExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      openRouterExecutionAuthorized: input.executionAuthorized,
+      openRouterCredentialConfigured: input.credentialConfigured,
+      openRouterKeyringAvailable: input.keyringAvailable,
+      openRouterEndpointVerified: adapter.getBaseUrl() === APPROVED_OPENROUTER_BASE_URL,
+    })
+
+    const diagnostics: string[] = [
+      'Pinned to https://openrouter.ai/api/v1 with provider.allow_fallbacks=false; not a ChatGPT/Claude/Gemini subscription.',
+      'Initial execution is tool-free read-only chat.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_OPENROUTER_BASE_URL,
+      billingMode: 'api-key-billed',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'OpenRouter API key configured and authorized for bounded API-billed read-only chat'
+            : 'OpenRouter API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No OpenRouter API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        usage: true,
+        tools: false,
+        fallbacksDisabled: true,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
     }
   }
 

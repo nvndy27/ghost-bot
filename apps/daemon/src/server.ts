@@ -66,6 +66,9 @@ import {
   SetClaudeCredentialInputSchema,
   SetGeminiAuthInputSchema,
   SetGeminiCredentialInputSchema,
+  SetLocalCompatConfigInputSchema,
+  SetOpenRouterAuthInputSchema,
+  SetOpenRouterCredentialInputSchema,
   SetMcpServerSecretInputSchema,
   SetSkillEnabledInputSchema,
   SkillIdParamSchema,
@@ -103,6 +106,9 @@ import { SettingsRepository } from './settings/repository.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
+import { assertLoopbackOpenAiCompatBaseUrl } from '@ghost-bot/runtime-adapters/openai-compat'
+import { DEFAULT_LMSTUDIO_BASE_URL } from '@ghost-bot/runtime-adapters/lmstudio'
+import { DEFAULT_LLAMACPP_BASE_URL } from '@ghost-bot/runtime-adapters/llamacpp'
 import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
@@ -534,6 +540,126 @@ export class GhostBotDaemon {
     })
   }
 
+  private readLocalCompatMeta(
+    id: 'lmstudio' | 'llamacpp',
+    defaultBaseUrl: string,
+  ): { baseUrl: string; executionAuthorized: boolean } {
+    const row = this.dbHandle?.sqlite
+      .prepare(`SELECT value_json FROM settings WHERE key = ?`)
+      .get(`provider.${id}.v1`) as { value_json: string } | undefined
+    if (!row) return { baseUrl: defaultBaseUrl, executionAuthorized: false }
+    try {
+      const parsed = JSON.parse(row.value_json) as Record<string, unknown>
+      const baseUrl =
+        typeof parsed.baseUrl === 'string'
+          ? assertLoopbackOpenAiCompatBaseUrl(parsed.baseUrl, '/v1')
+          : defaultBaseUrl
+      return {
+        baseUrl,
+        executionAuthorized: parsed.executionAuthorized === true,
+      }
+    } catch {
+      return { baseUrl: defaultBaseUrl, executionAuthorized: false }
+    }
+  }
+
+  private writeLocalCompatMeta(
+    id: 'lmstudio' | 'llamacpp',
+    meta: { baseUrl: string; executionAuthorized: boolean },
+  ): void {
+    const nowIso = new Date().toISOString()
+    this.dbHandle?.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(`provider.${id}.v1`, JSON.stringify(meta), nowIso)
+  }
+
+  private readOpenRouterProviderMeta(): {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  } {
+    const row = this.dbHandle?.sqlite
+      .prepare(`SELECT value_json FROM settings WHERE key = 'provider.openrouter.v1'`)
+      .get() as { value_json: string } | undefined
+    if (!row) {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+    try {
+      const parsed = JSON.parse(row.value_json) as Record<string, unknown>
+      return {
+        accountRef:
+          typeof parsed.accountRef === 'string' && parsed.accountRef ? parsed.accountRef : 'default',
+        maskedKeyHint: typeof parsed.maskedKeyHint === 'string' ? parsed.maskedKeyHint : null,
+        credentialGeneration:
+          typeof parsed.credentialGeneration === 'number' ? parsed.credentialGeneration : 0,
+        executionAuthorized: parsed.executionAuthorized === true,
+      }
+    } catch {
+      return {
+        accountRef: 'default',
+        maskedKeyHint: null,
+        credentialGeneration: 0,
+        executionAuthorized: false,
+      }
+    }
+  }
+
+  private writeOpenRouterProviderMeta(meta: {
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+  }): void {
+    const nowIso = new Date().toISOString()
+    this.dbHandle?.sqlite
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES ('provider.openrouter.v1', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .run(JSON.stringify(meta), nowIso)
+  }
+
+  private async getOpenRouterStatusDto(): Promise<import('@ghost-bot/shared-types/ipc').OpenRouterStatusDto> {
+    const meta = this.readOpenRouterProviderMeta()
+    const store = this.providerSecretStore
+    const status = store?.getStatus() ?? {
+      available: false,
+      locked: false,
+      backend: 'unavailable' as const,
+      reason: 'Secret store not initialized',
+    }
+    const credentialConfigured =
+      status.available &&
+      Boolean(
+        store?.existsProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'openrouter',
+          accountRef: meta.accountRef,
+        }),
+      )
+    return this.runtimeRegistry.getOpenRouterStatus({
+      keyringAvailable: status.available,
+      keyringLocked: status.locked,
+      keyringReason: status.reason,
+      credentialConfigured,
+      accountRef: meta.accountRef,
+      maskedKeyHint: credentialConfigured ? meta.maskedKeyHint : null,
+      credentialGeneration: meta.credentialGeneration,
+      executionAuthorized: credentialConfigured ? meta.executionAuthorized : false,
+    })
+  }
+
   async stop(): Promise<void> {
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
@@ -623,6 +749,238 @@ export class GhostBotDaemon {
 
       if (req.method === 'GET' && url.pathname === '/kimi/status') {
         sendJson(res, 200, await this.runtimeRegistry.getKimiStatus())
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/lmstudio/status') {
+        const meta = this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL)
+        sendJson(
+          res,
+          200,
+          await this.runtimeRegistry.getLocalOpenAiCompatStatus({
+            id: 'lmstudio',
+            baseUrl: meta.baseUrl,
+            executionAuthorized: meta.executionAuthorized,
+          }),
+        )
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/lmstudio/config') {
+        const body = await readJsonBody(req)
+        const parsed = SetLocalCompatConfigInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid LM Studio config', {
+            statusCode: 400,
+          })
+        }
+        let validatedUrl: string
+        try {
+          validatedUrl = assertLoopbackOpenAiCompatBaseUrl(parsed.data.baseUrl, '/v1')
+        } catch (err) {
+          throw new DaemonError('VALIDATION_ERROR', err instanceof Error ? err.message : 'Invalid loopback URL', {
+            statusCode: 400,
+          })
+        }
+        const prev = this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL)
+        const nextAuth =
+          validatedUrl !== prev.baseUrl ? false : (parsed.data.executionAuthorized ?? prev.executionAuthorized)
+        this.writeLocalCompatMeta('lmstudio', { baseUrl: validatedUrl, executionAuthorized: nextAuth })
+        if (validatedUrl !== prev.baseUrl || !nextAuth) {
+          this.runtimeRegistry.abortProviderRuns('lmstudio')
+        }
+        sendJson(
+          res,
+          200,
+          await this.runtimeRegistry.getLocalOpenAiCompatStatus({
+            id: 'lmstudio',
+            baseUrl: validatedUrl,
+            executionAuthorized: nextAuth,
+          }),
+        )
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/llamacpp/status') {
+        const meta = this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL)
+        sendJson(
+          res,
+          200,
+          await this.runtimeRegistry.getLocalOpenAiCompatStatus({
+            id: 'llamacpp',
+            baseUrl: meta.baseUrl,
+            executionAuthorized: meta.executionAuthorized,
+          }),
+        )
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/llamacpp/config') {
+        const body = await readJsonBody(req)
+        const parsed = SetLocalCompatConfigInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid llama.cpp config', {
+            statusCode: 400,
+          })
+        }
+        let validatedUrl: string
+        try {
+          validatedUrl = assertLoopbackOpenAiCompatBaseUrl(parsed.data.baseUrl, '/v1')
+        } catch (err) {
+          throw new DaemonError('VALIDATION_ERROR', err instanceof Error ? err.message : 'Invalid loopback URL', {
+            statusCode: 400,
+          })
+        }
+        const prev = this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL)
+        const nextAuth =
+          validatedUrl !== prev.baseUrl ? false : (parsed.data.executionAuthorized ?? prev.executionAuthorized)
+        this.writeLocalCompatMeta('llamacpp', { baseUrl: validatedUrl, executionAuthorized: nextAuth })
+        if (validatedUrl !== prev.baseUrl || !nextAuth) {
+          this.runtimeRegistry.abortProviderRuns('llamacpp')
+        }
+        sendJson(
+          res,
+          200,
+          await this.runtimeRegistry.getLocalOpenAiCompatStatus({
+            id: 'llamacpp',
+            baseUrl: validatedUrl,
+            executionAuthorized: nextAuth,
+          }),
+        )
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/openrouter/status') {
+        sendJson(res, 200, await this.getOpenRouterStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/openrouter/credential') {
+        const body = await readJsonBody(req)
+        const parsed = SetOpenRouterCredentialInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid OpenRouter key', {
+            statusCode: 400,
+          })
+        }
+        const apiKey = parsed.data.apiKey.trim()
+        if (!apiKey || apiKey.includes('\0') || /\s/.test(apiKey)) {
+          throw new DaemonError('VALIDATION_ERROR', 'OpenRouter API key format is invalid', { statusCode: 400 })
+        }
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readOpenRouterProviderMeta()
+        const accountRef = parsed.data.accountRef
+        if (prevMeta.accountRef !== accountRef) {
+          store.deleteProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'openrouter',
+            accountRef: prevMeta.accountRef,
+          })
+        }
+        store.storeProviderSecret(
+          { ownerId: LOCAL_USER_ID, providerId: 'openrouter', accountRef },
+          `Ghost Bot OpenRouter API (${accountRef})`,
+          apiKey,
+        )
+        const maskedKeyHint =
+          apiKey.length >= 10
+            ? `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`
+            : `...${apiKey.slice(-4)}`
+        this.writeOpenRouterProviderMeta({
+          accountRef,
+          maskedKeyHint,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        this.runtimeRegistry.abortProviderRuns('openrouter')
+        sendJson(res, 200, await this.getOpenRouterStatusDto())
+        return
+      }
+
+      if (req.method === 'DELETE' && url.pathname === '/openrouter/credential') {
+        const store = this.providerSecretStore
+        if (!store) {
+          throw new DaemonError('SECRET_STORE_UNAVAILABLE', 'Secret store not initialized', { statusCode: 503 })
+        }
+        const status = store.getStatus()
+        if (!status.available) {
+          throw new DaemonError(
+            status.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+            status.reason ?? 'OS Secret Service is unavailable or locked',
+            { statusCode: 503 },
+          )
+        }
+        const prevMeta = this.readOpenRouterProviderMeta()
+        store.deleteProviderSecret({
+          ownerId: LOCAL_USER_ID,
+          providerId: 'openrouter',
+          accountRef: prevMeta.accountRef,
+        })
+        this.writeOpenRouterProviderMeta({
+          accountRef: prevMeta.accountRef,
+          maskedKeyHint: null,
+          credentialGeneration: prevMeta.credentialGeneration + 1,
+          executionAuthorized: false,
+        })
+        this.runtimeRegistry.abortProviderRuns('openrouter')
+        sendJson(res, 200, await this.getOpenRouterStatusDto())
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/openrouter/authorization') {
+        const body = await readJsonBody(req)
+        const parsed = SetOpenRouterAuthInputSchema.safeParse(body)
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', 'Invalid authorization payload', { statusCode: 400 })
+        }
+        const meta = this.readOpenRouterProviderMeta()
+        const store = this.providerSecretStore
+        const storeStatus = store?.getStatus() ?? {
+          available: false,
+          locked: false,
+          backend: 'unavailable' as const,
+          reason: 'Secret store not initialized',
+        }
+        if (parsed.data.authorized) {
+          if (!storeStatus.available) {
+            throw new DaemonError(
+              storeStatus.locked ? 'KEYRING_LOCKED' : 'SECRET_STORE_UNAVAILABLE',
+              storeStatus.reason ?? 'OS Secret Service is unavailable or locked',
+              { statusCode: 503 },
+            )
+          }
+          const exists = store!.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'openrouter',
+            accountRef: meta.accountRef,
+          })
+          if (!exists) {
+            throw new DaemonError(
+              'OPENROUTER_CREDENTIAL_MISSING',
+              'Configure an OpenRouter API key before authorizing execution',
+              { statusCode: 400 },
+            )
+          }
+        }
+        this.writeOpenRouterProviderMeta({
+          ...meta,
+          executionAuthorized: parsed.data.authorized,
+        })
+        if (!parsed.data.authorized) {
+          this.runtimeRegistry.abortProviderRuns('openrouter')
+        }
+        sendJson(res, 200, await this.getOpenRouterStatusDto())
         return
       }
 

@@ -11,6 +11,10 @@
     "./claude": "./claude/anthropic-claude-api.ts",
     "./gemini": "./gemini/google-gemini-api.ts",
     "./kimi": "./kimi/kimi-acp.ts",
+    "./openai-compat": "./openai-compat/openai-compatible-transport.ts",
+    "./lmstudio": "./openai-compat/lmstudio-adapter.ts",
+    "./llamacpp": "./openai-compat/llamacpp-adapter.ts",
+    "./openrouter": "./openai-compat/openrouter-adapter.ts",
     "./mock": "./mock/mock-runtime.ts"
   },
   "dependencies": {
