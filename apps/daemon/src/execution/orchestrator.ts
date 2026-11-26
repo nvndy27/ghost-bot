@@ -2158,14 +2158,6 @@ export class RunOrchestrator {
         }
       }
 
-      const combinedContext = await this.prepareCombinedContextSafely({
-        sessionId,
-        agentId,
-        runtimeId: 'codex',
-        queryText: prompt,
-        isMock: false,
-      })
-
       if (signal.aborted || this.stopping) {
         this.finalizeRun({
           runId,
@@ -2189,23 +2181,7 @@ export class RunOrchestrator {
           threadId: providerSession.externalId,
           resumed: Boolean(preflight.externalSessionId),
           isMock: false,
-          memoryContext: {
-            status: combinedContext.memory.status,
-            mechanism: combinedContext.memory.mechanism,
-            count: combinedContext.memory.selectedCount,
-            totalBytes: combinedContext.memory.totalBytes,
-            truncated: combinedContext.memory.truncated,
-          },
-          knowledgeContext: {
-            status: combinedContext.knowledge.status,
-            mechanism: combinedContext.knowledge.mechanism,
-            documents: combinedContext.knowledge.selectedDocuments,
-            chunks: combinedContext.knowledge.selectedChunks,
-            totalBytes: combinedContext.knowledge.totalBytes,
-            truncated: combinedContext.knowledge.truncated,
-            attachedSources: combinedContext.attachedSources,
-          },
-          combinedContextBytes: combinedContext.totalBytes,
+          contextTiming: 'deferred_to_dispatch',
         },
       })
 
@@ -2231,6 +2207,29 @@ export class RunOrchestrator {
               statusCode: 409,
             })
           }
+          this.eventStore.appendEvent(runId, {
+            eventKey: 'run.context_prepared',
+            type: 'run.context_prepared',
+            payload: {
+              memoryContext: {
+                status: latestCombined.memory.status,
+                mechanism: latestCombined.memory.mechanism,
+                count: latestCombined.memory.selectedCount,
+                totalBytes: latestCombined.memory.totalBytes,
+                truncated: latestCombined.memory.truncated,
+              },
+              knowledgeContext: {
+                status: latestCombined.knowledge.status,
+                mechanism: latestCombined.knowledge.mechanism,
+                documents: latestCombined.knowledge.selectedDocuments,
+                chunks: latestCombined.knowledge.selectedChunks,
+                totalBytes: latestCombined.knowledge.totalBytes,
+                truncated: latestCombined.knowledge.truncated,
+                attachedSources: latestCombined.attachedSources,
+              },
+              combinedContextBytes: latestCombined.totalBytes,
+            },
+          })
           return latestCombined.envelopeJson ?? undefined
         },
       })) {

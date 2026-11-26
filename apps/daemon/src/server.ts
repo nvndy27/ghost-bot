@@ -846,9 +846,9 @@ export class GhostBotDaemon {
           return
         }
 
-        if (req.method === 'POST' && url.pathname === '/knowledge/documents/ingest-file') {
-          const body = await readJsonBody(req)
-          const IngestAuthorizedFileBodySchema = z
+        if (req.method === 'POST' && url.pathname === '/knowledge/documents/ingest-bytes') {
+          const body = await readJsonBody(req, 3 * 1024 * 1024)
+          const IngestAuthorizedBytesBodySchema = z
             .object({
               scope: z.discriminatedUnion('kind', [
                 z.object({ kind: z.literal('user') }).strict(),
@@ -856,20 +856,20 @@ export class GhostBotDaemon {
                 z.object({ kind: z.literal('workspace'), botId: BotIdSchema }).strict(),
               ]),
               collectionId: z.string().nullable().default(null),
+              displayFilename: z.string().trim().min(1).max(255),
+              bytesBase64: z.string().min(1).max(3 * 1024 * 1024),
               tags: z.array(z.string().trim().min(1).max(48)).max(16).default([]),
-              allowedRootDir: z.string().min(1).max(1024),
-              filePath: z.string().min(1).max(1024),
             })
             .strict()
-          const parsed = IngestAuthorizedFileBodySchema.safeParse(body)
+          const parsed = IngestAuthorizedBytesBodySchema.safeParse(body)
           if (!parsed.success) {
             throw new DaemonError(
               'VALIDATION_ERROR',
-              parsed.error.issues[0]?.message ?? 'Invalid authorized file ingestion payload',
+              parsed.error.issues[0]?.message ?? 'Invalid document bytes payload',
               { statusCode: 400 },
             )
           }
-          sendJson(res, 201, await knowledgeService.ingestAuthorizedFile(parsed.data))
+          sendJson(res, 201, await knowledgeService.ingestAuthorizedBytes(parsed.data))
           return
         }
 

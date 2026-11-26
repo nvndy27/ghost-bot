@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmod, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { chmod, constants as fsConstants, lstat, mkdtemp, open, realpath, rm } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron'
@@ -760,14 +760,32 @@ function registerIpcHandlers(): void {
       return { canceled: true, document: null }
     }
     const realChosen = await realpath(chosen)
-    const doc = await queryDaemon('/knowledge/documents/ingest-file', KnowledgeDocumentDtoSchema, {
+    const st = await lstat(realChosen)
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink > 1) {
+      throw new Error('Selected file must be a regular non-hardlinked file')
+    }
+    if (st.size <= 0 || st.size > 2 * 1024 * 1024) {
+      throw new Error('Selected file must be between 1 byte and 2 MiB')
+    }
+    const fh = await open(realChosen, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    let fileBytes: Buffer
+    try {
+      const fdStat = await fh.stat()
+      if (!fdStat.isFile() || fdStat.nlink > 1 || fdStat.size > 2 * 1024 * 1024) {
+        throw new Error('Selected file failed file-descriptor safety check')
+      }
+      fileBytes = await fh.readFile()
+    } finally {
+      await fh.close()
+    }
+    const doc = await queryDaemon('/knowledge/documents/ingest-bytes', KnowledgeDocumentDtoSchema, {
       method: 'POST',
       body: {
         scope: parsed.scope,
         collectionId: parsed.collectionId,
+        displayFilename: basename(realChosen),
+        bytesBase64: fileBytes.toString('base64'),
         tags: parsed.tags,
-        allowedRootDir: dirname(realChosen),
-        filePath: realChosen,
       },
     })
     return { canceled: false, document: doc }

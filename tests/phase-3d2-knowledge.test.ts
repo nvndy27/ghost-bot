@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -151,51 +151,68 @@ test('Phase 3D.2 KnowledgeService enforces scope isolation, file grants, revisio
     })
     const bot2Id = String(b2.json.id)
 
-    // File ingestion: unsupported .pdf rejected, symlink rejected, valid .md accepted
-    const pdfPath = join(docDir, 'bad.pdf')
-    await writeFile(pdfPath, '%PDF-1.4', 'utf8')
-    const pdfRes = await daemonFetch(address, '/knowledge/documents/ingest-file', {
+    // Direct arbitrary path route /knowledge/documents/ingest-file must not exist on daemon HTTP surface
+    const legacyRouteRes = await daemonFetch(address, '/knowledge/documents/ingest-file', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: { kind: 'bot', botId: bot1Id },
+        allowedRootDir: docDir,
+        filePath: join(docDir, 'guide.md'),
+      }),
+    })
+    assert.equal(legacyRouteRes.status, 404)
+
+    // Bytes ingestion: unsupported .pdf rejected, valid .md accepted
+    const pdfRes = await daemonFetch(address, '/knowledge/documents/ingest-bytes', {
       method: 'POST',
       body: JSON.stringify({
         scope: { kind: 'bot', botId: bot1Id },
         collectionId: null,
+        displayFilename: 'bad.pdf',
+        bytesBase64: Buffer.from('%PDF-1.4', 'utf8').toString('base64'),
         tags: [],
-        allowedRootDir: docDir,
-        filePath: pdfPath,
       }),
     })
     assert.equal(pdfRes.status, 400)
     assert.equal(pdfRes.json.code, 'KNOWLEDGE_UNSUPPORTED_FORMAT')
 
-    const realMd = join(docDir, 'guide.md')
-    await writeFile(realMd, '# Bảo mật\n\nHệ thống Ghost Bot lưu trữ tài liệu cục bộ.', 'utf8')
-    const symMd = join(docDir, 'link.md')
-    await symlink(realMd, symMd)
-    const symRes = await daemonFetch(address, '/knowledge/documents/ingest-file', {
+    const mdBytes = Buffer.from('# Bảo mật\n\nHệ thống Ghost Bot lưu trữ tài liệu cục bộ.', 'utf8')
+    const mdRes = await daemonFetch(address, '/knowledge/documents/ingest-bytes', {
       method: 'POST',
       body: JSON.stringify({
         scope: { kind: 'bot', botId: bot1Id },
         collectionId: null,
-        tags: ['vn'],
-        allowedRootDir: docDir,
-        filePath: symMd,
-      }),
-    })
-    assert.equal(symRes.status, 400)
-
-    const mdRes = await daemonFetch(address, '/knowledge/documents/ingest-file', {
-      method: 'POST',
-      body: JSON.stringify({
-        scope: { kind: 'bot', botId: bot1Id },
-        collectionId: null,
+        displayFilename: 'guide.md',
+        bytesBase64: mdBytes.toString('base64'),
         tags: ['vn', 'security'],
-        allowedRootDir: docDir,
-        filePath: realMd,
       }),
     })
     assert.equal(mdRes.status, 201)
     const docId = String(mdRes.json.id)
     const rev1Id = String(mdRes.json.currentRevisionId)
+
+    // Cross-scope collection association must fail closed
+    const col1 = await daemonFetch(address, '/knowledge/collections', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: { kind: 'bot', botId: bot1Id },
+        name: 'Bot1 Only Collection',
+        description: '',
+      }),
+    })
+    assert.equal(col1.status, 201)
+    const crossColRes = await daemonFetch(address, '/knowledge/documents/ingest-text', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: { kind: 'bot', botId: bot2Id },
+        collectionId: String(col1.json.id),
+        title: 'Cross Scope Attempt',
+        sourceType: 'direct_text',
+        text: 'Should be rejected.',
+        tags: [],
+      }),
+    })
+    assert.equal(crossColRes.status, 404)
 
     // Cross-bot isolation: bot2 cannot see bot1 doc
     const listBot2 = await daemonFetch(
@@ -521,5 +538,118 @@ test('Phase 3D.2 combined Memory+Knowledge context budget, separate consent, pro
     await rm(dataDir, { recursive: true, force: true })
     await rm(ws, { recursive: true, force: true })
     await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('Phase 3D.2 hardening: atomic bot archival rollback on injected Knowledge failure + 2500-chunk scale benchmark', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'gb-3d2-hard-'))
+  const ws = await mkdtemp(join(tmpdir(), 'gb-3d2-hard-ws-'))
+  const dbHandle = await openGhostBotDatabase(dataDir)
+  const settingsRepo = new SettingsRepository(dbHandle)
+  const botRepo = new BotRepository(dbHandle)
+  const memoryService = new MemoryService(dbHandle, settingsRepo)
+  const knowledgeService = new KnowledgeService(dbHandle, settingsRepo)
+
+  try {
+    const bot = await botRepo.createBot({
+      name: 'Rollback Bot',
+      description: 'RB',
+      instructions: '',
+      avatar: {
+        kind: 'preset',
+        shape: 'ghost',
+        color: '#111827',
+        eyes: 'classic',
+        rotation: 0,
+        animation: false,
+      },
+      runtimeId: 'mock',
+      modelId: 'mock-model',
+      effort: 'medium',
+      workspacePath: ws,
+      permission: 'read-only',
+    })
+    await memoryService.createMemory({
+      scope: { kind: 'bot', botId: bot.id },
+      category: 'fact',
+      content: 'Rollback verification memory.',
+      tags: [],
+    })
+    await knowledgeService.ingestText({
+      scope: { kind: 'bot', botId: bot.id },
+      collectionId: null,
+      title: 'Rollback Doc',
+      sourceType: 'direct_text',
+      text: 'Rollback verification document.',
+      tags: [],
+    })
+
+    // Inject failure during Knowledge archival -> entire bot + memory archival transaction must roll back
+    assert.throws(
+      () =>
+        botRepo.deleteBot(bot.id, {
+          onArchiveBot: (id, now) => {
+            memoryService.archiveMemoriesForBotInTx(id, now)
+            throw new Error('Injected knowledge archival failure')
+          },
+        }),
+      /Injected knowledge archival failure/,
+    )
+    assert.notEqual(botRepo.getBot(bot.id), null, 'Bot must remain active after rollback')
+    const activeMemCount = (
+      dbHandle.sqlite
+        .prepare(`SELECT COUNT(*) AS cnt FROM memories WHERE bot_id = ? AND status = 'active'`)
+        .get(bot.id) as { cnt: number }
+    ).cnt
+    assert.equal(activeMemCount, 1, 'Memory archival must roll back with bot archival')
+
+    // 2500-chunk scale benchmark (Vietnamese + emoji + quotes)
+    const filler = 'tiếng Việt đ/Đ "quotes" \\slash 🚀 '.repeat(45).trim()
+    for (let d = 0; d < 100; d += 1) {
+      const paragraphs = Array.from(
+        { length: 25 },
+        (_, p) => `Đoạn ${p} tài liệu ${d}: mục tiêu-${d % 10}. ${filler}`,
+      ).join('\n\n')
+      await knowledgeService.ingestText({
+        scope: { kind: 'bot', botId: bot.id },
+        collectionId: null,
+        title: `Scale Doc ${d}`,
+        sourceType: 'direct_text',
+        text: paragraphs,
+        tags: [`scale-${d % 10}`],
+      })
+    }
+    const chunkCnt = (
+      dbHandle.sqlite
+        .prepare('SELECT COUNT(*) AS cnt FROM knowledge_chunks WHERE bot_id = ?')
+        .get(bot.id) as { cnt: number }
+    ).cnt
+    assert.equal(chunkCnt >= 2500, true, `Expected >= 2500 chunks, got ${chunkCnt}`)
+
+    settingsRepo.updateSettings({ knowledge: { automaticRetrieval: true } })
+    const t0 = performance.now()
+    const sr = await knowledgeService.searchDocuments({
+      query: 'mục tiêu-7 tiếng Việt',
+      botId: bot.id,
+      scopeKind: 'bot',
+      includeUserWide: false,
+      limit: 20,
+    })
+    const searchMs = performance.now() - t0
+    assert.equal(sr.matches.length > 0, true)
+    console.log(
+      JSON.stringify({
+        benchmark: 'phase-3d2-2500-chunks',
+        chunks: chunkCnt,
+        searchMs: Number(searchMs.toFixed(2)),
+        matches: sr.matches.length,
+      }),
+    )
+  } finally {
+    memoryService.close()
+    knowledgeService.close()
+    dbHandle.close()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(ws, { recursive: true, force: true })
   }
 })

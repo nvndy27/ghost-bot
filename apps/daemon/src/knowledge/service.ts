@@ -4,6 +4,7 @@ import { basename, extname } from 'node:path'
 import {
   buildValidatedKnowledgeContext,
   createBorrowedKnowledgeDatabaseHandle,
+  getScopeKey,
   KnowledgeAuthorizationError,
   KnowledgeCredentialError,
   KnowledgeDuplicateError,
@@ -481,6 +482,21 @@ export class KnowledgeService {
     }
   }
 
+  private assertCollectionMatchesScope(collectionId: string | null, scope: KnowledgeScope): void {
+    if (!collectionId) return
+    const scopeKey = getScopeKey(scope)
+    const row = this.dbHandle.sqlite
+      .prepare('SELECT id, scope_key, status FROM knowledge_collections WHERE id = ?')
+      .get(collectionId) as { id: string; scope_key: string; status: string } | undefined
+    if (!row || row.status !== 'active' || row.scope_key !== scopeKey) {
+      throw new DaemonError(
+        'KNOWLEDGE_NOT_FOUND',
+        'Target knowledge collection was not found in this scope',
+        { statusCode: 404 },
+      )
+    }
+  }
+
   async ingestText(rawInput: IngestKnowledgeTextInput): Promise<KnowledgeDocumentDto> {
     this.assertOpen()
     if (!this.settingsRepo.getSettings().knowledge.enabled) {
@@ -498,6 +514,7 @@ export class KnowledgeService {
     }
     const input = parsed.data
     const { scope, auth } = await this.resolveScopeAndWriteAuth(input.scope)
+    this.assertCollectionMatchesScope(input.collectionId, scope)
     try {
       const persisted = this.pipeline.ingestText(auth, {
         scope,
@@ -521,12 +538,12 @@ export class KnowledgeService {
     }
   }
 
-  async ingestAuthorizedFile(params: {
+  async ingestAuthorizedBytes(params: {
     scope: { kind: 'user' } | { kind: 'bot'; botId: string } | { kind: 'workspace'; botId: string }
     collectionId: string | null
+    displayFilename: string
+    bytesBase64: string
     tags: string[]
-    allowedRootDir: string
-    filePath: string
   }): Promise<KnowledgeDocumentDto> {
     this.assertOpen()
     if (!this.settingsRepo.getSettings().knowledge.enabled) {
@@ -535,23 +552,39 @@ export class KnowledgeService {
       })
     }
     const { scope, auth } = await this.resolveScopeAndWriteAuth(params.scope)
-    const ext = extname(params.filePath).toLowerCase()
-    if (ext !== '.md' && ext !== '.markdown' && ext !== '.txt') {
+    this.assertCollectionMatchesScope(params.collectionId, scope)
+    const fileName = basename(params.displayFilename)
+    const ext = extname(fileName).toLowerCase()
+    let sourceType: 'text_file' | 'markdown'
+    let mediaType: 'text/plain' | 'text/markdown'
+    if (ext === '.md' || ext === '.markdown') {
+      sourceType = 'markdown'
+      mediaType = 'text/markdown'
+    } else if (ext === '.txt') {
+      sourceType = 'text_file'
+      mediaType = 'text/plain'
+    } else {
       throw new DaemonError(
         'KNOWLEDGE_UNSUPPORTED_FORMAT',
         `Unsupported document file extension "${ext || '(none)'}". Only UTF-8 .txt and .md/.markdown are supported.`,
         { statusCode: 400 },
       )
     }
-    const fileName = basename(params.filePath)
+    const bytes = Buffer.from(params.bytesBase64, 'base64')
+    if (bytes.byteLength === 0 || bytes.byteLength > 2 * 1024 * 1024) {
+      throw new DaemonError('VALIDATION_ERROR', 'Document bytes must be between 1 byte and 2 MiB', {
+        statusCode: 400,
+      })
+    }
     try {
-      const persisted = await this.pipeline.ingestFile(auth, {
+      const persisted = this.pipeline.ingestBytes(auth, bytes, {
         scope,
         collectionId: params.collectionId,
         title: fileName,
+        sourceType,
+        mediaType,
+        displayFilename: fileName,
         tags: params.tags,
-        allowedRootDir: params.allowedRootDir,
-        filePath: params.filePath,
       })
       this.writeAudit('knowledge.doc.ingest_file', persisted.document.id, 'ok', {
         scopeKind: persisted.document.scope.kind,
@@ -657,7 +690,10 @@ export class KnowledgeService {
         { statusCode: 400 },
       )
     }
-    const { auth } = await this.resolveDocumentWriteAuth(parsed.data.id, true)
+    const { auth, scope } = await this.resolveDocumentWriteAuth(parsed.data.id, true)
+    if (parsed.data.collectionId !== undefined) {
+      this.assertCollectionMatchesScope(parsed.data.collectionId, scope)
+    }
     try {
       const updated = this.repo.updateDocumentMetadata(auth, parsed.data.id, {
         title: parsed.data.title,

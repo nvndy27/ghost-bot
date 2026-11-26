@@ -87,6 +87,7 @@ export function KnowledgeSettingsSection({
     setEditingId(null)
     setReplacingId(null)
     setConfirmDeleteId(null)
+    setError(null)
   }, [scopeFilter, selectedBotId])
 
   const buildScope = useCallback(() => {
