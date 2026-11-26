@@ -56,6 +56,17 @@ import {
   RoutineTaskParamSchema,
   TriggerRoutineIpcInputSchema,
   UpdateRoutineIpcInputSchema,
+  RoutineRecordDtoSchema,
+  RoutineTaskDtoSchema,
+  RoutineTriggerResponseDtoSchema,
+  RoutinePreviewDtoSchema,
+  RoutineDiagnosticsDtoSchema,
+  RoutineSimulationDtoSchema,
+  RoutineStatsDtoSchema,
+  RoutineImportPreviewDtoSchema,
+  RoutineImportCommitDtoSchema,
+  RoutineExportBundleDtoSchema,
+  RoutineNotificationDtoSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1192,137 +1203,169 @@ function registerIpcHandlers(): void {
     )
   })
 
-  const LooseRecordSchema = z.record(z.string(), z.unknown())
+  function assertBoundedRoutinesIpcPayload(raw: unknown): void {
+    if (raw === undefined || raw === null) return
+    const serialized = JSON.stringify(raw)
+    if (serialized === undefined || Buffer.byteLength(serialized, 'utf8') > 256 * 1024) {
+      throw new Error('Routines IPC payload exceeds maximum size')
+    }
+    const checkShape = (val: unknown, depth: number): void => {
+      if (depth > 12) throw new Error('Routines IPC payload exceeds maximum nesting depth')
+      if (Array.isArray(val)) {
+        if (val.length > 200) throw new Error('Routines IPC payload array exceeds maximum length')
+        for (const item of val) checkShape(item, depth + 1)
+      } else if (val && typeof val === 'object') {
+        const entries = Object.entries(val as Record<string, unknown>)
+        if (entries.length > 64) throw new Error('Routines IPC payload object exceeds maximum keys')
+        for (const [, v] of entries) checkShape(v, depth + 1)
+      }
+    }
+    checkShape(raw, 0)
+  }
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = ListRoutinesIpcInputSchema.parse(params ?? {})
     const qs = new URLSearchParams()
     if (parsed.botId) qs.set('botId', parsed.botId)
     if (parsed.includeArchived) qs.set('includeArchived', 'true')
     const suffix = qs.toString() ? `?${qs.toString()}` : ''
-    return queryDaemon(`/routines${suffix}`, z.object({ routines: z.array(LooseRecordSchema) }))
+    return queryDaemon(`/routines${suffix}`, z.object({ routines: z.array(RoutineRecordDtoSchema) }))
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_GET, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}?botId=${encodeURIComponent(botId)}`,
-      LooseRecordSchema,
+      RoutineRecordDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_CREATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = CreateRoutineIpcInputSchema.parse(params)
-    return queryDaemon('/routines', LooseRecordSchema, { method: 'POST', body: parsed })
+    return queryDaemon('/routines', RoutineRecordDtoSchema, { method: 'POST', body: parsed })
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_UPDATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = UpdateRoutineIpcInputSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(parsed.routineId)}`,
-      LooseRecordSchema,
+      RoutineRecordDtoSchema,
       { method: 'PATCH', body: parsed },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_ENABLE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/enable`,
-      LooseRecordSchema,
+      RoutineRecordDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_DISABLE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/disable`,
-      LooseRecordSchema,
+      RoutineRecordDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_ARCHIVE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/archive`,
-      LooseRecordSchema,
+      RoutineRecordDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_TRIGGER, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = TriggerRoutineIpcInputSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(parsed.routineId)}/trigger`,
-      LooseRecordSchema,
+      RoutineTriggerResponseDtoSchema,
       { method: 'POST', body: parsed },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_TASK_GET, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { taskId, botId } = RoutineTaskParamSchema.parse(params)
     return queryDaemon(
       `/routines/tasks/${encodeURIComponent(taskId)}?botId=${encodeURIComponent(botId)}`,
-      LooseRecordSchema,
+      RoutineTaskDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_TASK_CANCEL, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { taskId, botId } = RoutineTaskParamSchema.parse(params)
     return queryDaemon(
       `/routines/tasks/${encodeURIComponent(taskId)}/cancel`,
-      LooseRecordSchema,
+      RoutineTaskDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_PREVIEW, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId, count } = RoutineCountParamSchema.parse(params)
     const qs = new URLSearchParams({ botId })
     if (count !== undefined) qs.set('count', String(count))
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/preview?${qs.toString()}`,
-      LooseRecordSchema,
+      RoutinePreviewDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_DIAGNOSE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/diagnose?botId=${encodeURIComponent(botId)}`,
-      LooseRecordSchema,
+      RoutineDiagnosticsDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_SIMULATE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId, count } = RoutineCountParamSchema.parse(params)
     const qs = new URLSearchParams({ botId })
     if (count !== undefined) qs.set('count', String(count))
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/simulate?${qs.toString()}`,
-      LooseRecordSchema,
+      RoutineSimulationDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_IMPORT_PREVIEW, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = ImportRoutineIpcInputSchema.parse(params)
-    return queryDaemon('/routines/import-preview', LooseRecordSchema, {
+    return queryDaemon('/routines/import-preview', RoutineImportPreviewDtoSchema, {
       method: 'POST',
       body: parsed,
     })
@@ -1330,8 +1373,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_IMPORT_COMMIT, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = ImportRoutineIpcInputSchema.parse(params)
-    return queryDaemon('/routines/import-commit', LooseRecordSchema, {
+    return queryDaemon('/routines/import-commit', RoutineImportCommitDtoSchema, {
       method: 'POST',
       body: parsed,
     })
@@ -1339,44 +1383,49 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_EXPORT, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { botId } = z.object({ botId: BotIdSchema }).strict().parse(params)
-    return queryDaemon(`/routines/export?botId=${encodeURIComponent(botId)}`, LooseRecordSchema)
+    return queryDaemon(`/routines/export?botId=${encodeURIComponent(botId)}`, RoutineExportBundleDtoSchema)
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_STATS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId } = RoutineScopeParamSchema.parse(params)
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/stats?botId=${encodeURIComponent(botId)}`,
-      LooseRecordSchema,
+      RoutineStatsDtoSchema,
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINES_HISTORY, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { routineId, botId, count } = RoutineCountParamSchema.parse(params)
     const qs = new URLSearchParams({ botId })
     if (count !== undefined) qs.set('count', String(count))
     return queryDaemon(
       `/routines/${encodeURIComponent(routineId)}/history?${qs.toString()}`,
-      z.object({ tasks: z.array(LooseRecordSchema) }),
+      z.object({ tasks: z.array(RoutineTaskDtoSchema) }),
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINE_NOTIFICATIONS_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const parsed = ListRoutineNotificationsIpcInputSchema.parse(params)
     const qs = new URLSearchParams({ botId: parsed.botId })
     if (parsed.unreadOnly) qs.set('unreadOnly', 'true')
     if (parsed.limit !== undefined) qs.set('limit', String(parsed.limit))
     return queryDaemon(
       `/routine-notifications?${qs.toString()}`,
-      z.object({ notifications: z.array(LooseRecordSchema) }),
+      z.object({ notifications: z.array(RoutineNotificationDtoSchema) }),
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINE_NOTIFICATIONS_UNREAD_COUNT, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { botId } = z.object({ botId: BotIdSchema }).strict().parse(params)
     return queryDaemon(
       `/routine-notifications/unread-count?botId=${encodeURIComponent(botId)}`,
@@ -1386,20 +1435,22 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.ROUTINE_NOTIFICATIONS_MARK_READ, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { notificationId, botId } = RoutineNotificationParamSchema.parse(params)
     return queryDaemon(
       `/routine-notifications/${encodeURIComponent(notificationId)}/mark-read`,
-      LooseRecordSchema,
+      RoutineNotificationDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })
 
   ipcMain.handle(IPC_CHANNELS.ROUTINE_NOTIFICATIONS_DISMISS, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedRoutinesIpcPayload(params)
     const { notificationId, botId } = RoutineNotificationParamSchema.parse(params)
     return queryDaemon(
       `/routine-notifications/${encodeURIComponent(notificationId)}/dismiss`,
-      LooseRecordSchema,
+      RoutineNotificationDtoSchema,
       { method: 'POST', body: { botId } },
     )
   })

@@ -1,4 +1,4 @@
-import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
+import type { RoutineRecordDto, RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import { MOCK_ROUTINES, MOCK_TOOLS } from '../data/mockWorkspace.ts'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 
@@ -8,6 +8,9 @@ export interface RightPanelProps {
   activeTasks: ToolStep[]
   runtimeSnapshot: RuntimeSnapshot | null
   isMockMode: boolean
+  routines?: RoutineRecordDto[]
+  unreadRoutineNotifications?: number
+  onOpenRoutines?: () => void
   onRefreshUsage?: () => void
   onReconnectRuntime?: () => void
   onCollapse: () => void
@@ -19,6 +22,9 @@ export function RightPanel({
   activeTasks,
   runtimeSnapshot,
   isMockMode,
+  routines,
+  unreadRoutineNotifications = 0,
+  onOpenRoutines,
   onRefreshUsage,
   onReconnectRuntime,
   onCollapse,
@@ -94,17 +100,61 @@ export function RightPanel({
       <hr className="gb-divider" />
 
       <div>
-        <div className="gb-section-label">Routines</div>
-        {MOCK_ROUTINES.map((rt) => (
-          <div key={rt.id} style={{ marginBottom: '10px' }}>
-            <div>
-              ◷ {rt.name} <span className="gb-badge">Phase 5</span>
+        <div
+          className="gb-section-label"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
+          <span>
+            Routines
+            {unreadRoutineNotifications > 0 && (
+              <span className="gb-badge" style={{ marginLeft: 6 }}>
+                {unreadRoutineNotifications} unread
+              </span>
+            )}
+          </span>
+          {onOpenRoutines && (
+            <button
+              type="button"
+              className="gb-btn-outline"
+              style={{ padding: '2px 7px', fontSize: 11 }}
+              onClick={onOpenRoutines}
+            >
+              Manage
+            </button>
+          )}
+        </div>
+        {routines !== undefined ? (
+          routines.length === 0 ? (
+            <p className="gb-muted" style={{ margin: '4px 0', fontSize: '12.5px' }}>
+              No routines configured.
+            </p>
+          ) : (
+            routines.slice(0, 4).map((rt) => (
+              <div key={rt.id} style={{ marginBottom: '10px' }}>
+                <div>
+                  ◷ {rt.name}{' '}
+                  <span className="gb-badge">
+                    {rt.enabled ? (isMockMode ? 'Mock' : 'Gated') : 'Paused'}
+                  </span>
+                </div>
+                <div className="gb-muted" style={{ paddingLeft: '18px', fontSize: '12px' }}>
+                  {rt.nextRunAt ? `Next: ${rt.nextRunAt}` : `${rt.timezone} · ${String(rt.trigger.kind)}`}
+                </div>
+              </div>
+            ))
+          )
+        ) : (
+          MOCK_ROUTINES.map((rt) => (
+            <div key={rt.id} style={{ marginBottom: '10px' }}>
+              <div>
+                ◷ {rt.name} <span className="gb-badge">Phase 5</span>
+              </div>
+              <div className="gb-muted" style={{ paddingLeft: '18px', fontSize: '12px' }}>
+                {rt.schedule}
+              </div>
             </div>
-            <div className="gb-muted" style={{ paddingLeft: '18px', fontSize: '12px' }}>
-              {rt.schedule}
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
 
       <hr className="gb-divider" />

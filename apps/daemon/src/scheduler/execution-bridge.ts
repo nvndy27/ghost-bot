@@ -34,6 +34,10 @@ export interface DaemonRoutineDispatcherDeps {
 
 export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
   private readonly deps: DaemonRoutineDispatcherDeps
+  private readonly inFlightDispatches = new Map<
+    string,
+    { cancelled: boolean; targetType: 'bot' | 'team'; daemonRunId?: string; teamRunId?: string }
+  >()
 
   constructor(deps: DaemonRoutineDispatcherDeps) {
     this.deps = deps
@@ -156,35 +160,124 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
     const timeoutMs = this.deps.dispatchTimeoutMs ?? 15_000
     const deadline = Date.now() + timeoutMs
     const accountId = rt.accountId ?? 'mock-account'
+    const flightKey = `${ctx.taskId}:${taskRow.attempt}`
+    const flightState: {
+      cancelled: boolean
+      targetType: 'bot' | 'team'
+      daemonRunId?: string
+      teamRunId?: string
+    } = { cancelled: false, targetType: routineRow.target_type }
+    this.inFlightDispatches.set(flightKey, flightState)
 
-    if (routineRow.target_type === 'team') {
-      if (!routineRow.team_id) {
-        return { status: 'failed', code: 'TEAM_NOT_CONFIGURED', message: 'Missing teamId on team routine' }
-      }
-      let team
-      try {
-        team = this.deps.teamsService.getTeam(routineRow.team_id)
-      } catch {
-        return { status: 'failed', code: 'TEAM_NOT_FOUND', message: 'Target team not found' }
-      }
-      if (team.archivedAt !== null) {
-        return { status: 'failed', code: 'TEAM_ARCHIVED', message: 'Target team is archived' }
+    try {
+      if (routineRow.target_type === 'team') {
+        if (!routineRow.team_id) {
+          return { status: 'failed', code: 'TEAM_NOT_CONFIGURED', message: 'Missing teamId on team routine' }
+        }
+        let team
+        try {
+          team = this.deps.teamsService.getTeam(routineRow.team_id)
+        } catch {
+          return { status: 'failed', code: 'TEAM_NOT_FOUND', message: 'Target team not found' }
+        }
+        if (team.archivedAt !== null) {
+          return { status: 'failed', code: 'TEAM_ARCHIVED', message: 'Target team is archived' }
+        }
+
+        try {
+          const started = await this.deps.teamsService.startTeamRun({
+            teamId: team.id,
+            goal: ctx.untrustedTask.prompt,
+            idempotencyKey: `sched:${ctx.taskId}:attempt:${taskRow.attempt}`,
+            autoExecute: true,
+          })
+          flightState.teamRunId = started.run.id
+          this.deps.dbHandle.sqlite
+            .prepare(
+              `INSERT OR IGNORE INTO scheduler_execution_links (
+                id, routine_id, routine_revision, occurrence_key, scheduler_task_id,
+                target_type, bot_id, team_id, session_id, daemon_run_id, team_run_id,
+                runtime_id, account_id, attempt, created_at
+              ) VALUES (?, ?, ?, ?, ?, 'team', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              `sexec_${randomUUID()}`,
+              ctx.routineId,
+              ctx.routineRevision,
+              ctx.occurrenceKey,
+              ctx.taskId,
+              ctx.botId,
+              team.id,
+              started.run.id,
+              rt.runtimeMode,
+              accountId,
+              taskRow.attempt,
+              new Date().toISOString(),
+            )
+
+          if (flightState.cancelled) {
+            await this.deps.teamsService.cancelTeamRun(started.run.id)
+            return {
+              status: 'failed',
+              code: 'ROUTINE_TASK_CANCELLED',
+              message: 'Routine task cancelled during team run creation',
+            }
+          }
+
+          while (Date.now() < deadline) {
+            if (flightState.cancelled) {
+              await this.deps.teamsService.cancelTeamRun(started.run.id)
+              return {
+                status: 'failed',
+                code: 'ROUTINE_TASK_CANCELLED',
+                message: 'Routine task cancelled during team execution',
+              }
+            }
+            const run = this.deps.teamsService.getTeamRun(started.run.id)
+            if (run.status === 'completed') {
+              return { status: 'completed' }
+            }
+            if (run.status === 'failed' || run.status === 'cancelled') {
+              return {
+                status: 'failed',
+                code: 'TEAM_RUN_FAILED',
+                message: `Team run ended with status "${run.status}"`,
+              }
+            }
+            if (run.status === 'uncertain') {
+              return {
+                status: 'unknown',
+                reason: 'Team run ended in uncertain state; manual review required',
+              }
+            }
+            await new Promise((r) => setTimeout(r, pollMs))
+          }
+          await this.deps.teamsService.cancelTeamRun(started.run.id).catch(() => {})
+          return { status: 'unknown', reason: 'Team routine exceeded dispatch timeout; cancellation requested' }
+        } catch (err) {
+          const code = err instanceof DaemonError ? err.code : 'TEAM_DISPATCH_ERROR'
+          const msg = err instanceof Error ? err.message : 'Team routine dispatch failed'
+          return { status: 'failed', code, message: redactSecrets(msg) }
+        }
       }
 
+      // Individual bot target routed through authoritative RunOrchestrator
+      const sessionId = this.getOrCreateRoutineSessionId(ctx.routineId, ctx.botId)
       try {
-        const started = await this.deps.teamsService.startTeamRun({
-          teamId: team.id,
-          goal: ctx.untrustedTask.prompt,
+        const { run } = await this.deps.orchestrator.startRun({
+          sessionId,
+          text: ctx.untrustedTask.prompt,
           idempotencyKey: `sched:${ctx.taskId}:attempt:${taskRow.attempt}`,
-          autoExecute: true,
         })
+        flightState.daemonRunId = run.id
+
         this.deps.dbHandle.sqlite
           .prepare(
             `INSERT OR IGNORE INTO scheduler_execution_links (
               id, routine_id, routine_revision, occurrence_key, scheduler_task_id,
               target_type, bot_id, team_id, session_id, daemon_run_id, team_run_id,
               runtime_id, account_id, attempt, created_at
-            ) VALUES (?, ?, ?, ?, ?, 'team', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, 'bot', ?, NULL, ?, ?, NULL, ?, ?, ?, ?)`,
           )
           .run(
             `sexec_${randomUUID()}`,
@@ -193,152 +286,113 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
             ctx.occurrenceKey,
             ctx.taskId,
             ctx.botId,
-            team.id,
-            started.run.id,
+            sessionId,
+            run.id,
             rt.runtimeMode,
             accountId,
             taskRow.attempt,
             new Date().toISOString(),
           )
 
-        while (Date.now() < deadline) {
-          const run = this.deps.teamsService.getTeamRun(started.run.id)
-          if (run.status === 'completed') {
-            return { status: 'completed' }
+        if (flightState.cancelled) {
+          this.deps.orchestrator.cancelRun(run.id)
+          return {
+            status: 'failed',
+            code: 'ROUTINE_TASK_CANCELLED',
+            message: 'Routine task cancelled during child run creation',
           }
-          if (run.status === 'failed' || run.status === 'cancelled') {
+        }
+
+        while (Date.now() < deadline) {
+          if (flightState.cancelled) {
+            this.deps.orchestrator.cancelRun(run.id)
             return {
               status: 'failed',
-              code: 'TEAM_RUN_FAILED',
-              message: `Team run ended with status "${run.status}"`,
+              code: 'ROUTINE_TASK_CANCELLED',
+              message: 'Routine task cancelled during execution',
             }
           }
-          if (run.status === 'uncertain') {
+          const latest = this.deps.orchestrator.getRun(run.id)
+          if (latest.status === 'completed') {
+            return { status: 'completed' }
+          }
+          if (latest.status === 'awaiting_approval') {
+            const pendingApp = this.deps.dbHandle.sqlite
+              .prepare(
+                `SELECT id, action_type, action_summary, expires_at
+                 FROM approvals
+                 WHERE run_id = ? AND status = 'pending'
+                 ORDER BY created_at DESC LIMIT 1`,
+              )
+              .get(run.id) as
+              | { id: string; action_type: string; action_summary: string; expires_at: string }
+              | undefined
+
+            if (pendingApp) {
+              this.deps.approvalCoordinator.bindApprovalRequest({
+                routineId: ctx.routineId,
+                routineRevision: ctx.routineRevision,
+                occurrenceKey: ctx.occurrenceKey,
+                taskId: ctx.taskId,
+                scope: { ownerId: ctx.ownerId, botId: ctx.botId },
+                daemonRunId: run.id,
+                daemonApprovalId: pendingApp.id,
+                expiresAt: pendingApp.expires_at,
+                requirePolicyRevalidation: true,
+                sanitizedActionSummary: `${pendingApp.action_type}: ${pendingApp.action_summary}`,
+              })
+              const nowIso = new Date().toISOString()
+              this.deps.dbHandle.sqlite
+                .prepare(
+                  `INSERT OR IGNORE INTO scheduler_approval_links (
+                    id, scheduler_task_id, routine_id, routine_revision, occurrence_key,
+                    daemon_run_id, daemon_approval_id, state, expires_at, created_at, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, 'approval.pending', ?, ?, ?)`,
+                )
+                .run(
+                  `sapp_${randomUUID()}`,
+                  ctx.taskId,
+                  ctx.routineId,
+                  ctx.routineRevision,
+                  ctx.occurrenceKey,
+                  run.id,
+                  pendingApp.id,
+                  pendingApp.expires_at,
+                  nowIso,
+                  nowIso,
+                )
+            }
             return {
-              status: 'unknown',
-              reason: 'Team run ended in uncertain state; manual review required',
+              status: 'awaiting_approval',
+              reason: pendingApp
+                ? `Awaiting approval ${pendingApp.id} (${pendingApp.action_type})`
+                : 'Awaiting daemon approval',
+            }
+          }
+          if (latest.status === 'failed' || latest.status === 'cancelled') {
+            return {
+              status: 'failed',
+              code: latest.error?.code ?? 'RUN_FAILED',
+              message: redactSecrets(latest.error?.message ?? `Child run ${latest.status}`),
             }
           }
           await new Promise((r) => setTimeout(r, pollMs))
         }
-        return { status: 'unknown', reason: 'Team routine exceeded dispatch timeout' }
+
+        this.deps.orchestrator.cancelRun(run.id)
+        return {
+          status: 'unknown',
+          reason: 'Bot routine exceeded dispatch poll deadline; cancellation requested',
+        }
       } catch (err) {
-        const code = err instanceof DaemonError ? err.code : 'TEAM_DISPATCH_ERROR'
-        const msg = err instanceof Error ? err.message : 'Team routine dispatch failed'
-        return { status: 'failed', code, message: redactSecrets(msg) }
-      }
-    }
-
-    // Individual bot target routed through authoritative RunOrchestrator
-    const sessionId = this.getOrCreateRoutineSessionId(ctx.routineId, ctx.botId)
-    try {
-      const { run } = await this.deps.orchestrator.startRun({
-        sessionId,
-        text: ctx.untrustedTask.prompt,
-        idempotencyKey: `sched:${ctx.taskId}:attempt:${taskRow.attempt}`,
-      })
-
-      this.deps.dbHandle.sqlite
-        .prepare(
-          `INSERT OR IGNORE INTO scheduler_execution_links (
-            id, routine_id, routine_revision, occurrence_key, scheduler_task_id,
-            target_type, bot_id, team_id, session_id, daemon_run_id, team_run_id,
-            runtime_id, account_id, attempt, created_at
-          ) VALUES (?, ?, ?, ?, ?, 'bot', ?, NULL, ?, ?, NULL, ?, ?, ?, ?)`,
-        )
-        .run(
-          `sexec_${randomUUID()}`,
-          ctx.routineId,
-          ctx.routineRevision,
-          ctx.occurrenceKey,
-          ctx.taskId,
-          ctx.botId,
-          sessionId,
-          run.id,
-          rt.runtimeMode,
-          accountId,
-          taskRow.attempt,
-          new Date().toISOString(),
-        )
-
-      while (Date.now() < deadline) {
-        const latest = this.deps.orchestrator.getRun(run.id)
-        if (latest.status === 'completed') {
-          return { status: 'completed' }
+        const msg = err instanceof Error ? err.message : 'Routine dispatch error'
+        return {
+          status: 'unknown',
+          reason: redactSecrets(msg),
         }
-        if (latest.status === 'awaiting_approval') {
-          const pendingApp = this.deps.dbHandle.sqlite
-            .prepare(
-              `SELECT id, action_type, action_summary, expires_at
-               FROM approvals
-               WHERE run_id = ? AND status = 'pending'
-               ORDER BY created_at DESC LIMIT 1`,
-            )
-            .get(run.id) as
-            | { id: string; action_type: string; action_summary: string; expires_at: string }
-            | undefined
-
-          if (pendingApp) {
-            this.deps.approvalCoordinator.bindApprovalRequest({
-              routineId: ctx.routineId,
-              routineRevision: ctx.routineRevision,
-              occurrenceKey: ctx.occurrenceKey,
-              taskId: ctx.taskId,
-              scope: { ownerId: ctx.ownerId, botId: ctx.botId },
-              daemonRunId: run.id,
-              daemonApprovalId: pendingApp.id,
-              expiresAt: pendingApp.expires_at,
-              requirePolicyRevalidation: true,
-              sanitizedActionSummary: `${pendingApp.action_type}: ${pendingApp.action_summary}`,
-            })
-            const nowIso = new Date().toISOString()
-            this.deps.dbHandle.sqlite
-              .prepare(
-                `INSERT OR IGNORE INTO scheduler_approval_links (
-                  id, scheduler_task_id, routine_id, routine_revision, occurrence_key,
-                  daemon_run_id, daemon_approval_id, state, expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'approval.pending', ?, ?, ?)`,
-              )
-              .run(
-                `sapp_${randomUUID()}`,
-                ctx.taskId,
-                ctx.routineId,
-                ctx.routineRevision,
-                ctx.occurrenceKey,
-                run.id,
-                pendingApp.id,
-                pendingApp.expires_at,
-                nowIso,
-                nowIso,
-              )
-          }
-          return {
-            status: 'awaiting_approval',
-            reason: pendingApp
-              ? `Awaiting approval ${pendingApp.id} (${pendingApp.action_type})`
-              : 'Awaiting daemon approval',
-          }
-        }
-        if (latest.status === 'failed' || latest.status === 'cancelled') {
-          return {
-            status: 'failed',
-            code: latest.error?.code ?? 'RUN_FAILED',
-            message: redactSecrets(latest.error?.message ?? `Child run ${latest.status}`),
-          }
-        }
-        await new Promise((r) => setTimeout(r, pollMs))
       }
-
-      return {
-        status: 'unknown',
-        reason: 'Bot routine exceeded dispatch poll deadline',
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Routine dispatch error'
-      return {
-        status: 'unknown',
-        reason: redactSecrets(msg),
-      }
+    } finally {
+      this.inFlightDispatches.delete(flightKey)
     }
   }
 
@@ -443,6 +497,31 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
   }
 
   async cancelTaskExecution(taskId: string, scope: RoutineScope): Promise<{ confirmed: boolean }> {
+    const taskRow = this.deps.dbHandle.sqlite
+      .prepare(`SELECT status, attempt FROM scheduler_tasks WHERE id = ? AND owner_id = ?`)
+      .get(taskId, scope.ownerId) as { status: string; attempt: number } | undefined
+
+    if (taskRow) {
+      const inFlight = this.inFlightDispatches.get(`${taskId}:${taskRow.attempt}`)
+      if (inFlight) {
+        inFlight.cancelled = true
+        if (inFlight.targetType === 'team' && inFlight.teamRunId) {
+          const res = await this.deps.teamsService.cancelTeamRun(inFlight.teamRunId)
+          return { confirmed: res.run.status === 'cancelled' || res.run.status === 'completed' }
+        }
+        if (inFlight.daemonRunId) {
+          const res = this.deps.orchestrator.cancelRun(inFlight.daemonRunId)
+          return {
+            confirmed:
+              res.run.status === 'cancelled' ||
+              res.run.status === 'completed' ||
+              res.run.status === 'failed',
+          }
+        }
+        return { confirmed: false }
+      }
+    }
+
     const link = this.deps.dbHandle.sqlite
       .prepare(
         `SELECT l.target_type, l.daemon_run_id, l.team_run_id
@@ -454,7 +533,12 @@ export class DaemonRoutineDispatcher implements FutureRoutineDispatcher {
       .get(taskId, scope.ownerId) as
       | { target_type: string; daemon_run_id: string | null; team_run_id: string | null }
       | undefined
-    if (!link) return { confirmed: true }
+    if (!link) {
+      if (taskRow && (taskRow.status === 'running' || taskRow.status === 'awaiting_approval' || taskRow.status === 'claimed')) {
+        return { confirmed: false }
+      }
+      return { confirmed: true }
+    }
 
     if (link.target_type === 'team' && link.team_run_id) {
       const res = await this.deps.teamsService.cancelTeamRun(link.team_run_id)

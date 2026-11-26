@@ -424,12 +424,98 @@ export class SchedulerService {
     }
   }
 
-  getTask(taskId: string, botId: string): ScheduledTaskRecord {
+  getTask(taskId: string, botId: string): ScheduledTaskRecord & {
+    executionLink?: { daemonRunId: string | null; teamRunId: string | null; sessionId: string | null } | null
+    approvalLink?: { daemonApprovalId: string; daemonRunId: string; state: string; expiresAt: string } | null
+  } {
     try {
-      return this.queue.getTask(taskId, this.scopeForBot(botId))
+      const task = this.queue.getTask(taskId, this.scopeForBot(botId))
+      const execRow = this.dbHandle.sqlite
+        .prepare(
+          `SELECT daemon_run_id, team_run_id, session_id
+           FROM scheduler_execution_links
+           WHERE scheduler_task_id = ?
+           ORDER BY attempt DESC LIMIT 1`,
+        )
+        .get(taskId) as
+        | { daemon_run_id: string | null; team_run_id: string | null; session_id: string | null }
+        | undefined
+      const appRow = this.dbHandle.sqlite
+        .prepare(
+          `SELECT daemon_approval_id, daemon_run_id, state, expires_at
+           FROM scheduler_approval_links
+           WHERE scheduler_task_id = ?
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(taskId) as
+        | { daemon_approval_id: string; daemon_run_id: string; state: string; expires_at: string }
+        | undefined
+      return {
+        ...task,
+        executionLink: execRow
+          ? {
+              daemonRunId: execRow.daemon_run_id,
+              teamRunId: execRow.team_run_id,
+              sessionId: execRow.session_id,
+            }
+          : null,
+        approvalLink: appRow
+          ? {
+              daemonApprovalId: appRow.daemon_approval_id,
+              daemonRunId: appRow.daemon_run_id,
+              state: appRow.state,
+              expiresAt: appRow.expires_at,
+            }
+          : null,
+      }
     } catch (err) {
       mapSchedulerError(err)
     }
+  }
+
+  handleDaemonApprovalResolved(
+    daemonRunId: string,
+    daemonApprovalId: string,
+    decision: 'approved' | 'denied',
+  ): void {
+    const link = this.dbHandle.sqlite
+      .prepare(
+        `SELECT l.scheduler_task_id, l.routine_id, l.routine_revision, t.owner_id, t.bot_id
+         FROM scheduler_approval_links l
+         JOIN scheduler_tasks t ON t.id = l.scheduler_task_id
+         WHERE l.daemon_run_id = ? AND l.daemon_approval_id = ?
+         LIMIT 1`,
+      )
+      .get(daemonRunId, daemonApprovalId) as
+      | {
+          scheduler_task_id: string
+          routine_id: string
+          routine_revision: number
+          owner_id: string
+          bot_id: string
+        }
+      | undefined
+    if (!link) return
+
+    const nowMs = this.clock.nowMs()
+    const res = this.approvals.applyApprovalEvent(
+      {
+        taskId: link.scheduler_task_id,
+        scope: { ownerId: link.owner_id, botId: link.bot_id },
+        daemonRunId,
+        daemonApprovalId,
+        routineRevision: link.routine_revision,
+        kind: decision === 'approved' ? 'approved_for_continuation' : 'denied',
+      },
+      nowMs,
+    )
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE scheduler_approval_links
+         SET state = ?, updated_at = ?
+         WHERE scheduler_task_id = ? AND daemon_approval_id = ?`,
+      )
+      .run(res.approvalState, new Date(nowMs).toISOString(), link.scheduler_task_id, daemonApprovalId)
   }
 
   async cancelTask(taskId: string, botId: string): Promise<ScheduledTaskRecord> {

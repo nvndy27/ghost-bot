@@ -725,16 +725,20 @@ export class GhostBotDaemon {
               { statusCode: 400 },
             )
           }
-          sendJson(
-            res,
-            200,
-            await orchestrator.resolveApproval(
+          const resolvedApproval = await orchestrator.resolveApproval(
+            parsed.data.runId,
+            parsed.data.approvalId,
+            parsed.data.decision,
+            parsed.data.argsHash,
+          )
+          if (this.schedulerService) {
+            this.schedulerService.handleDaemonApprovalResolved(
               parsed.data.runId,
               parsed.data.approvalId,
               parsed.data.decision,
-              parsed.data.argsHash,
-            ),
-          )
+            )
+          }
+          sendJson(res, 200, resolvedApproval)
           return
         }
 

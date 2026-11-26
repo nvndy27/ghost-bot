@@ -1693,6 +1693,14 @@ export const CreateRoutineIpcInputSchema = z
     maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
     concurrencyPolicy: z.enum(['forbid', 'allow-bounded']).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
+    retryPolicy: z
+      .object({
+        maxAttempts: z.number().int().min(1).max(5),
+        backoffMs: z.number().int().min(1000).max(3_600_000),
+        retryNonIdempotent: z.literal(false),
+      })
+      .strict()
+      .optional(),
     expiresAt: z.string().min(1).max(64).nullable().optional(),
   })
   .strict()
@@ -1718,6 +1726,14 @@ export const UpdateRoutineIpcInputSchema = z
     maxCatchUpRuns: z.number().int().min(1).max(10).optional(),
     concurrencyPolicy: z.enum(['forbid', 'allow-bounded']).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(5).optional(),
+    retryPolicy: z
+      .object({
+        maxAttempts: z.number().int().min(1).max(5),
+        backoffMs: z.number().int().min(1000).max(3_600_000),
+        retryNonIdempotent: z.literal(false),
+      })
+      .strict()
+      .optional(),
     expiresAt: z.string().min(1).max(64).nullable().optional(),
   })
   .strict()
@@ -1752,5 +1768,205 @@ export const RoutineNotificationParamSchema = z
     botId: BotIdSchema,
   })
   .strict()
+
+export const RoutineRecordDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  targetType: z.enum(['bot', 'team']).optional(),
+  teamId: z.string().nullable().optional(),
+  trigger: z.record(z.string(), z.unknown()),
+  timezone: z.string(),
+  task: z.object({
+    prompt: z.string(),
+    idempotent: z.boolean(),
+    metadata: z.record(z.string(), z.string()).optional(),
+    requestedPermissionHint: z.string().optional(),
+  }),
+  enabled: z.boolean(),
+  archivedAt: z.string().nullable(),
+  missedRunPolicy: z.string(),
+  maxCatchUpRuns: z.number(),
+  concurrencyPolicy: z.string(),
+  maxConcurrentRuns: z.number(),
+  retryPolicy: z.object({
+    maxAttempts: z.number(),
+    backoffMs: z.number(),
+    retryNonIdempotent: z.literal(false),
+  }),
+  expiresAt: z.string().nullable(),
+  nextRunAt: z.string().nullable(),
+  lastRunAt: z.string().nullable(),
+  lastEvaluatedAt: z.string().nullable(),
+  lastTaskStatus: z.string().nullable(),
+  revision: z.number(),
+  ownership: z.string(),
+  dedupWatermarkAt: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const RoutineTaskDtoSchema = z.object({
+  id: z.string(),
+  routineId: z.string(),
+  routineRevision: z.number(),
+  triggerSource: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  occurrenceKey: z.string(),
+  scheduledFor: z.string(),
+  status: z.string(),
+  attempt: z.number(),
+  maxAttempts: z.number(),
+  uncertainExecution: z.boolean(),
+  approvalRequired: z.boolean(),
+  approvalState: z.string().nullable().optional(),
+  approvalExpiresAt: z.string().nullable().optional(),
+  approvalActionSummary: z.string().nullable().optional(),
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  executionLink: z
+    .object({
+      daemonRunId: z.string().nullable(),
+      teamRunId: z.string().nullable(),
+      sessionId: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+  approvalLink: z
+    .object({
+      daemonApprovalId: z.string(),
+      daemonRunId: z.string(),
+      state: z.string(),
+      expiresAt: z.string(),
+    })
+    .nullable()
+    .optional(),
+})
+
+export const RoutineTriggerResponseDtoSchema = z.object({
+  task: RoutineTaskDtoSchema,
+  created: z.boolean(),
+})
+
+export const RoutinePreviewDtoSchema = z.object({
+  valid: z.boolean(),
+  validationError: z.string().nullable(),
+  status: z.enum(['ok', 'event_driven', 'invalid', 'no_occurrences_in_horizon', 'expired']),
+  timezone: z.string(),
+  routineRevision: z.number(),
+  requestedCount: z.number(),
+  occurrences: z.array(
+    z.object({
+      scheduledAtUtc: z.string(),
+      localDateTime: z.string(),
+      timezone: z.string(),
+      dstTransitionNote: z.string().optional(),
+    }),
+  ),
+  truncatedByExpiration: z.boolean(),
+  truncatedByHorizon: z.boolean(),
+})
+
+export const RoutineDiagnosticsDtoSchema = z.object({
+  routineId: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  revision: z.number(),
+  eligibleForScheduling: z.boolean(),
+  reasonCodes: z.array(z.string()),
+  nextRunAt: z.string().nullable(),
+  activeTaskCount: z.number(),
+  uncertainTaskCount: z.number(),
+  staleQueuedTaskCount: z.number(),
+  awaitingApprovalCount: z.number(),
+  authorizationNote: z.string(),
+})
+
+export const RoutineSimulationDtoSchema = z.object({
+  simulatedOnly: z.literal(true),
+  routineCount: z.number(),
+  ticksExecuted: z.number(),
+  expectedOccurrences: z.number(),
+  skippedOccurrences: z.number(),
+  deduplicatedOccurrences: z.number(),
+  estimatedDispatchOpportunities: z.number(),
+  taskStates: z.record(z.string(), z.number()),
+  blockingReasonCodes: z.array(z.string()),
+  warnings: z.array(z.string()),
+  tasks: z.array(z.record(z.string(), z.unknown())).optional(),
+})
+
+export const RoutineStatsDtoSchema = z.object({
+  routineId: z.string(),
+  ownerId: z.string(),
+  botId: z.string(),
+  scheduledOccurrences: z.number(),
+  completedTasks: z.number(),
+  failedTasks: z.number(),
+  cancelledTasks: z.number(),
+  expiredTasks: z.number(),
+  interruptedTasks: z.number(),
+  uncertainExecutionCount: z.number(),
+  successRate: z.number().nullable(),
+  successRateDenominator: z.number(),
+  averageDurationMs: z.number().nullable(),
+  durationSampleCount: z.number(),
+  lastExecutionAt: z.string().nullable(),
+  nextScheduledAt: z.string().nullable(),
+  retentionNote: z.string(),
+})
+
+export const RoutineImportPreviewDtoSchema = z.object({
+  valid: z.boolean(),
+  totalParsed: z.number(),
+  wouldCreate: z.number(),
+  wouldSkip: z.number(),
+  wouldRename: z.number(),
+  wouldOverwrite: z.number(),
+  conflicts: z.array(z.string()),
+  validatedInputs: z.array(z.record(z.string(), z.unknown())).optional(),
+})
+
+export const RoutineImportCommitDtoSchema = z.object({
+  imported: z.array(RoutineRecordDtoSchema),
+  skipped: z.number(),
+})
+
+export const RoutineExportBundleDtoSchema = z.object({
+  schema: z.string(),
+  schemaVersion: z.union([z.number(), z.string()]),
+  exportedAt: z.string(),
+  routines: z.array(z.record(z.string(), z.unknown())),
+})
+
+export const RoutineNotificationDtoSchema = z.object({
+  id: z.string(),
+  routineId: z.string(),
+  routineRevision: z.number(),
+  taskId: z.string().nullable(),
+  occurrenceKey: z.string().nullable(),
+  ownerId: z.string(),
+  botId: z.string(),
+  category: z.string(),
+  severity: z.string(),
+  dedupKey: z.string(),
+  summary: z.string(),
+  readAt: z.string().nullable(),
+  dismissedAt: z.string().nullable(),
+  deliveryStatus: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+})
+
+export type RoutineRecordDto = z.infer<typeof RoutineRecordDtoSchema>
+export type RoutineTaskDto = z.infer<typeof RoutineTaskDtoSchema>
+export type RoutineNotificationDto = z.infer<typeof RoutineNotificationDtoSchema>
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

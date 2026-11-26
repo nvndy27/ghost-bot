@@ -12,6 +12,7 @@ import type {
   GhostBotBridge,
   PersistedMessage,
   ProviderSummary,
+  RoutineRecordDto,
   RunRecord,
   RuntimeSnapshot,
   SessionInspectionResponse,
@@ -148,6 +149,9 @@ export function App() {
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines'>('appearance')
+  const [routines, setRoutines] = useState<RoutineRecordDto[]>([])
+  const [unreadRoutineNotifications, setUnreadRoutineNotifications] = useState(0)
   const [botEditor, setBotEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
     open: false,
     mode: 'create',
@@ -247,6 +251,12 @@ export function App() {
             setTeamsError(err instanceof Error ? err.message : 'Failed to load teams')
             setTeamsLoaded(true)
           })
+        bridge
+          .listRoutines({ includeArchived: false })
+          .then((res) => {
+            setRoutines(res.routines as RoutineRecordDto[])
+          })
+          .catch(() => {})
       })
       .catch((err: unknown) => {
         setBannerError(err instanceof Error ? err.message : 'Failed to load workspace state')
@@ -605,6 +615,21 @@ export function App() {
         updateAppearance({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
       }
     }
+
+  const refreshRoutines = async () => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    try {
+      const res = await bridge.listRoutines({ includeArchived: false })
+      setRoutines(res.routines as RoutineRecordDto[])
+      if (activeBotId) {
+        const cnt = await bridge.getRoutineUnreadNotificationCount({ botId: activeBotId })
+        setUnreadRoutineNotifications(cnt.unreadCount)
+      }
+    } catch {
+      // ignore background refresh error
+    }
+  }
 
   const refreshTeams = async () => {
     const bridge = window.ghostBot
@@ -1541,6 +1566,16 @@ export function App() {
               activeTasks={latestTools}
               runtimeSnapshot={runtimeSnapshot}
               isMockMode={isMockMode}
+              routines={hasBridge ? routines : undefined}
+              unreadRoutineNotifications={unreadRoutineNotifications}
+              onOpenRoutines={
+                hasBridge
+                  ? () => {
+                      setSettingsInitialSection('routines')
+                      setSettingsOpen(true)
+                    }
+                  : undefined
+              }
               onRefreshUsage={() => void handleRefreshRuntime()}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
@@ -1557,11 +1592,19 @@ export function App() {
         runtimeSnapshot={runtimeSnapshot}
         daemonHealth={health}
         bots={bots}
+        teams={teams}
         activeBotId={activeBotId}
+        initialSection={settingsInitialSection}
         onUpdateSettings={handleUpdateSettings}
         onResetSettings={handleResetSettings}
         onRefreshRuntime={handleRefreshRuntime}
-        onClose={() => setSettingsOpen(false)}
+        onRefreshWorkspaceRoutines={() => void refreshRoutines()}
+        onNavigateToBot={handleSelectBot}
+        onNavigateToTeam={handleSelectTeam}
+        onClose={() => {
+          setSettingsOpen(false)
+          setSettingsInitialSection('appearance')
+        }}
       />
       <BotEditorModal
         open={botEditor.open}

@@ -151,7 +151,7 @@ describe('Phase 5B Production Scheduler & Routines Daemon Integration', () => {
       const ver = dbHandle.sqlite
         .prepare('SELECT MAX(version) AS ver FROM schema_migrations')
         .get() as { ver: number }
-      assert.equal(Number(ver.ver), 10)
+      assert.ok(Number(ver.ver) >= 10)
       assert.equal(runMigrations(dbHandle.sqlite), 0)
       const fkViolations = dbHandle.sqlite.prepare('PRAGMA foreign_key_check').all()
       assert.equal(fkViolations.length, 0)

@@ -6,6 +6,7 @@ import type {
   DaemonHealthResponse,
   ProviderSummary,
   RuntimeSnapshot,
+  TeamRecordDto,
 } from '@ghost-bot/shared-types/ipc'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
@@ -13,6 +14,7 @@ import { BotAvatar } from './BotAvatar.tsx'
 import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
 import { McpSettingsSection } from './McpSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
+import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General' },
@@ -50,10 +52,15 @@ export interface SettingsModalProps {
   runtimeSnapshot: RuntimeSnapshot | null
   daemonHealth: DaemonHealthResponse | null
   bots: WorkspaceBot[]
+  teams?: TeamRecordDto[]
   activeBotId?: string | null
+  initialSection?: SectionId
   onUpdateSettings: (patch: AppSettingsPatch) => Promise<void>
   onResetSettings: () => Promise<void>
   onRefreshRuntime: () => Promise<void>
+  onRefreshWorkspaceRoutines?: () => void
+  onNavigateToBot?: (botId: string) => void
+  onNavigateToTeam?: (teamId: string) => void
   onClose: () => void
 }
 
@@ -64,13 +71,18 @@ export function SettingsModal({
   runtimeSnapshot,
   daemonHealth,
   bots,
+  teams = [],
   activeBotId,
+  initialSection,
   onUpdateSettings,
   onResetSettings,
   onRefreshRuntime,
+  onRefreshWorkspaceRoutines,
+  onNavigateToBot,
+  onNavigateToTeam,
   onClose,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<SectionId>('appearance')
+  const [activeSection, setActiveSection] = useState<SectionId>(initialSection ?? 'appearance')
   const [refreshing, setRefreshing] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -78,9 +90,10 @@ export function SettingsModal({
 
   useEffect(() => {
     if (!open) return
+    if (initialSection) setActiveSection(initialSection)
     setConfirmReset(false)
     setErrorMsg(null)
-  }, [open])
+  }, [open, initialSection])
 
   useModalDialog(open, modalRef, onClose)
 
@@ -765,8 +778,25 @@ export function SettingsModal({
               />
             )}
 
-            {(activeSection === 'computer-use' ||
-              activeSection === 'routines') && (
+            {activeSection === 'routines' && (
+              <RoutinesSettingsSection
+                bots={bots}
+                teams={teams}
+                activeBotId={activeBotId ?? null}
+                isMockMode={daemonHealth?.runtimeMode !== 'codex'}
+                onRefreshWorkspaceRoutines={onRefreshWorkspaceRoutines}
+                onNavigateToBot={(bId) => {
+                  onNavigateToBot?.(bId)
+                  onClose()
+                }}
+                onNavigateToTeam={(tId) => {
+                  onNavigateToTeam?.(tId)
+                  onClose()
+                }}
+              />
+            )}
+
+            {activeSection === 'computer-use' && (
               <div>
                 <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
                   {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}

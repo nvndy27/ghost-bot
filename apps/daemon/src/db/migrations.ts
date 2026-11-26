@@ -770,6 +770,14 @@ export const MIGRATIONS: readonly Migration[] = [
         ON scheduler_approval_links(daemon_run_id, daemon_approval_id);
     `,
   },
+  {
+    version: 11,
+    name: '0011_scheduler_task_approval_cols',
+    sql: `
+      ALTER TABLE scheduler_tasks ADD COLUMN daemon_run_id TEXT;
+      ALTER TABLE scheduler_tasks ADD COLUMN daemon_approval_id TEXT;
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {
