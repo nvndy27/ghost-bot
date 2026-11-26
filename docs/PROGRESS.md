@@ -1,5 +1,16 @@
 # Progress log
 
+## Phase 3D.2 — Production Knowledge & Retrieval Integration
+
+2026-11-26. Branched `feat/phase-3d2-knowledge-integration` from `ac4f80d` (Phase 3D.1 closure gate). Phase 3D.2 is **Verified** (**PASS**) with zero MCP production integration and zero live subscription inference turns. See [Phase 3D.2 report](extensions/phase-3d2-knowledge-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added production migration `0006_knowledge_core` (`apps/daemon/src/db/migrations.ts`, `schema.ts`) and `createBorrowedKnowledgeDatabaseHandle()` (`packages/knowledge/src/storage/sqlite-client.ts`) so `KnowledgeService.close()` never closes the daemon's `DatabaseSync`. |
+| Verified | Implemented daemon-owned `KnowledgeService` (`apps/daemon/src/knowledge/service.ts`) constructing trusted `KnowledgeAuthContext`, supporting `direct_text`, UTF-8 `.txt`, and `.md`/`.markdown` (via Electron `dialog.showOpenDialog` in `apps/desktop/electron/main.ts` + `O_NOFOLLOW`), revision-aware citations (`resolveCitation`), and atomic bot-scoped archival via `archiveKnowledgeForBotInTx()` in `DELETE /bots/:id`. |
+| Verified | Added `KnowledgeSettingsSchema` / `KnowledgeSettingsPatchSchema` (`enabled: true`, `automaticRetrieval: false`, `includeUserWide: false`, `externalProviderConsent: false`), 11 strict Zod v4 IPC channels, `KnowledgeSettingsSection` UI (`apps/desktop/src/components/KnowledgeSettingsSection.tsx`), and combined Memory+Knowledge `context-assembler.ts` (`<= 12288` bytes) with `CodexAppServerAdapter.run()` `prepareReferenceContext` revalidation. |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (0 vulns), `verify-phase-2e-acceptance.mjs`, `verify-phase-3d1-electron.mjs`, `verify-phase-3d2-electron.mjs` (2 screenshots in `design/reviews/phase-3d2/`), 573-chunk synthetic benchmark (`searchMs: 47.15`, `prepareMs: 41.7`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `70/70` core = **110/110** each) all passed. |
+
 ## Phase 3D.1 — Production Memory Integration
 
 2026-11-26. Branched `feat/phase-3d1-memory-integration` from `158a728`. Phase 3D.1 is **Verified** (**PASS**) with zero Knowledge/MCP production integration and zero live subscription inference turns. See [Phase 3D.1 report](extensions/phase-3d1-memory-integration.md).

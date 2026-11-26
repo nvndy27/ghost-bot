@@ -9,23 +9,33 @@ import {
   AppSettingsPatchSchema,
   BotIdSchema,
   CreateBotInputSchema,
+  CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
   ImportAvatarSvgInputSchema,
+  IngestKnowledgeTextInputSchema,
+  KnowledgeIdParamSchema,
+  ListKnowledgeCollectionsInputSchema,
+  ListKnowledgeDocsInputSchema,
   ListMemoriesIpcInputSchema,
   MemoryIdParamSchema,
   RenameSessionInputSchema,
+  ReplaceKnowledgeDocTextInputSchema,
   ResolveApprovalInputSchema,
+  ResolveKnowledgeCitationInputSchema,
   RetryRunInputSchema,
   RunIdSchema,
+  SearchKnowledgeDocsInputSchema,
   SearchMemoriesIpcInputSchema,
   SessionIdSchema,
   SetActiveBotParamsSchema,
   SetActiveSessionInputSchema,
   StartRunInputSchema,
   UpdateBotInputSchema,
+  UpdateKnowledgeDocInputSchema,
   UpdateMemoryIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
+import { z } from 'zod'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
 import { BotRepository } from './bots/repository.ts'
 import { openGhostBotDatabase } from './db/client.ts'
@@ -33,6 +43,7 @@ import type { DatabaseHandle } from './db/client.ts'
 import { seedInitialBotsIfNeeded } from './db/seed.ts'
 import { DaemonError, normalizeDaemonError } from './errors.ts'
 import { RunOrchestrator } from './execution/orchestrator.ts'
+import { KnowledgeService } from './knowledge/service.ts'
 import { MemoryService } from './memory/service.ts'
 import { RuntimeRegistry } from './runtime/registry.ts'
 import { SessionRepository } from './sessions/repository.ts'
@@ -64,15 +75,16 @@ function sendJson(res: ServerResponse, statusCode: number, payload: unknown): vo
 }
 
 const MAX_BODY_BYTES = 64 * 1024
+const MAX_KNOWLEDGE_BODY_BYTES = 600 * 1024
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += buf.length
-    if (total > MAX_BODY_BYTES) {
-      throw new DaemonError('PAYLOAD_TOO_LARGE', 'Request body exceeds 64 KB limit', {
+    if (total > maxBytes) {
+      throw new DaemonError('PAYLOAD_TOO_LARGE', `Request body exceeds ${maxBytes} bytes limit`, {
         statusCode: 413,
       })
     }
@@ -98,6 +110,7 @@ export class GhostBotDaemon {
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
   private memoryService: MemoryService | null = null
+  private knowledgeService: KnowledgeService | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
   private server: Server | null = null
@@ -190,10 +203,12 @@ export class GhostBotDaemon {
     this.settingsRepo = new SettingsRepository(dbHandle)
     this.sessionRepo = new SessionRepository(dbHandle)
     this.memoryService = new MemoryService(dbHandle, this.settingsRepo)
+    this.knowledgeService = new KnowledgeService(dbHandle, this.settingsRepo)
     this.runOrchestrator = new RunOrchestrator(dbHandle, {
       runtimeRegistry: this.runtimeRegistry,
       settingsRepo: this.settingsRepo,
       memoryService: this.memoryService,
+      knowledgeService: this.knowledgeService,
     })
     this.runOrchestrator.reconcileOnStartup()
 
@@ -244,6 +259,10 @@ export class GhostBotDaemon {
     if (this.memoryService) {
       this.memoryService.close()
       this.memoryService = null
+    }
+    if (this.knowledgeService) {
+      this.knowledgeService.close()
+      this.knowledgeService = null
     }
     if (this.dbHandle) {
       this.dbHandle.close()
@@ -383,6 +402,7 @@ export class GhostBotDaemon {
           const result = repo.deleteBot(idCheck.data, {
             onArchiveBot: (botId, now) => {
               this.memoryService?.archiveMemoriesForBotInTx(botId, now)
+              this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
             },
           })
           sendJson(res, 200, result)
@@ -728,6 +748,213 @@ export class GhostBotDaemon {
           }
           if (req.method === 'DELETE') {
             sendJson(res, 200, await memoryService.deleteMemory(idCheck.data.id))
+            return
+          }
+        }
+      }
+
+      if (this.knowledgeService) {
+        const knowledgeService = this.knowledgeService
+
+        if (req.method === 'GET' && url.pathname === '/knowledge/collections') {
+          const botId = url.searchParams.get('botId') ?? undefined
+          const scopeKind = url.searchParams.get('scopeKind') ?? undefined
+          const includeUserWide = url.searchParams.get('includeUserWide') === 'true'
+          const parsed = ListKnowledgeCollectionsInputSchema.safeParse({
+            ...(botId ? { botId } : {}),
+            ...(scopeKind ? { scopeKind } : {}),
+            includeUserWide,
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid collection list query',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await knowledgeService.listCollections(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/knowledge/collections') {
+          const body = await readJsonBody(req)
+          const parsed = CreateKnowledgeCollectionInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid create collection payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, await knowledgeService.createCollection(parsed.data))
+          return
+        }
+
+        if (req.method === 'GET' && url.pathname === '/knowledge/documents') {
+          const botId = url.searchParams.get('botId') ?? undefined
+          const scopeKind = url.searchParams.get('scopeKind') ?? undefined
+          const collectionId = url.searchParams.get('collectionId') ?? undefined
+          const includeUserWide = url.searchParams.get('includeUserWide') === 'true'
+          const includeArchived = url.searchParams.get('includeArchived') === 'true'
+          const limitRaw = url.searchParams.get('limit')
+          const offsetRaw = url.searchParams.get('offset')
+          const parsed = ListKnowledgeDocsInputSchema.safeParse({
+            ...(botId ? { botId } : {}),
+            ...(scopeKind ? { scopeKind } : {}),
+            ...(collectionId ? { collectionId } : {}),
+            includeUserWide,
+            includeArchived,
+            ...(limitRaw ? { limit: Number.parseInt(limitRaw, 10) } : {}),
+            ...(offsetRaw ? { offset: Number.parseInt(offsetRaw, 10) } : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid document list query',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await knowledgeService.listDocuments(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/knowledge/documents/search') {
+          const body = await readJsonBody(req)
+          const parsed = SearchKnowledgeDocsInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid document search payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await knowledgeService.searchDocuments(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/knowledge/documents/ingest-text') {
+          const body = await readJsonBody(req, MAX_KNOWLEDGE_BODY_BYTES)
+          const parsed = IngestKnowledgeTextInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid document ingestion payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, await knowledgeService.ingestText(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/knowledge/documents/ingest-file') {
+          const body = await readJsonBody(req)
+          const IngestAuthorizedFileBodySchema = z
+            .object({
+              scope: z.discriminatedUnion('kind', [
+                z.object({ kind: z.literal('user') }).strict(),
+                z.object({ kind: z.literal('bot'), botId: BotIdSchema }).strict(),
+                z.object({ kind: z.literal('workspace'), botId: BotIdSchema }).strict(),
+              ]),
+              collectionId: z.string().nullable().default(null),
+              tags: z.array(z.string().trim().min(1).max(48)).max(16).default([]),
+              allowedRootDir: z.string().min(1).max(1024),
+              filePath: z.string().min(1).max(1024),
+            })
+            .strict()
+          const parsed = IngestAuthorizedFileBodySchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid authorized file ingestion payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 201, await knowledgeService.ingestAuthorizedFile(parsed.data))
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/knowledge/citations/resolve') {
+          const body = await readJsonBody(req)
+          const parsed = ResolveKnowledgeCitationInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid citation resolution payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await knowledgeService.resolveCitation(parsed.data))
+          return
+        }
+
+        const docReplaceMatch = /^\/knowledge\/documents\/([^/]+)\/replace-text$/.exec(url.pathname)
+        if (req.method === 'POST' && docReplaceMatch) {
+          const idCheck = KnowledgeIdParamSchema.safeParse({
+            id: decodeURIComponent(docReplaceMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid document identifier', {
+              statusCode: 400,
+            })
+          }
+          const body = await readJsonBody(req, MAX_KNOWLEDGE_BODY_BYTES)
+          const parsed = ReplaceKnowledgeDocTextInputSchema.safeParse({
+            id: idCheck.data.id,
+            ...(body && typeof body === 'object' ? body : {}),
+          })
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid document replacement payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, await knowledgeService.replaceDocumentText(parsed.data))
+          return
+        }
+
+        const docArchiveMatch = /^\/knowledge\/documents\/([^/]+)\/archive$/.exec(url.pathname)
+        if (req.method === 'POST' && docArchiveMatch) {
+          const idCheck = KnowledgeIdParamSchema.safeParse({
+            id: decodeURIComponent(docArchiveMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid document identifier', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, await knowledgeService.archiveDocument(idCheck.data.id))
+          return
+        }
+
+        const docMatch = /^\/knowledge\/documents\/([^/]+)$/.exec(url.pathname)
+        if (docMatch) {
+          const idCheck = KnowledgeIdParamSchema.safeParse({
+            id: decodeURIComponent(docMatch[1]),
+          })
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid document identifier', {
+              statusCode: 400,
+            })
+          }
+          if (req.method === 'PATCH') {
+            const body = await readJsonBody(req)
+            const parsed = UpdateKnowledgeDocInputSchema.safeParse({
+              id: idCheck.data.id,
+              ...(body && typeof body === 'object' ? body : {}),
+            })
+            if (!parsed.success) {
+              throw new DaemonError(
+                'VALIDATION_ERROR',
+                parsed.error.issues[0]?.message ?? 'Invalid document update payload',
+                { statusCode: 400 },
+              )
+            }
+            sendJson(res, 200, await knowledgeService.updateDocument(parsed.data))
+            return
+          }
+          if (req.method === 'DELETE') {
+            sendJson(res, 200, await knowledgeService.deleteDocument(idCheck.data.id))
             return
           }
         }

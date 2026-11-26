@@ -32,6 +32,9 @@ importers:
       '@ghost-bot/avatar':
         specifier: workspace:*
         version: link:../../packages/avatar
+      '@ghost-bot/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
       '@ghost-bot/memory':
         specifier: workspace:*
         version: link:../../packages/memory

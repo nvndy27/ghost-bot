@@ -22,3 +22,7 @@ Allowlisted typed IPC channels in `packages/shared-types/ipc.ts` (validated by `
 ## Phase 3D.1 Memory IPC surface (implemented)
 
 - `ghost:memory:list`, `ghost:memory:search`, `ghost:memory:create`, `ghost:memory:update`, `ghost:memory:archive`, `ghost:memory:delete` (strict Zod v4 schemas in `packages/shared-types/ipc.ts`; `MemoryAuthContext` constructed exclusively in `@ghost-bot/daemon`).
+
+## Phase 3D.2 Knowledge IPC surface (implemented)
+
+- `ghost:knowledge:collections:list`, `ghost:knowledge:collections:create`, `ghost:knowledge:docs:list`, `ghost:knowledge:docs:search`, `ghost:knowledge:docs:ingest-text`, `ghost:knowledge:docs:pick-and-ingest`, `ghost:knowledge:docs:update`, `ghost:knowledge:docs:replace-text`, `ghost:knowledge:docs:archive`, `ghost:knowledge:docs:delete`, `ghost:knowledge:citations:resolve`.

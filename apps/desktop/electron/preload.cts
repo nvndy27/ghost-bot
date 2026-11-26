@@ -40,6 +40,28 @@ const bridge: GhostBotBridge = {
   updateMemory: (input) => ipcRenderer.invoke('ghost:memory:update', input),
   archiveMemory: (id) => ipcRenderer.invoke('ghost:memory:archive', { id }),
   deleteMemory: (id) => ipcRenderer.invoke('ghost:memory:delete', { id }),
+  listKnowledgeCollections: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:collections:list', input ?? {}),
+  createKnowledgeCollection: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:collections:create', input),
+  listKnowledgeDocuments: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:list', input ?? {}),
+  searchKnowledgeDocuments: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:search', input),
+  ingestKnowledgeText: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:ingest-text', input),
+  pickAndIngestKnowledgeFile: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:pick-and-ingest', input),
+  updateKnowledgeDocument: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:update', input),
+  replaceKnowledgeDocumentText: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:replace-text', input),
+  archiveKnowledgeDocument: (id) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:archive', { id }),
+  deleteKnowledgeDocument: (id) =>
+    ipcRenderer.invoke('ghost:knowledge:docs:delete', { id }),
+  resolveKnowledgeCitation: (input) =>
+    ipcRenderer.invoke('ghost:knowledge:citations:resolve', input),
 }
 
 contextBridge.exposeInMainWorld('ghostBot', bridge)

@@ -80,7 +80,13 @@ export type {
   PersistPreparedDocumentInput,
 } from './repository/interface.ts'
 
-export { openKnowledgeDatabase, type KnowledgeDatabaseHandle, type OpenKnowledgeDatabaseOptions } from './storage/sqlite-client.ts'
+export {
+  createBorrowedKnowledgeDatabaseHandle,
+  openKnowledgeDatabase,
+  type BorrowedKnowledgeDatabaseOptions,
+  type KnowledgeDatabaseHandle,
+  type OpenKnowledgeDatabaseOptions,
+} from './storage/sqlite-client.ts'
 export { SqliteKnowledgeRepository, type SqliteKnowledgeRepositoryOptions } from './storage/sqlite-repository.ts'
 export { initializeKnowledgeSchema, KNOWLEDGE_DB_SCHEMA_VERSION } from './storage/sqlite-schema.ts'
 

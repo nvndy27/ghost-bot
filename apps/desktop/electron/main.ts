@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmod, mkdtemp, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -20,6 +20,7 @@ import {
   BotsListResponseSchema,
   CancelRunResponseSchema,
   CreateBotInputSchema,
+  CreateKnowledgeCollectionInputSchema,
   CreateMemoryIpcInputSchema,
   CreateSessionInputSchema,
   DaemonHealthResponseSchema,
@@ -27,6 +28,14 @@ import {
   IPC_CHANNELS,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
+  IngestKnowledgeTextInputSchema,
+  KnowledgeCollectionDtoSchema,
+  KnowledgeDocumentDtoSchema,
+  KnowledgeIdParamSchema,
+  KnowledgeIpcIdSchema,
+  ListKnowledgeCollectionsInputSchema,
+  ListKnowledgeDocsInputSchema,
+  ListKnowledgeDocsResponseSchema,
   ListMemoriesIpcInputSchema,
   ListMemoriesResponseSchema,
   ListMessagesParamsSchema,
@@ -36,16 +45,22 @@ import {
   MemoryIdParamSchema,
   MemoryRecordDtoSchema,
   MessagesListResponseSchema,
+  PickAndIngestKnowledgeFileInputSchema,
   ProviderSummarySchema,
   RenameSessionInputSchema,
+  ReplaceKnowledgeDocTextInputSchema,
   ResolveApprovalInputSchema,
   ResolveApprovalResponseSchema,
+  ResolveKnowledgeCitationInputSchema,
+  ResolveKnowledgeCitationResponseSchema,
   RetryRunInputSchema,
   RunEventsResponseSchema,
   RunIdParamsSchema,
   RunRecordSchema,
   RuntimeSnapshotParamsSchema,
   RuntimeSnapshotSchema,
+  SearchKnowledgeDocsInputSchema,
+  SearchKnowledgeDocsResponseSchema,
   SearchMemoriesIpcInputSchema,
   SearchMemoriesResponseSchema,
   SessionIdParamsSchema,
@@ -58,6 +73,7 @@ import {
   StartRunInputSchema,
   StartRunResponseSchema,
   UpdateBotInputSchema,
+  UpdateKnowledgeDocInputSchema,
   UpdateMemoryIpcInputSchema,
   WorkspacePickResponseSchema,
 } from '@ghost-bot/shared-types/ipc'
@@ -652,6 +668,165 @@ function registerIpcHandlers(): void {
       z.object({ deletedId: MemoryIpcIdSchema }),
       { method: 'DELETE' },
     )
+  })
+
+  function assertBoundedKnowledgeIpcPayload(raw: unknown): void {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Invalid knowledge payload')
+    }
+    const rec = raw as Record<string, unknown>
+    if (Array.isArray(rec.tags) && rec.tags.length > 32) {
+      throw new Error('Knowledge tags array exceeds pre-validation limit')
+    }
+    if (typeof rec.text === 'string' && rec.text.length > 524_288) {
+      throw new Error('Knowledge text exceeds pre-validation limit')
+    }
+    if (typeof rec.query === 'string' && rec.query.length > 1024) {
+      throw new Error('Knowledge query exceeds pre-validation limit')
+    }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_COLLECTIONS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params ?? {})
+    const parsed = ListKnowledgeCollectionsInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    if (parsed.scopeKind) qs.set('scopeKind', parsed.scopeKind)
+    if (parsed.includeUserWide) qs.set('includeUserWide', 'true')
+    return queryDaemon(
+      `/knowledge/collections?${qs.toString()}`,
+      z.object({ collections: z.array(KnowledgeCollectionDtoSchema) }),
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_COLLECTIONS_CREATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = CreateKnowledgeCollectionInputSchema.parse(params)
+    return queryDaemon('/knowledge/collections', KnowledgeCollectionDtoSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_LIST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params ?? {})
+    const parsed = ListKnowledgeDocsInputSchema.parse(params ?? {})
+    const qs = new URLSearchParams()
+    if (parsed.botId) qs.set('botId', parsed.botId)
+    if (parsed.scopeKind) qs.set('scopeKind', parsed.scopeKind)
+    if (parsed.collectionId) qs.set('collectionId', parsed.collectionId)
+    if (parsed.includeUserWide) qs.set('includeUserWide', 'true')
+    if (parsed.includeArchived) qs.set('includeArchived', 'true')
+    qs.set('limit', String(parsed.limit))
+    qs.set('offset', String(parsed.offset))
+    return queryDaemon(`/knowledge/documents?${qs.toString()}`, ListKnowledgeDocsResponseSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_SEARCH, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = SearchKnowledgeDocsInputSchema.parse(params)
+    return queryDaemon('/knowledge/documents/search', SearchKnowledgeDocsResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_INGEST_TEXT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = IngestKnowledgeTextInputSchema.parse(params)
+    return queryDaemon('/knowledge/documents/ingest-text', KnowledgeDocumentDtoSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_PICK_AND_INGEST, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = PickAndIngestKnowledgeFileInputSchema.parse(params)
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
+      title: 'Import Knowledge Document (UTF-8 TXT or Markdown)',
+      properties: ['openFile'],
+      filters: [{ name: 'Text & Markdown', extensions: ['txt', 'md', 'markdown'] }],
+    })
+    const chosen = !result.canceled && result.filePaths[0] ? result.filePaths[0] : null
+    if (!chosen) {
+      return { canceled: true, document: null }
+    }
+    const realChosen = await realpath(chosen)
+    const doc = await queryDaemon('/knowledge/documents/ingest-file', KnowledgeDocumentDtoSchema, {
+      method: 'POST',
+      body: {
+        scope: parsed.scope,
+        collectionId: parsed.collectionId,
+        tags: parsed.tags,
+        allowedRootDir: dirname(realChosen),
+        filePath: realChosen,
+      },
+    })
+    return { canceled: false, document: doc }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_UPDATE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = UpdateKnowledgeDocInputSchema.parse(params)
+    const { id, ...patch } = parsed
+    return queryDaemon(`/knowledge/documents/${encodeURIComponent(id)}`, KnowledgeDocumentDtoSchema, {
+      method: 'PATCH',
+      body: patch,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_REPLACE_TEXT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = ReplaceKnowledgeDocTextInputSchema.parse(params)
+    const { id, ...body } = parsed
+    return queryDaemon(
+      `/knowledge/documents/${encodeURIComponent(id)}/replace-text`,
+      KnowledgeDocumentDtoSchema,
+      {
+        method: 'POST',
+        body,
+      },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_ARCHIVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = KnowledgeIdParamSchema.parse(params)
+    return queryDaemon(
+      `/knowledge/documents/${encodeURIComponent(id)}/archive`,
+      KnowledgeDocumentDtoSchema,
+      { method: 'POST' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_DOCS_DELETE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { id } = KnowledgeIdParamSchema.parse(params)
+    return queryDaemon(
+      `/knowledge/documents/${encodeURIComponent(id)}`,
+      z.object({ deletedId: KnowledgeIpcIdSchema }),
+      { method: 'DELETE' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.KNOWLEDGE_CITATIONS_RESOLVE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    assertBoundedKnowledgeIpcPayload(params)
+    const parsed = ResolveKnowledgeCitationInputSchema.parse(params)
+    return queryDaemon('/knowledge/citations/resolve', ResolveKnowledgeCitationResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
   })
 }
 

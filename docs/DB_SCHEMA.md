@@ -44,3 +44,8 @@ Create provider accounts, model profiles, agents, sessions, runs, run events, me
 - Added `memories` and `memories_fts` (`USING fts5(memory_id UNINDEXED, content, tags_text, tokenize='unicode61 remove_diacritics 2')`) in `apps/daemon/src/db/migrations.ts` and `apps/daemon/src/db/schema.ts`.
 - `memories.bot_id` references `agents(id) ON DELETE RESTRICT`; `idx_memories_active_dedup` enforces unique `(scope_key, content_hash)` for active rows; `idx_memories_scope` and `idx_memories_expires` index scope queries and expiration.
 - Accessed via `MemoryService` (`apps/daemon/src/memory/service.ts`) using `createBorrowedMemoryDatabaseHandle()` so `GhostBotDaemon` retains exclusive connection and migration ownership.
+
+## Phase 3D.2 migration `0006_knowledge_core`
+
+- Added `knowledge_collections`, `knowledge_documents` (`bot_id REFERENCES agents(id) ON DELETE RESTRICT`, `collection_id REFERENCES knowledge_collections(id) ON DELETE RESTRICT`), `knowledge_document_revisions` (`ON DELETE CASCADE`), `knowledge_chunks` (`ON DELETE CASCADE`), and `knowledge_chunks_fts` (`USING fts5(..., tokenize='unicode61 remove_diacritics 2')`) in `apps/daemon/src/db/migrations.ts` and `apps/daemon/src/db/schema.ts`.
+- Accessed via `KnowledgeService` (`apps/daemon/src/knowledge/service.ts`) using `createBorrowedKnowledgeDatabaseHandle()`.

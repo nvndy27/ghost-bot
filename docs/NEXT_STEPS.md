@@ -1,6 +1,12 @@
 # Next steps
 
-## Phase 3D.2 — Knowledge & Retrieval Integration
+## Phase 3D.3 — MCP Foundation Integration
+
+1. Add coordinated migration `0007_mcp_core` for `mcp_servers` (storing configuration and opaque `secretRefs` only, never raw secrets).
+2. Wire `@ghost-bot/mcp` behind daemon-owned `McpService`, `HostMcpPolicyAdapter` in `RuntimePolicyBroker`, and durable approval binding in `RunOrchestrator`.
+3. Follow with Phase 3D.4 (Integrated End-to-End Acceptance).
+
+## Earlier Phase 3D.2 plan (Completed)
 
 1. Add coordinated migration `0006_knowledge_core` for `knowledge_collections`, `knowledge_documents`, `knowledge_document_revisions`, `knowledge_chunks`, and `knowledge_chunks_fts`.
 2. Wire `@ghost-bot/knowledge` behind a daemon-owned `KnowledgeService` with `buildValidatedKnowledgeContext` at the dispatch boundary and document management UI.

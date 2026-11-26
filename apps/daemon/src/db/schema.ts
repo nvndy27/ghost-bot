@@ -246,3 +246,90 @@ export const memories = sqliteTable(
     index('idx_memories_scope').on(t.userId, t.scopeKind, t.status, t.updatedAt, t.id),
   ],
 )
+
+export const knowledgeCollections = sqliteTable('knowledge_collections', {
+  id: text('id').primaryKey(),
+  schemaVersion: integer('schema_version').notNull(),
+  scopeKind: text('scope_kind').notNull(),
+  userId: text('user_id').notNull(),
+  botId: text('bot_id').references(() => agents.id, { onDelete: 'restrict' }),
+  workspaceId: text('workspace_id'),
+  scopeKey: text('scope_key').notNull(),
+  name: text('name').notNull(),
+  description: text('description').notNull(),
+  status: text('status').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  archivedAt: text('archived_at'),
+})
+
+export const knowledgeDocuments = sqliteTable(
+  'knowledge_documents',
+  {
+    id: text('id').primaryKey(),
+    schemaVersion: integer('schema_version').notNull(),
+    collectionId: text('collection_id').references(() => knowledgeCollections.id, {
+      onDelete: 'restrict',
+    }),
+    scopeKind: text('scope_kind').notNull(),
+    userId: text('user_id').notNull(),
+    botId: text('bot_id').references(() => agents.id, { onDelete: 'restrict' }),
+    workspaceId: text('workspace_id'),
+    scopeKey: text('scope_key').notNull(),
+    title: text('title').notNull(),
+    sourceType: text('source_type').notNull(),
+    mediaType: text('media_type').notNull(),
+    displayFilename: text('display_filename'),
+    tagsJson: text('tags_json').notNull(),
+    status: text('status').notNull(),
+    currentRevisionId: text('current_revision_id').notNull(),
+    rawFingerprint: text('raw_fingerprint').notNull(),
+    extractedFingerprint: text('extracted_fingerprint').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    archivedAt: text('archived_at'),
+  },
+  (t) => [
+    index('idx_knowledge_docs_scope').on(t.userId, t.scopeKind, t.status, t.updatedAt, t.id),
+  ],
+)
+
+export const knowledgeDocumentRevisions = sqliteTable('knowledge_document_revisions', {
+  id: text('id').primaryKey(),
+  schemaVersion: integer('schema_version').notNull(),
+  documentId: text('document_id')
+    .notNull()
+    .references(() => knowledgeDocuments.id, { onDelete: 'cascade' }),
+  revisionNumber: integer('revision_number').notNull(),
+  rawFingerprint: text('raw_fingerprint').notNull(),
+  extractedFingerprint: text('extracted_fingerprint').notNull(),
+  charCount: integer('char_count').notNull(),
+  chunkCount: integer('chunk_count').notNull(),
+  createdAt: text('created_at').notNull(),
+})
+
+export const knowledgeChunks = sqliteTable(
+  'knowledge_chunks',
+  {
+    id: text('id').primaryKey(),
+    schemaVersion: integer('schema_version').notNull(),
+    documentId: text('document_id')
+      .notNull()
+      .references(() => knowledgeDocuments.id, { onDelete: 'cascade' }),
+    revisionId: text('revision_id')
+      .notNull()
+      .references(() => knowledgeDocumentRevisions.id, { onDelete: 'cascade' }),
+    scopeKind: text('scope_kind').notNull(),
+    userId: text('user_id').notNull(),
+    botId: text('bot_id'),
+    workspaceId: text('workspace_id'),
+    scopeKey: text('scope_key').notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    content: text('content').notNull(),
+    normalizedContent: text('normalized_content').notNull(),
+    contentHash: text('content_hash').notNull(),
+    locationJson: text('location_json').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [index('idx_knowledge_chunks_doc_rev').on(t.documentId, t.revisionId)],
+)

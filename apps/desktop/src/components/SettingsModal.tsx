@@ -10,6 +10,7 @@ import type {
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
@@ -20,6 +21,7 @@ const SETTINGS_SECTIONS = [
   { id: 'usage', label: 'Usage' },
   { id: 'personalization', label: 'Personalization' },
   { id: 'memory', label: 'Memory' },
+  { id: 'knowledge', label: 'Knowledge' },
   { id: 'tools', label: 'Tools & MCP' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'computer-use', label: 'Computer Use' },
@@ -737,6 +739,15 @@ export function SettingsModal({
 
             {activeSection === 'memory' && (
               <MemorySettingsSection
+                settings={settings}
+                bots={bots}
+                activeBotId={activeBotId}
+                onUpdateSettings={onUpdateSettings}
+              />
+            )}
+
+            {activeSection === 'knowledge' && (
+              <KnowledgeSettingsSection
                 settings={settings}
                 bots={bots}
                 activeBotId={activeBotId}

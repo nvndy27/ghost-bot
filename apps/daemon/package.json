@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@ghost-bot/avatar": "workspace:*",
+    "@ghost-bot/knowledge": "workspace:*",
     "@ghost-bot/memory": "workspace:*",
     "@ghost-bot/runtime-adapters": "workspace:*",
     "@ghost-bot/shared-types": "workspace:*",

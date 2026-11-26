@@ -37,6 +37,17 @@ export const IPC_CHANNELS = {
   MEMORY_UPDATE: 'ghost:memory:update',
   MEMORY_ARCHIVE: 'ghost:memory:archive',
   MEMORY_DELETE: 'ghost:memory:delete',
+  KNOWLEDGE_COLLECTIONS_LIST: 'ghost:knowledge:collections:list',
+  KNOWLEDGE_COLLECTIONS_CREATE: 'ghost:knowledge:collections:create',
+  KNOWLEDGE_DOCS_LIST: 'ghost:knowledge:docs:list',
+  KNOWLEDGE_DOCS_SEARCH: 'ghost:knowledge:docs:search',
+  KNOWLEDGE_DOCS_INGEST_TEXT: 'ghost:knowledge:docs:ingest-text',
+  KNOWLEDGE_DOCS_PICK_AND_INGEST: 'ghost:knowledge:docs:pick-and-ingest',
+  KNOWLEDGE_DOCS_UPDATE: 'ghost:knowledge:docs:update',
+  KNOWLEDGE_DOCS_REPLACE_TEXT: 'ghost:knowledge:docs:replace-text',
+  KNOWLEDGE_DOCS_ARCHIVE: 'ghost:knowledge:docs:archive',
+  KNOWLEDGE_DOCS_DELETE: 'ghost:knowledge:docs:delete',
+  KNOWLEDGE_CITATIONS_RESOLVE: 'ghost:knowledge:citations:resolve',
 } as const
 
 export const AppErrorSchema = z.object({
@@ -248,6 +259,22 @@ export const MemorySettingsPatchSchema = z
   })
   .strict()
 
+export const KnowledgeSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  automaticRetrieval: z.boolean().default(false),
+  includeUserWide: z.boolean().default(false),
+  externalProviderConsent: z.boolean().default(false),
+})
+
+export const KnowledgeSettingsPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    automaticRetrieval: z.boolean().optional(),
+    includeUserWide: z.boolean().optional(),
+    externalProviderConsent: z.boolean().optional(),
+  })
+  .strict()
+
 export const AppSettingsSchema = z.object({
   general: GeneralSettingsSchema.prefault({}),
   appearance: AppearanceSettingsSchema.prefault({}),
@@ -255,6 +282,7 @@ export const AppSettingsSchema = z.object({
   permissions: PermissionsSettingsSchema.prefault({}),
   privacy: PrivacySettingsSchema.prefault({}),
   memory: MemorySettingsSchema.prefault({}),
+  knowledge: KnowledgeSettingsSchema.prefault({}),
 })
 
 export type AppSettings = z.infer<typeof AppSettingsSchema>
@@ -267,6 +295,7 @@ export const AppSettingsPatchSchema = z
     permissions: PermissionsSettingsSchema.partial().optional(),
     privacy: PrivacySettingsSchema.partial().optional(),
     memory: MemorySettingsPatchSchema.optional(),
+    knowledge: KnowledgeSettingsPatchSchema.optional(),
   })
   .strict()
 
@@ -715,6 +744,213 @@ export const MemoryIdParamSchema = z
   })
   .strict()
 
+export const KnowledgeIpcIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Invalid knowledge identifier')
+
+export const KnowledgeScopeInputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user') }).strict(),
+  z.object({ kind: z.literal('bot'), botId: BotIdSchema }).strict(),
+  z.object({ kind: z.literal('workspace'), botId: BotIdSchema }).strict(),
+])
+
+export const KnowledgeCollectionDtoSchema = z.object({
+  id: KnowledgeIpcIdSchema,
+  scopeKind: z.enum(['user', 'bot', 'workspace']),
+  botId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+  name: z.string(),
+  description: z.string(),
+  status: z.enum(['active', 'archived']),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type KnowledgeCollectionDto = z.infer<typeof KnowledgeCollectionDtoSchema>
+
+export const KnowledgeDocumentDtoSchema = z.object({
+  id: KnowledgeIpcIdSchema,
+  collectionId: KnowledgeIpcIdSchema.nullable(),
+  scopeKind: z.enum(['user', 'bot', 'workspace']),
+  botId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+  title: z.string(),
+  sourceType: z.enum(['direct_text', 'text_file', 'markdown']),
+  mediaType: z.enum(['text/plain', 'text/markdown']),
+  displayFilename: z.string().nullable(),
+  tags: z.array(z.string()),
+  status: z.enum(['ready', 'archived']),
+  currentRevisionId: KnowledgeIpcIdSchema,
+  revisionNumber: z.number().int().positive().optional(),
+  chunkCount: z.number().int().nonnegative().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+})
+
+export type KnowledgeDocumentDto = z.infer<typeof KnowledgeDocumentDtoSchema>
+
+export const KnowledgeCitationDtoSchema = z.object({
+  documentId: KnowledgeIpcIdSchema,
+  revisionId: KnowledgeIpcIdSchema,
+  chunkId: KnowledgeIpcIdSchema,
+  title: z.string(),
+  displayFilename: z.string().nullable(),
+  sectionPath: z.array(z.string()),
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  startChar: z.number().int().nonnegative(),
+  endChar: z.number().int().nonnegative(),
+  pageNumber: z.number().int().positive().nullable(),
+  excerpt: z.string(),
+})
+
+export type KnowledgeCitationDto = z.infer<typeof KnowledgeCitationDtoSchema>
+
+export const ListKnowledgeCollectionsInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    scopeKind: z.enum(['user', 'bot', 'workspace']).optional(),
+    includeUserWide: z.boolean().default(false),
+  })
+  .strict()
+
+export type ListKnowledgeCollectionsInput = z.infer<typeof ListKnowledgeCollectionsInputSchema>
+
+export const CreateKnowledgeCollectionInputSchema = z
+  .object({
+    scope: KnowledgeScopeInputSchema,
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().max(240).default(''),
+  })
+  .strict()
+
+export type CreateKnowledgeCollectionInput = z.infer<typeof CreateKnowledgeCollectionInputSchema>
+
+export const ListKnowledgeDocsInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    scopeKind: z.enum(['user', 'bot', 'workspace']).optional(),
+    collectionId: KnowledgeIpcIdSchema.optional(),
+    includeUserWide: z.boolean().default(false),
+    includeArchived: z.boolean().default(false),
+    limit: z.number().int().min(1).max(100).default(50),
+    offset: z.number().int().min(0).max(10_000).default(0),
+  })
+  .strict()
+
+export type ListKnowledgeDocsInput = z.infer<typeof ListKnowledgeDocsInputSchema>
+
+export const ListKnowledgeDocsResponseSchema = z.object({
+  documents: z.array(KnowledgeDocumentDtoSchema),
+  total: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+})
+
+export type ListKnowledgeDocsResponse = z.infer<typeof ListKnowledgeDocsResponseSchema>
+
+export const SearchKnowledgeDocsInputSchema = z
+  .object({
+    query: z.string().trim().min(1).max(256),
+    botId: BotIdSchema.optional(),
+    scopeKind: z.enum(['user', 'bot', 'workspace']).optional(),
+    collectionId: KnowledgeIpcIdSchema.optional(),
+    includeUserWide: z.boolean().default(false),
+    limit: z.number().int().min(1).max(50).default(20),
+  })
+  .strict()
+
+export type SearchKnowledgeDocsInput = z.infer<typeof SearchKnowledgeDocsInputSchema>
+
+export const SearchKnowledgeDocsResponseSchema = z.object({
+  matches: z.array(
+    z.object({
+      document: KnowledgeDocumentDtoSchema,
+      citation: KnowledgeCitationDtoSchema,
+      score: z.number(),
+    }),
+  ),
+  engine: z.enum(['fts5', 'lexical_fallback']),
+  total: z.number().int().nonnegative(),
+})
+
+export type SearchKnowledgeDocsResponse = z.infer<typeof SearchKnowledgeDocsResponseSchema>
+
+export const IngestKnowledgeTextInputSchema = z
+  .object({
+    scope: KnowledgeScopeInputSchema,
+    collectionId: KnowledgeIpcIdSchema.nullable().default(null),
+    title: z.string().trim().min(1).max(160),
+    sourceType: z.enum(['direct_text', 'markdown']).default('direct_text'),
+    text: z.string().min(1).max(512 * 1024),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).default([]),
+  })
+  .strict()
+
+export type IngestKnowledgeTextInput = z.infer<typeof IngestKnowledgeTextInputSchema>
+
+export const PickAndIngestKnowledgeFileInputSchema = z
+  .object({
+    scope: KnowledgeScopeInputSchema,
+    collectionId: KnowledgeIpcIdSchema.nullable().default(null),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).default([]),
+  })
+  .strict()
+
+export type PickAndIngestKnowledgeFileInput = z.infer<typeof PickAndIngestKnowledgeFileInputSchema>
+
+export const UpdateKnowledgeDocInputSchema = z
+  .object({
+    id: KnowledgeIpcIdSchema,
+    title: z.string().trim().min(1).max(160).optional(),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).optional(),
+    collectionId: KnowledgeIpcIdSchema.nullable().optional(),
+  })
+  .strict()
+
+export type UpdateKnowledgeDocInput = z.infer<typeof UpdateKnowledgeDocInputSchema>
+
+export const ReplaceKnowledgeDocTextInputSchema = z
+  .object({
+    id: KnowledgeIpcIdSchema,
+    title: z.string().trim().min(1).max(160).optional(),
+    sourceType: z.enum(['direct_text', 'markdown']).default('direct_text'),
+    text: z.string().min(1).max(512 * 1024),
+    tags: z.array(z.string().trim().min(1).max(48)).max(16).optional(),
+  })
+  .strict()
+
+export type ReplaceKnowledgeDocTextInput = z.infer<typeof ReplaceKnowledgeDocTextInputSchema>
+
+export const KnowledgeIdParamSchema = z
+  .object({
+    id: KnowledgeIpcIdSchema,
+  })
+  .strict()
+
+export const ResolveKnowledgeCitationInputSchema = z
+  .object({
+    documentId: KnowledgeIpcIdSchema,
+    revisionId: KnowledgeIpcIdSchema,
+    chunkId: KnowledgeIpcIdSchema,
+    botId: BotIdSchema.optional(),
+    includeUserWide: z.boolean().default(false),
+  })
+  .strict()
+
+export type ResolveKnowledgeCitationInput = z.infer<typeof ResolveKnowledgeCitationInputSchema>
+
+export const ResolveKnowledgeCitationResponseSchema = z.object({
+  available: z.boolean(),
+  reason: z.string().optional(),
+  citation: KnowledgeCitationDtoSchema.nullable(),
+})
+
+export type ResolveKnowledgeCitationResponse = z.infer<typeof ResolveKnowledgeCitationResponseSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -752,6 +988,17 @@ export interface GhostBotBridge {
   updateMemory(input: UpdateMemoryIpcInput): Promise<MemoryRecordDto>
   archiveMemory(id: string): Promise<MemoryRecordDto>
   deleteMemory(id: string): Promise<{ deletedId: string }>
+  listKnowledgeCollections(input?: Partial<ListKnowledgeCollectionsInput>): Promise<{ collections: KnowledgeCollectionDto[] }>
+  createKnowledgeCollection(input: CreateKnowledgeCollectionInput): Promise<KnowledgeCollectionDto>
+  listKnowledgeDocuments(input?: Partial<ListKnowledgeDocsInput>): Promise<ListKnowledgeDocsResponse>
+  searchKnowledgeDocuments(input: SearchKnowledgeDocsInput): Promise<SearchKnowledgeDocsResponse>
+  ingestKnowledgeText(input: IngestKnowledgeTextInput): Promise<KnowledgeDocumentDto>
+  pickAndIngestKnowledgeFile(input: PickAndIngestKnowledgeFileInput): Promise<{ canceled: boolean; document: KnowledgeDocumentDto | null }>
+  updateKnowledgeDocument(input: UpdateKnowledgeDocInput): Promise<KnowledgeDocumentDto>
+  replaceKnowledgeDocumentText(input: ReplaceKnowledgeDocTextInput): Promise<KnowledgeDocumentDto>
+  archiveKnowledgeDocument(id: string): Promise<KnowledgeDocumentDto>
+  deleteKnowledgeDocument(id: string): Promise<{ deletedId: string }>
+  resolveKnowledgeCitation(input: ResolveKnowledgeCitationInput): Promise<ResolveKnowledgeCitationResponse>
 }
 
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

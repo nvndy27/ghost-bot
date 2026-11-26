@@ -4,11 +4,17 @@ import { resolve } from 'node:path'
 import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
+import type { KnowledgeService, PreparedExecutionKnowledgeContext } from '../knowledge/service.ts'
 import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
 import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
 import { serializeMessageContent } from '../sessions/repository.ts'
 import type { SettingsRepository } from '../settings/repository.ts'
+import {
+  assembleCombinedExecutionContext,
+  COMBINED_EXECUTION_CONTEXT_LIMITS,
+  type CombinedExecutionContext,
+} from './context-assembler.ts'
 import { RunEventStore } from './event-store.ts'
 import { buildMockScenarioPlan } from './mock-scenarios.ts'
 import {
@@ -161,6 +167,7 @@ export interface RunOrchestratorOptions {
   settingsRepo?: SettingsRepository
   policyBroker?: RuntimePolicyBroker
   memoryService?: MemoryService
+  knowledgeService?: KnowledgeService
 }
 
 const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
@@ -172,6 +179,7 @@ export class RunOrchestrator {
   private readonly settingsRepo?: SettingsRepository
   private readonly policyBroker: RuntimePolicyBroker
   private readonly memoryService?: MemoryService
+  private readonly knowledgeService?: KnowledgeService
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
@@ -182,8 +190,72 @@ export class RunOrchestrator {
     this.settingsRepo = options?.settingsRepo
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
     this.memoryService = options?.memoryService
+    this.knowledgeService = options?.knowledgeService
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
+  }
+
+  private async prepareExecutionKnowledgeSafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+    maxBytesBudget: number
+  }): Promise<PreparedExecutionKnowledgeContext> {
+    if (!this.knowledgeService) {
+      return {
+        status: 'disabled',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
+    }
+    try {
+      return await this.knowledgeService.prepareExecutionContext(params)
+    } catch (err) {
+      if (err instanceof DaemonError && err.code === 'KNOWLEDGE_AUTHORIZATION_FAILED') {
+        throw err
+      }
+      return {
+        status: 'error_omitted',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
+    }
+  }
+
+  private async prepareCombinedContextSafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+  }): Promise<CombinedExecutionContext> {
+    const memory = await this.prepareExecutionMemorySafely(params)
+    const remainingForKnowledge = Math.max(
+      512,
+      Math.min(
+        COMBINED_EXECUTION_CONTEXT_LIMITS.maxKnowledgeBytes,
+        COMBINED_EXECUTION_CONTEXT_LIMITS.maxCombinedBytes -
+          memory.totalBytes -
+          COMBINED_EXECUTION_CONTEXT_LIMITS.envelopeOverheadBytes,
+      ),
+    )
+    const knowledge = await this.prepareExecutionKnowledgeSafely({
+      ...params,
+      maxBytesBudget: remainingForKnowledge,
+    })
+    return assembleCombinedExecutionContext(memory, knowledge)
   }
 
   private async prepareExecutionMemorySafely(params: {
@@ -1642,27 +1714,39 @@ export class RunOrchestrator {
       await sleepAbortable(plan.initialPauseMs, signal)
       if (finalizeIfCancelled()) return
 
-      const sessionOwner = this.dbHandle.sqlite
+    const sessionOwner = this.dbHandle.sqlite
         .prepare('SELECT agent_id FROM sessions WHERE id = ?')
         .get(sessionId) as { agent_id: string } | undefined
-      const preparedMemory = sessionOwner
-        ? await this.prepareExecutionMemorySafely({
+      const combinedContext = sessionOwner
+        ? await this.prepareCombinedContextSafely({
             sessionId,
             agentId: sessionOwner.agent_id,
             runtimeId: 'mock',
             queryText: prompt,
             isMock: true,
           })
-        : {
-            status: 'disabled' as const,
-            mechanism: 'none' as const,
-            envelopeJson: null,
-            selectedCount: 0,
-            totalBytes: 0,
-            truncated: false,
-          }
+        : null
 
       if (finalizeIfCancelled()) return
+
+      const preparedMemory = combinedContext?.memory ?? {
+        status: 'disabled' as const,
+        mechanism: 'none' as const,
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+      const preparedKnowledge = combinedContext?.knowledge ?? {
+        status: 'disabled' as const,
+        mechanism: 'none' as const,
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
 
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
@@ -1678,12 +1762,28 @@ export class RunOrchestrator {
             totalBytes: preparedMemory.totalBytes,
             truncated: preparedMemory.truncated,
           },
+          knowledgeContext: {
+            status: preparedKnowledge.status,
+            mechanism: preparedKnowledge.mechanism,
+            documents: preparedKnowledge.selectedDocuments,
+            chunks: preparedKnowledge.selectedChunks,
+            totalBytes: preparedKnowledge.totalBytes,
+            truncated: preparedKnowledge.truncated,
+            attachedSources: combinedContext?.attachedSources ?? [],
+          },
+          combinedContextBytes: combinedContext?.totalBytes ?? 0,
         },
       })
 
       if (preparedMemory.status === 'attached' && preparedMemory.envelopeJson) {
-        const memoryNotice = `\n\n[Memory Context Attached: ${preparedMemory.selectedCount} item(s), ${preparedMemory.totalBytes} bytes]`
-        plan.chunks.push(memoryNotice)
+        plan.chunks.push(
+          `\n\n[Memory Context Attached: ${preparedMemory.selectedCount} item(s), ${preparedMemory.totalBytes} bytes]`,
+        )
+      }
+      if (preparedKnowledge.status === 'attached' && preparedKnowledge.envelopeJson) {
+        plan.chunks.push(
+          `\n\n[Knowledge Context Attached: ${preparedKnowledge.selectedDocuments} doc(s), ${preparedKnowledge.selectedChunks} chunk(s), ${preparedKnowledge.totalBytes} bytes]`,
+        )
       }
 
       if (plan.emitTool) {
@@ -2058,7 +2158,7 @@ export class RunOrchestrator {
         }
       }
 
-      const preparedMemory = await this.prepareExecutionMemorySafely({
+      const combinedContext = await this.prepareCombinedContextSafely({
         sessionId,
         agentId,
         runtimeId: 'codex',
@@ -2090,12 +2190,22 @@ export class RunOrchestrator {
           resumed: Boolean(preflight.externalSessionId),
           isMock: false,
           memoryContext: {
-            status: preparedMemory.status,
-            mechanism: preparedMemory.mechanism,
-            count: preparedMemory.selectedCount,
-            totalBytes: preparedMemory.totalBytes,
-            truncated: preparedMemory.truncated,
+            status: combinedContext.memory.status,
+            mechanism: combinedContext.memory.mechanism,
+            count: combinedContext.memory.selectedCount,
+            totalBytes: combinedContext.memory.totalBytes,
+            truncated: combinedContext.memory.truncated,
           },
+          knowledgeContext: {
+            status: combinedContext.knowledge.status,
+            mechanism: combinedContext.knowledge.mechanism,
+            documents: combinedContext.knowledge.selectedDocuments,
+            chunks: combinedContext.knowledge.selectedChunks,
+            totalBytes: combinedContext.knowledge.totalBytes,
+            truncated: combinedContext.knowledge.truncated,
+            attachedSources: combinedContext.attachedSources,
+          },
+          combinedContextBytes: combinedContext.totalBytes,
         },
       })
 
@@ -2109,7 +2219,7 @@ export class RunOrchestrator {
               statusCode: 409,
             })
           }
-          const latestMemory = await this.prepareExecutionMemorySafely({
+          const latestCombined = await this.prepareCombinedContextSafely({
             sessionId,
             agentId,
             runtimeId: 'codex',
@@ -2117,11 +2227,11 @@ export class RunOrchestrator {
             isMock: false,
           })
           if (signal.aborted || this.stopping) {
-            throw new DaemonError('RUN_CANCELLED', 'Run cancelled during memory preparation', {
+            throw new DaemonError('RUN_CANCELLED', 'Run cancelled during context preparation', {
               statusCode: 409,
             })
           }
-          return latestMemory.envelopeJson ?? undefined
+          return latestCombined.envelopeJson ?? undefined
         },
       })) {
         if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
