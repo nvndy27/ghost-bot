@@ -494,7 +494,7 @@ export class DelegationEngine {
           continue
         }
 
-        // Atomic budget reservation before dispatch
+        // Atomic budget reservation (tree-wide tokens and shared wall-clock deadline) before dispatch
         const treeCommittedRow = db.sqlite
           .prepare(
             `SELECT COALESCE(SUM(tokens_used + reserved_tokens), 0) AS committed
@@ -505,9 +505,20 @@ export class DelegationEngine {
           0,
           team.bounds.maxTokens - Number(treeCommittedRow?.committed ?? 0),
         )
+        const runRow = row.team_run_id
+          ? (db.sqlite
+              .prepare(`SELECT created_at FROM team_runs WHERE id = ?`)
+              .get(row.team_run_id) as { created_at: string } | undefined)
+          : undefined
+        const runStartedMs = runRow ? Date.parse(runRow.created_at) : nowMs
+        const sharedWallClockRemaining = Math.max(
+          0,
+          team.bounds.maxDurationMs - Math.max(0, nowMs - runStartedMs),
+        )
         const taskRemainingTokens = Math.max(0, Number(row.token_budget) - Number(row.tokens_used))
+        const taskRemainingDuration = Math.max(0, Number(row.duration_budget_ms) - Number(row.duration_used_ms))
         const reserveTokens = Math.min(taskRemainingTokens, treeRemaining)
-        const reserveDuration = Math.max(0, Number(row.duration_budget_ms) - Number(row.duration_used_ms))
+        const reserveDuration = Math.min(taskRemainingDuration, sharedWallClockRemaining)
 
         if (reserveTokens <= 0 || reserveDuration <= 0) {
           db.sqlite
@@ -558,7 +569,10 @@ export class DelegationEngine {
             task.tokensReserved,
             Math.max(0, task.tokenBudget - task.tokensUsed),
           ),
-          remainingDurationMs: Math.max(0, task.durationBudgetMs - task.durationUsedMs),
+          remainingDurationMs: Math.min(
+            task.durationReservedMs,
+            Math.max(0, task.durationBudgetMs - task.durationUsedMs),
+          ),
           requirePolicyRevalidation: true,
           noPermissionEscalation: true,
           noImplicitMemorySharing: true,
