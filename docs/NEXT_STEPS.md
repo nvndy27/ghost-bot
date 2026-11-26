@@ -1,5 +1,11 @@
 # Next steps
 
+## Provider.2 — Ollama Local Runtime Production Integration (Completed Offline / Host Prerequisite Open)
+
+1. Install Ollama locally and pull a lightweight local model (e.g., `qwen2.5:1.5b` or `llama3.2:1b` for the host's 13 GiB RAM / 4.9 GiB available / RTX 3050 Mobile) when explicitly authorized.
+2. Run the bounded one-turn local inference acceptance procedure in `docs/extensions/provider2-ollama-local.md`.
+3. Proceed to the next provider milestone (e.g., Anthropic Claude / Google Gemini API-key opt-in or Kimi ACP if CLI is installed).
+
 ## Phase 3D.4 — Integrated End-to-End Acceptance
 
 1. Verify combined Memory + Knowledge + MCP production workflows in Electron and daemon regression suites on the integrated branch.

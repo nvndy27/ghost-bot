@@ -1,5 +1,15 @@
 # Progress log
 
+## Provider.2 — Ollama Local Runtime Production Integration
+
+2026-11-27. Branched `feat/provider2-ollama-local` from `d6436c6` (`feat/provider1-openclaw-execution`). Offline Provider.2 implementation is **Tested / Implemented** (host Ollama CLI/daemon unavailable) with zero live inference, model downloads, or `sudo` changes. See [Provider.2 report](extensions/provider2-ollama-local.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Hardened `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`): loopback-only URLs without credentials, `redirect: 'error'` + explicit `3xx` rejection, cloud-model rejection (`:cloud`, `remote_model`, `remote_host`), `listModelDetails`, `inspectModel`, `listRunningModels`, `inspectLocalRuntime`, `resumeSession`, `inspectSession`, `reconnect`, `read-only` tool-free enforcement, `maxConcurrentRuns`, `24`-turn/`32 KB` history, `num_predict` cap, `120s` timeout, `2 MB` stream limit, `OLLAMA_UNKNOWN_TERMINATION` on incomplete streams, and actual token usage mapping (`getUsage() -> null`). |
+| Implemented | Added `RuntimePolicyBroker.authorizeOllamaExecution()` (`apps/daemon/src/runtime/policy-broker.ts`), `RuntimeRegistry.getOllamaStatus()` (`apps/daemon/src/runtime/registry.ts`), `GET /ollama/status` (`apps/daemon/src/server.ts`), `IPC_CHANNELS.OLLAMA_STATUS` + `OllamaStatusDtoSchema` (`packages/shared-types/ipc.ts`), Electron preload/main handlers, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI integration. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider2-ollama-production.test.ts` + `tests/ollama-adapter.test.ts` (4/4), 3 consecutive full-workspace regression runs (**219/219** per run: `root` 126/126, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 10 Electron E2E/IPC scripts (`verify-provider2-ollama-desktop.mjs` + 9 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
 ## Phase 3D.4 — Integrated End-to-End Acceptance
 
 2026-11-26. Branched `feat/phase-3d4-integrated-acceptance` from `04e324c` (Phase 3D.3 hardened). Offline integrated RC is **Verified** (**PASS**) with zero live subscription inference turns consumed. See [Phase 3D.4 report](extensions/phase-3d4-integrated-acceptance.md).

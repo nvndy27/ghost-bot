@@ -440,6 +440,11 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/ollama/status') {
+        sendJson(res, 200, await this.runtimeRegistry.getOllamaStatus())
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/runtime/snapshot') {
         const refresh = url.searchParams.get('refresh') === '1'
         const snap = await this.runtimeRegistry.getSnapshot(refresh)

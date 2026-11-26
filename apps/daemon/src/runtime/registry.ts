@@ -309,6 +309,48 @@ export class RuntimeRegistry {
     }
   }
 
+  async getOllamaStatus(): Promise<import('@ghost-bot/shared-types/ipc').OllamaStatusDto> {
+    const ollama = this.options.ollamaAdapter ?? new OllamaLocalAdapter({ timeoutMs: 2000 })
+    const summary = await ollama.inspectLocalRuntime()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOllamaExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      ollamaExecutionAuthorized: false,
+      ollamaAvailable: summary.available,
+      ollamaLoopbackVerified: true,
+      ollamaLocalOnlyVerified: summary.localOnlyVerified,
+    })
+
+    return {
+      available: summary.available,
+      baseUrl: summary.baseUrl,
+      runtimeVersion: summary.version,
+      authStatus: summary.authStatus,
+      detail: summary.detail,
+      localOnlyVerified: summary.localOnlyVerified,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: false,
+        sandbox: false,
+      },
+      models: summary.models.slice(0, 100),
+      runningModels: summary.runningModels.slice(0, 50),
+      resourceLimits: summary.resourceLimits,
+      diagnostics: summary.diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
   async listProviders(): Promise<ProviderSummary[]> {
     const snap = await this.getSnapshot(false)
     if (snap.runtimeMode === 'mock') {

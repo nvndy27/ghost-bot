@@ -89,6 +89,7 @@ const bridge: GhostBotBridge = {
   revokeLocalSkillTrust: (skillId) => ipcRenderer.invoke('ghost:skills:revoke-trust', { skillId }),
   setLocalSkillEnabled: (input) => ipcRenderer.invoke('ghost:skills:set-enabled', input),
   getOpenClawStatus: () => ipcRenderer.invoke('ghost:openclaw:status'),
+  getOllamaStatus: () => ipcRenderer.invoke('ghost:ollama:status'),
   listTeams: (input) => ipcRenderer.invoke('ghost:teams:list', input ?? {}),
   createTeam: (input) => ipcRenderer.invoke('ghost:teams:create', input),
   updateTeam: (input) => ipcRenderer.invoke('ghost:teams:update', input),

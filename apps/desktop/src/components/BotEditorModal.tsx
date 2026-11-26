@@ -60,7 +60,12 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
-  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw'>('mock-offline')
+  const [runtimeId, setRuntimeId] = useState<'mock-offline' | 'codex' | 'openclaw' | 'ollama'>(
+    'mock-offline',
+  )
+  const [ollamaStatus, setOllamaStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
+  >(null)
   const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
   const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
   const [permission, setPermission] = useState<'read-only' | 'ask-approval' | 'workspace'>(
@@ -77,12 +82,20 @@ export function BotEditorModal({
 
   useEffect(() => {
     if (!open) return
+    if (window.ghostBot?.getOllamaStatus) {
+      void window.ghostBot
+        .getOllamaStatus()
+        .then(setOllamaStatus)
+        .catch(() => setOllamaStatus(null))
+    }
     if (mode === 'edit' && initialBot) {
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
       setInstructions(initialBot.instructions)
       setRuntimeId(
-        initialBot.runtimeId === 'codex' || initialBot.runtimeId === 'openclaw'
+        initialBot.runtimeId === 'codex' ||
+          initialBot.runtimeId === 'openclaw' ||
+          initialBot.runtimeId === 'ollama'
           ? initialBot.runtimeId
           : 'mock-offline',
       )
@@ -522,30 +535,56 @@ export function BotEditorModal({
                 data-testid="bot-runtime-select"
                 value={runtimeId}
                 onChange={(e) => {
+                  const next = e.target.value as 'mock-offline' | 'codex' | 'openclaw' | 'ollama'
                   setDirty(true)
-                  setRuntimeId(e.target.value as 'mock-offline' | 'codex' | 'openclaw')
+                  setRuntimeId(next)
+                  if (next === 'ollama') {
+                    setPermission('read-only')
+                    if (ollamaStatus && ollamaStatus.models.length > 0) {
+                      setModelId(ollamaStatus.models[0].id)
+                    }
+                  }
                 }}
               >
                 <option value="mock-offline">Mock Offline</option>
                 <option value="codex">Codex (ChatGPT)</option>
                 <option value="openclaw">OpenClaw Gateway</option>
+                <option value="ollama">Ollama Local</option>
               </select>
             </label>
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>Model (mock)</span>
+              <span>{runtimeId === 'ollama' ? 'Model (Ollama)' : 'Model (mock)'}</span>
               <select
+                data-testid="bot-model-select"
                 value={modelId}
                 onChange={(e) => {
                   setDirty(true)
                   setModelId(e.target.value)
                 }}
               >
-                {MOCK_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
+                {runtimeId === 'ollama' ? (
+                  ollamaStatus && ollamaStatus.models.length > 0 ? (
+                    ollamaStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                        {m.parameterSize ? ` (${m.parameterSize})` : ''}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {ollamaStatus?.available
+                        ? 'No local Ollama models installed'
+                        : 'Ollama unavailable (127.0.0.1:11434)'}
+                    </option>
+                  )
+                ) : (
+                  MOCK_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))
+                )}
               </select>
             </label>
 

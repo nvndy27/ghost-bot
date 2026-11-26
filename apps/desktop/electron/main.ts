@@ -97,6 +97,7 @@ import {
   SkillIdParamSchema,
   SetSkillEnabledInputSchema,
   OpenClawStatusDtoSchema,
+  OllamaStatusDtoSchema,
   ImportAvatarSvgInputSchema,
   ImportAvatarSvgResponseSchema,
   IngestKnowledgeTextInputSchema,
@@ -1208,6 +1209,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.OPENCLAW_STATUS, async (event) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     return queryDaemon('/openclaw/status', OpenClawStatusDtoSchema, { timeoutMs: 12_000 })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.OLLAMA_STATUS, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/ollama/status', OllamaStatusDtoSchema, { timeoutMs: 12_000 })
   })
 
   function assertBoundedTeamsIpcPayload(raw: unknown): void {

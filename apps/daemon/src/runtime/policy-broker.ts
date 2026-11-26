@@ -31,6 +31,10 @@ export interface PolicyAuthorizationInput {
   openClawExecutionAuthorized?: boolean
   openClawLoopbackVerified?: boolean
   openClawSandboxVerified?: boolean
+  ollamaExecutionAuthorized?: boolean
+  ollamaAvailable?: boolean
+  ollamaLoopbackVerified?: boolean
+  ollamaLocalOnlyVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -82,12 +86,14 @@ export class RuntimePolicyBroker {
     }
 
     if (input.runtimeMode === 'ollama') {
-      return {
-        allowed: false,
-        reason:
-          'Ollama local execution requires explicit local-model opt-in and supports read-only chat without tools',
-        verifiedModes: [],
-      }
+      return this.authorizeOllamaExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        ollamaExecutionAuthorized: input.ollamaExecutionAuthorized ?? false,
+        ollamaAvailable: input.ollamaAvailable ?? false,
+        ollamaLoopbackVerified: input.ollamaLoopbackVerified ?? false,
+        ollamaLocalOnlyVerified: input.ollamaLocalOnlyVerified ?? false,
+      })
     }
 
     if (!evidence) {
@@ -197,6 +203,58 @@ export class RuntimePolicyBroker {
       verifiedModes: input.openClawSandboxVerified
         ? ['read-only', 'ask-approval', 'workspace']
         : ['read-only'],
+    }
+  }
+
+  authorizeOllamaExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    ollamaExecutionAuthorized: boolean
+    ollamaAvailable: boolean
+    ollamaLoopbackVerified: boolean
+    ollamaLocalOnlyVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Ollama local execution only supports 'read-only' chat without tools; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Ollama local execution requires explicit local-model opt-in and supports read-only chat without tools',
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaLoopbackVerified) {
+      return {
+        allowed: false,
+        reason: 'Ollama endpoint must be verified on loopback (http://127.0.0.1 / localhost / ::1)',
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaAvailable || !input.ollamaLocalOnlyVerified) {
+      return {
+        allowed: false,
+        reason:
+          'Local Ollama daemon and verified non-cloud installed model are required before execution',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded local read-only Ollama chat without tools',
+      verifiedModes: ['read-only'],
     }
   }
 

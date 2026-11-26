@@ -75,6 +75,7 @@ export const IPC_CHANNELS = {
   SKILLS_REVOKE_TRUST: 'ghost:skills:revoke-trust',
   SKILLS_SET_ENABLED: 'ghost:skills:set-enabled',
   OPENCLAW_STATUS: 'ghost:openclaw:status',
+  OLLAMA_STATUS: 'ghost:ollama:status',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1728,6 +1729,64 @@ export const OpenClawStatusDtoSchema = z.object({
 
 export type OpenClawStatusDto = z.infer<typeof OpenClawStatusDtoSchema>
 
+export const OllamaStatusDtoSchema = z.object({
+  available: z.boolean(),
+  baseUrl: z.string(),
+  runtimeVersion: z.string().nullable(),
+  authStatus: z.enum(['connected', 'disconnected', 'pending', 'error']),
+  detail: z.string(),
+  localOnlyVerified: z.boolean(),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    resume: z.boolean(),
+    approvals: z.boolean(),
+    usage: z.boolean(),
+    sandbox: z.boolean(),
+  }),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      sizeBytes: z.number().nullable(),
+      digest: z.string().nullable(),
+      parameterSize: z.string().nullable(),
+      quantizationLevel: z.string().nullable(),
+      family: z.string().nullable(),
+      contextLength: z.number().nullable(),
+      isCloud: z.boolean(),
+    }),
+  ),
+  runningModels: z.array(
+    z.object({
+      name: z.string(),
+      sizeBytes: z.number().nullable(),
+      sizeVramBytes: z.number().nullable(),
+      expiresAt: z.string().nullable(),
+      parameterSize: z.string().nullable(),
+      quantizationLevel: z.string().nullable(),
+    }),
+  ),
+  resourceLimits: z.object({
+    maxConcurrentRuns: z.number(),
+    maxHistoryMessages: z.number(),
+    maxHistoryBytes: z.number(),
+    maxOutputTokens: z.number(),
+    maxDurationMs: z.number(),
+    maxStreamBytes: z.number(),
+  }),
+  diagnostics: z.array(z.string()),
+  policyCompatibility: z.object({
+    readOnlyAllowed: z.boolean(),
+    askApprovalAllowed: z.literal(false),
+    workspaceAllowed: z.literal(false),
+    fullAccessAllowed: z.literal(false),
+    gatedReason: z.string().nullable(),
+  }),
+})
+
+export type OllamaStatusDto = z.infer<typeof OllamaStatusDtoSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -1803,6 +1862,7 @@ export interface GhostBotBridge {
   revokeLocalSkillTrust(skillId: string): Promise<LocalSkillDto>
   setLocalSkillEnabled(input: { skillId: string; enabled: boolean }): Promise<LocalSkillDto>
   getOpenClawStatus(): Promise<OpenClawStatusDto>
+  getOllamaStatus(): Promise<OllamaStatusDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

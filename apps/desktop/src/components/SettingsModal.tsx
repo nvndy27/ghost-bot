@@ -93,6 +93,9 @@ export function SettingsModal({
   const [openClawStatus, setOpenClawStatus] = useState<
     import('@ghost-bot/shared-types/ipc').OpenClawStatusDto | null
   >(null)
+  const [ollamaStatus, setOllamaStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
+  >(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -107,6 +110,14 @@ export function SettingsModal({
         .catch((err: unknown) => {
           setErrorMsg(err instanceof Error ? err.message : 'Failed to load OpenClaw status')
           setOpenClawStatus(null)
+        })
+    }
+    if (window.ghostBot?.getOllamaStatus) {
+      void window.ghostBot
+        .getOllamaStatus()
+        .then(setOllamaStatus)
+        .catch(() => {
+          setOllamaStatus(null)
         })
     }
   }, [open, initialSection])
@@ -463,6 +474,52 @@ export function SettingsModal({
                     )}
                   </div>
                 )}
+
+                {ollamaStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="ollama-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        Ollama Local {ollamaStatus.runtimeVersion ?? '(not detected)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="ollama-auth-badge">
+                        {ollamaStatus.available ? ollamaStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{ollamaStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>URL: {ollamaStatus.baseUrl}</span>
+                      <span>Local-only verified: {ollamaStatus.localOnlyVerified ? 'yes' : 'no'}</span>
+                      <span>Installed models: {ollamaStatus.models.length}</span>
+                      <span>Running: {ollamaStatus.runningModels.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        max concurrent: {ollamaStatus.resourceLimits.maxConcurrentRuns}
+                      </span>
+                      <span className="gb-badge">
+                        max output: {ollamaStatus.resourceLimits.maxOutputTokens} tok
+                      </span>
+                      <span className="gb-badge">
+                        history: {ollamaStatus.resourceLimits.maxHistoryMessages} turns /{' '}
+                        {Math.round(ollamaStatus.resourceLimits.maxHistoryBytes / 1024)} KB
+                      </span>
+                    </div>
+                    {ollamaStatus.diagnostics.map((d, idx) => (
+                      <small key={idx} className="gb-muted">
+                        Diagnostic: {d}
+                      </small>
+                    ))}
+                    {ollamaStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="ollama-gated-reason">
+                        Execution gate: {ollamaStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -506,6 +563,42 @@ export function SettingsModal({
                         </small>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {ollamaStatus && (
+                  <div style={{ marginTop: '14px' }} data-testid="ollama-models-section">
+                    <h3 style={{ margin: '0 0 8px', fontSize: '14px' }}>
+                      Ollama Local Models ({ollamaStatus.models.length})
+                    </h3>
+                    {ollamaStatus.models.length === 0 ? (
+                      <p className="gb-muted" style={{ fontSize: '12.5px', margin: 0 }}>
+                        {ollamaStatus.available
+                          ? 'No local Ollama models installed.'
+                          : 'Ollama daemon not detected on loopback http://127.0.0.1:11434.'}
+                      </p>
+                    ) : (
+                      ollamaStatus.models.slice(0, 20).map((m) => {
+                        const running = ollamaStatus.runningModels.some((r) => r.name === m.id)
+                        const sizeMb =
+                          m.sizeBytes !== null ? `${Math.round(m.sizeBytes / (1024 * 1024))} MB` : 'unknown size'
+                        return (
+                          <div key={m.id} className="gb-setting-row">
+                            <div>
+                              <div>
+                                {m.label} {running ? <span className="gb-badge">running</span> : null}
+                              </div>
+                              <small className="gb-muted">
+                                {m.parameterSize ?? 'unknown params'} · {m.quantizationLevel ?? 'unknown quant'} · {sizeMb}
+                              </small>
+                            </div>
+                            <small className="gb-muted">
+                              ctx: {m.contextLength ?? 'unknown'}
+                            </small>
+                          </div>
+                        )
+                      })
+                    )}
                   </div>
                 )}
 
