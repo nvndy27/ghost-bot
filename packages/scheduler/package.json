@@ -14,7 +14,10 @@
     "./diagnostics": "./src/diagnostics/diagnostics.ts",
     "./statistics": "./src/diagnostics/statistics.ts",
     "./simulator": "./src/simulator/dry-run.ts",
-    "./portability": "./src/portability/export-import.ts"
+    "./portability": "./src/portability/export-import.ts",
+    "./notifications": "./src/notifications/repository.ts",
+    "./notification-policy": "./src/notifications/policy.ts",
+    "./approvals": "./src/queue/approval-coordinator.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

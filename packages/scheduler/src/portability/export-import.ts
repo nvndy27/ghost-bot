@@ -292,6 +292,19 @@ export function commitImportRoutines(
           continue
         }
         if (conflictPolicy === 'overwrite') {
+          const activeOrUncertain = db.sqlite
+            .prepare(
+              `SELECT COUNT(*) AS cnt FROM scheduler_tasks
+               WHERE routine_id = ?
+                 AND (status IN ('claimed', 'running', 'awaiting_approval') OR uncertain_execution = 1)`,
+            )
+            .get(existingMatch.id) as { cnt: number }
+          if (Number(activeOrUncertain?.cnt ?? 0) > 0) {
+            throw new SchedulerError(
+              'IMPORT_CONFLICT_ACTIVE_EXECUTION',
+              `Cannot overwrite routine "${existingMatch.name}" while active or uncertain tasks exist`,
+            )
+          }
           repository.disable(existingMatch.id, receivingScope, nowMs)
           const updated = repository.update(
             existingMatch.id,

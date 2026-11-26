@@ -215,6 +215,58 @@ export function openSchedulerDatabase(
         )
         .run(new Date().toISOString())
     }
+
+    if (!applied.has(4)) {
+      const routineCols = getColumnNames(sqlite, 'scheduler_routines')
+      if (!routineCols.has('dedup_watermark_at')) {
+        sqlite.exec(`ALTER TABLE scheduler_routines ADD COLUMN dedup_watermark_at TEXT;`)
+      }
+      const taskCols = getColumnNames(sqlite, 'scheduler_tasks')
+      if (!taskCols.has('daemon_run_id')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN daemon_run_id TEXT;`)
+      }
+      if (!taskCols.has('daemon_approval_id')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN daemon_approval_id TEXT;`)
+      }
+      if (!taskCols.has('approval_state')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN approval_state TEXT;`)
+      }
+      if (!taskCols.has('approval_expires_at')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN approval_expires_at TEXT;`)
+      }
+      if (!taskCols.has('approval_action_summary')) {
+        sqlite.exec(`ALTER TABLE scheduler_tasks ADD COLUMN approval_action_summary TEXT;`)
+      }
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS scheduler_notifications (
+          id TEXT PRIMARY KEY,
+          routine_id TEXT NOT NULL REFERENCES scheduler_routines(id) ON DELETE CASCADE,
+          routine_revision INTEGER NOT NULL,
+          task_id TEXT,
+          occurrence_key TEXT,
+          owner_id TEXT NOT NULL,
+          bot_id TEXT NOT NULL,
+          category TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          dedup_key TEXT NOT NULL UNIQUE,
+          summary TEXT NOT NULL,
+          read_at TEXT,
+          dismissed_at TEXT,
+          delivery_status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scheduler_notifications_scope
+          ON scheduler_notifications(owner_id, bot_id, read_at, dismissed_at, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_scheduler_notifications_routine
+          ON scheduler_notifications(routine_id, created_at DESC);
+      `)
+      sqlite
+        .prepare(
+          `INSERT INTO scheduler_schema_migrations (version, name, applied_at) VALUES (4, '0004_scheduler_phase5a4', ?)`,
+        )
+        .run(new Date().toISOString())
+    }
   })
 
   return {

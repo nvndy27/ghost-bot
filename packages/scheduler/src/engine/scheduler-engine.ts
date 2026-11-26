@@ -236,6 +236,15 @@ export class SchedulerEngine {
       if (outcome.status === 'awaiting_approval') {
         return this.queue.markAwaitingApproval(running.id, workerId, nowMs)
       }
+      if (outcome.status === 'unknown') {
+        return this.queue.markUncertainInterrupted(
+          running.id,
+          workerId,
+          'DISPATCH_OUTCOME_UNKNOWN',
+          redactSchedulerSecrets(outcome.reason),
+          nowMs,
+        )
+      }
       return this.queue.failTask(
         running.id,
         workerId,

@@ -71,6 +71,18 @@ export class ExecutionQueue {
     const nowIso = new Date(nowMs).toISOString()
 
     return this.db.transaction(() => {
+      if (triggerSource === 'schedule' || triggerSource === 'event') {
+        const wmRow = this.db.sqlite
+          .prepare(`SELECT dedup_watermark_at FROM scheduler_routines WHERE id = ?`)
+          .get(routine.id) as { dedup_watermark_at: string | null } | undefined
+        if (wmRow?.dedup_watermark_at && scheduledFor <= wmRow.dedup_watermark_at) {
+          throw new SchedulerError(
+            'STALE_OCCURRENCE_BEFORE_WATERMARK',
+            `Occurrence "${scheduledFor}" is at or before durable deduplication watermark "${wmRow.dedup_watermark_at}"`,
+          )
+        }
+      }
+
       const dedupRow = this.db.sqlite
         .prepare(
           `SELECT occurrence_key, payload_hash FROM scheduler_occurrence_dedup WHERE occurrence_key = ?`,
@@ -509,10 +521,35 @@ export class ExecutionQueue {
   }
 
   /**
-   * Bounded cleanup of explicitly expired deduplication keys (never deletes active keys).
+   * Bounded cleanup of expired deduplication keys with durable watermark advancement
+   * so pruned schedule/event timestamps cannot be re-enqueued after expiration.
    */
   pruneExpiredDedup(options: { nowIso: string; maxKeepPerRoutine?: number }): number {
     return this.db.transaction(() => {
+      // Advance dedup_watermark_at for any routine whose expired schedule/event keys are pruned
+      const expiringTasks = this.db.sqlite
+        .prepare(
+          `SELECT routine_id, MAX(created_at) AS max_created
+           FROM scheduler_occurrence_dedup
+           WHERE expires_at IS NOT NULL AND expires_at <= ?
+             AND occurrence_key NOT IN (SELECT occurrence_key FROM scheduler_tasks)
+           GROUP BY routine_id`,
+        )
+        .all(options.nowIso) as Array<{ routine_id: string; max_created: string }>
+
+      for (const row of expiringTasks) {
+        this.db.sqlite
+          .prepare(
+            `UPDATE scheduler_routines
+             SET dedup_watermark_at = CASE
+               WHEN dedup_watermark_at IS NULL OR dedup_watermark_at < ? THEN ?
+               ELSE dedup_watermark_at
+             END
+             WHERE id = ?`,
+          )
+          .run(row.max_created, row.max_created, row.routine_id)
+      }
+
       const res = this.db.sqlite
         .prepare(
           `DELETE FROM scheduler_occurrence_dedup
@@ -521,6 +558,47 @@ export class ExecutionQueue {
         )
         .run(options.nowIso)
       return Number(res.changes)
+    })
+  }
+
+  /**
+   * Marks a running or claimed task interrupted with uncertainExecution = true
+   * when external dispatch outcome is unknown. Never auto-retries.
+   */
+  markUncertainInterrupted(
+    taskId: string,
+    workerId: string,
+    errorCode: string,
+    errorMessage: string,
+    nowMs = Date.now(),
+  ): ScheduledTaskRecord {
+    const nowIso = new Date(nowMs).toISOString()
+    return this.db.transaction(() => {
+      const task = this.getTask(taskId)
+      if (isTerminalTaskStatus(task.status)) {
+        throw new SchedulerError('TERMINAL_STATE_IMMUTABLE', `Task "${taskId}" is already ${task.status}`)
+      }
+      if (task.claimOwner !== workerId) {
+        throw new SchedulerError('CLAIM_MISMATCH', `Worker "${workerId}" does not own "${taskId}"`)
+      }
+      this.db.sqlite
+        .prepare(
+          `UPDATE scheduler_tasks
+           SET status = 'interrupted',
+               uncertain_execution = 1,
+               claim_owner = NULL,
+               claim_lease_expires_at = NULL,
+               error_code = ?,
+               error_message = ?,
+               ended_at = ?,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(errorCode, errorMessage, nowIso, nowIso, taskId)
+      this.db.sqlite
+        .prepare(`UPDATE scheduler_routines SET last_task_status = 'interrupted', updated_at = ? WHERE id = ?`)
+        .run(nowIso, task.routineId)
+      return this.getTask(taskId)
     })
   }
 }

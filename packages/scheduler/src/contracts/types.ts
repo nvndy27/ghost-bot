@@ -175,6 +175,7 @@ export type FutureDispatchOutcome =
   | { status: 'completed' }
   | { status: 'awaiting_approval'; reason: string }
   | { status: 'failed'; code: string; message: string }
+  | { status: 'unknown'; reason: string }
 
 export interface FutureRoutineDispatcher {
   dispatch(ctx: FutureExecutionAuthorizationContext): Promise<FutureDispatchOutcome>
