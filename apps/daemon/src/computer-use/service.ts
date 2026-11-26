@@ -19,7 +19,8 @@ import type { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
 const MAX_OBSERVATION_BYTES = 2 * 1024 * 1024
 const MAX_VIEWER_FPS = 2
 const DEFAULT_APPROVAL_TTL_MS = 120_000
-const PERMITTED_CU_RUN_STATES = new Set(['queued', 'running', 'awaiting_approval'])
+const MAX_ACTIVE_CU_SESSIONS = 4
+const PERMITTED_CU_RUN_STATES = new Set(['running'])
 
 export interface ComputerUseCapabilitiesDto {
   browser: BrowserCapabilities
@@ -264,6 +265,14 @@ export class ComputerUseService {
           nowRunIso,
           nowRunIso,
         )
+    }
+
+    if (this.workers.size >= MAX_ACTIVE_CU_SESSIONS) {
+      throw new DaemonError(
+        'CU_SESSION_LIMIT_REACHED',
+        `Maximum active Computer Use sessions (${MAX_ACTIVE_CU_SESSIONS}) reached`,
+        { statusCode: 429 },
+      )
     }
 
     const sessionId = `cus_${randomUUID()}`

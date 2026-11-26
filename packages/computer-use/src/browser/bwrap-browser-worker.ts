@@ -16,6 +16,7 @@ import { ComputerUseError } from '../contracts/types.ts'
 import { getMinimalEtcBinds } from '../isolation/bwrap-isolation-worker.ts'
 
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024
+const MAX_PENDING_RPC = 32
 
 interface RpcResponse {
   id: number
@@ -246,6 +247,11 @@ export class BwrapIsolatedBrowserWorker {
     const stdin = this.child?.stdin
     if (!this.child || this.closed || !stdin || !stdin.writable) {
       return Promise.reject(new ComputerUseError('BACKEND_DISCONNECTED', 'Isolated browser worker is not running'))
+    }
+    if (this.pending.size >= MAX_PENDING_RPC) {
+      return Promise.reject(
+        new ComputerUseError('EXECUTION_UNCERTAIN', `Isolated worker pending RPC limit (${MAX_PENDING_RPC}) reached`),
+      )
     }
     const id = this.nextId++
     return new Promise<T>((resolve, reject) => {
