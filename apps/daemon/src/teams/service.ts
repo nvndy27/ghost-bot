@@ -443,7 +443,63 @@ export class TeamsService {
     }
   }
 
-  reconcileOnStartup(): { tasksMarkedUncertain: number; runsMarkedUncertain: number } {
-    return this.coordinator.reconcileOnRestart()
+  reconcileOnStartup(): { tasksMarkedUncertain: number; runsMarkedUncertain: number; recoveredLinks: number } {
+    // Recover any crash-window orphan between orchestrator.startRun() and team_execution_links insert.
+    let recoveredLinks = 0
+    const orphanRuns = this.dbHandle.sqlite
+      .prepare(
+        `SELECT r.id AS daemon_run_id, r.session_id, r.agent_id, r.idempotency_key, r.runtime_id,
+                s.title AS session_title
+         FROM runs r
+         JOIN sessions s ON s.id = r.session_id
+         LEFT JOIN team_execution_links l ON l.daemon_run_id = r.id
+         WHERE l.id IS NULL
+           AND r.idempotency_key LIKE 'team:%:attempt:%'
+           AND s.title LIKE 'team:%'`,
+      )
+      .all() as Array<{
+      daemon_run_id: string
+      session_id: string
+      agent_id: string
+      idempotency_key: string
+      runtime_id: string
+      session_title: string
+    }>
+
+    if (orphanRuns.length > 0) {
+      const insertLink = this.dbHandle.sqlite.prepare(
+        `INSERT OR IGNORE INTO team_execution_links (
+          id, team_run_id, team_task_id, agent_id, session_id, daemon_run_id,
+          runtime_id, account_id, attempt, role, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'local', ?, 'worker', ?)`,
+      )
+      for (const row of orphanRuns) {
+        const keyMatch = /^team:([^:]+):attempt:(\d+)$/.exec(row.idempotency_key)
+        const titleMatch = /^team:([^:]+):/.exec(row.session_title)
+        if (!keyMatch || !titleMatch) continue
+        const teamTaskId = keyMatch[1]!
+        const attempt = Number(keyMatch[2]!)
+        const teamRunId = titleMatch[1]!
+        const taskExists = this.dbHandle.sqlite
+          .prepare(`SELECT 1 FROM team_tasks WHERE id = ? AND team_run_id = ?`)
+          .get(teamTaskId, teamRunId)
+        if (!taskExists) continue
+        const info = insertLink.run(
+          `texec_rec_${row.daemon_run_id}`,
+          teamRunId,
+          teamTaskId,
+          row.agent_id,
+          row.session_id,
+          row.daemon_run_id,
+          row.runtime_id,
+          attempt,
+          new Date().toISOString(),
+        )
+        if (info.changes > 0) recoveredLinks += 1
+      }
+    }
+
+    const res = this.coordinator.reconcileOnRestart()
+    return { ...res, recoveredLinks }
   }
 }

@@ -283,6 +283,19 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           }
         }
         if (latest.status === 'awaiting_approval') {
+          const teamRunRow = this.deps.dbHandle.sqlite
+            .prepare(`SELECT status FROM team_runs WHERE id = ?`)
+            .get(ctx.teamRunId) as { status: string } | undefined
+          if (teamRunRow && (teamRunRow.status === 'cancelling' || teamRunRow.status === 'cancelled')) {
+            this.deps.orchestrator.cancelRun(run.id)
+            return {
+              status: 'failed',
+              code: 'TEAM_RUN_CANCELLED',
+              message: 'Team run was cancelled while awaiting worker approval',
+              retryable: false,
+              durationMs: Math.max(1, Date.now() - startMs),
+            }
+          }
           // Wait for user approval resolution or cancellation up to deadline
           await new Promise((r) => setTimeout(r, pollMs))
           continue

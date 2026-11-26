@@ -710,11 +710,24 @@ export function App() {
     }
   }
 
-  const handleSelectTeam = (teamId: string) => {
-    setActiveTeamId(teamId)
+  const clearTeamWorkspaceState = () => {
+    teamRequestSeqRef.current += 1
+    setTeamRuns([])
+    setActiveTeamRunId(null)
+    setActiveTeamRun(null)
+    setTeamTasks([])
+    setTeamApprovals([])
+    setTeamMessages([])
+    setTeamDiagnostics(null)
+    setTeamAggregateUsage(null)
     setTeamPlanPreview(null)
     setTeamPlanPreviewError(null)
     setTeamRunError(null)
+  }
+
+  const handleSelectTeam = (teamId: string) => {
+    clearTeamWorkspaceState()
+    setActiveTeamId(teamId)
     void loadTeamWorkspace(teamId)
   }
 
@@ -812,6 +825,7 @@ export function App() {
   }
 
   const handleSelectBot = (id: string) => {
+    clearTeamWorkspaceState()
     setActiveTeamId(null)
     setActiveBotId(id)
     const bridge = window.ghostBot
