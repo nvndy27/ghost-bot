@@ -76,6 +76,7 @@ function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
     name: rec.name,
     description: rec.description,
     runtimeId: rec.runtimeId,
+    updatedAt: rec.updatedAt,
     statusLabel: 'Ready',
     avatarStatus: 'idle',
     avatar: rec.avatar,
@@ -955,9 +956,15 @@ export function App() {
         ipcPatch.permission = patch.permission
       }
       if (Object.keys(ipcPatch).length > 0) {
-        void bridge.updateBot({ id: targetId, patch: ipcPatch }).catch((err: unknown) => {
-          setBannerError(err instanceof Error ? err.message : 'Failed to save bot setting')
-        })
+        void bridge.updateBot({ id: targetId, patch: ipcPatch })
+          .then((updated) => setBots((prev) => prev.map((bot) =>
+            bot.id === updated.id && (!bot.updatedAt || bot.updatedAt < updated.updatedAt)
+              ? { ...bot, updatedAt: updated.updatedAt }
+              : bot,
+          )))
+          .catch((err: unknown) => {
+            setBannerError(err instanceof Error ? err.message : 'Failed to save bot setting')
+          })
       }
     }
   }
@@ -1787,6 +1794,9 @@ export function App() {
           />
           {activeTeam ? (
             <TeamRightPanel
+              key={activeTeam.id}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               team={activeTeam}
               bots={bots}
@@ -1800,6 +1810,9 @@ export function App() {
             />
           ) : (
             <RightPanel
+              key={JSON.stringify([activeBot?.id, activeBot?.updatedAt, activeBot?.workspacePath, activeBot?.permission])}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               bot={activeBot}
               activeTasks={latestTools}

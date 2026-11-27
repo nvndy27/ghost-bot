@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto'
-import { chmod, open, readFile, unlink } from 'node:fs/promises'
+import { chmod, open, readFile, realpath, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { dirname, join } from 'node:path'
@@ -86,6 +86,10 @@ import {
   UpdateSidebarOrganizationInputSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
+  WorkspaceListDirectoryIpcInputSchema,
+  WorkspaceReadFileIpcInputSchema,
+  WorkspaceReadGrantSchema,
+  WorkspaceSelectorIpcSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
@@ -122,6 +126,7 @@ import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
 import { LOCAL_USER_ID } from './memory/service.ts'
+import { WorkspaceFilesService } from './workspace/files-service.ts'
 
 export interface DaemonServerOptions {
   authToken: string
@@ -178,6 +183,14 @@ async function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Pr
   }
 }
 
+async function readWorkspaceRequest<T>(req: IncomingMessage, schema: z.ZodType<T>): Promise<T> {
+  const result = schema.safeParse(await readJsonBody(req))
+  if (!result.success) {
+    throw new DaemonError('VALIDATION_ERROR', 'Invalid workspace request', { statusCode: 400 })
+  }
+  return result.data
+}
+
 const ACTIVE_DAEMON_LOCKS = new Set<string>()
 
 export class GhostBotDaemon {
@@ -197,6 +210,8 @@ export class GhostBotDaemon {
   private computerUseService: ComputerUseService | null = null
   private terminalService: ScopedTerminalService | null = null
   private skillsService: LocalSkillsService | null = null
+  private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
+  private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
   private lockFilePath: string | null = null
@@ -353,6 +368,7 @@ export class GhostBotDaemon {
     this.terminalService = new ScopedTerminalService(dbHandle, this.botRepo)
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
+    this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
     this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
     this.registerPersistentProviderAdapters()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
@@ -952,6 +968,8 @@ export class GhostBotDaemon {
     this.botRepo = null
     this.settingsRepo = null
     this.sessionRepo = null
+    this.workspaceReadGrants.clear()
+    this.workspaceFilesService = null
     if (this.memoryService) {
       this.memoryService.close()
       this.memoryService = null
@@ -1630,6 +1648,9 @@ export class GhostBotDaemon {
             })
           }
           const updatedBot = await repo.updateBot(parsed.data)
+          if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
+            this.workspaceReadGrants.delete(idCheck.data)
+          }
           if (parsed.data.patch.permission === 'read-only' || parsed.data.patch.workspacePath) {
             await this.terminalService?.revokeByBotId(idCheck.data, 'bot_policy_updated').catch(() => {})
           }
@@ -1649,6 +1670,7 @@ export class GhostBotDaemon {
               }
             },
           })
+          this.workspaceReadGrants.delete(idCheck.data)
           await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
@@ -1707,6 +1729,91 @@ export class GhostBotDaemon {
           label: parsed.data.label,
         })
         return
+      }
+
+      if (this.workspaceFilesService) {
+        // Only Electron main has the daemon credential and can submit the native dialog result.
+        if (req.method === 'POST' && url.pathname === '/workspace/authorize-read') {
+          const { botId, workspaceId, selectedRoot } = await readWorkspaceRequest(req, WorkspaceReadGrantSchema)
+          const root = await realpath(selectedRoot).catch(() => null)
+          const context = await this.workspaceFilesService.resolveContext({ botId })
+          if (
+            !context.authorized ||
+            context.workspaceId !== workspaceId ||
+            !context.authGeneration ||
+            !root ||
+            root !== context.canonicalRoot
+          ) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Select the configured bot workspace directory', {
+              statusCode: 403,
+            })
+          }
+          this.workspaceReadGrants.set(botId, { workspaceId, authGeneration: context.authGeneration })
+          sendJson(res, 200, true)
+          return
+        }
+
+        if (req.method === 'POST' && url.pathname === '/workspace/context') {
+          const selector = await readWorkspaceRequest(req, WorkspaceSelectorIpcSchema)
+          if (selector.teamId) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Group workspace requires an authorized task scope', {
+              statusCode: 403,
+            })
+          }
+          const context = await this.workspaceFilesService.resolveContext(selector)
+          const grant = this.workspaceReadGrants.get(context.ownerId)
+          const authorized = context.authorized &&
+            grant !== undefined &&
+            grant.workspaceId === context.workspaceId &&
+            grant.authGeneration === context.authGeneration
+          sendJson(res, 200, {
+            ...context,
+            authorized,
+            canWrite: false,
+            authGeneration: authorized ? context.authGeneration : null,
+            reason: authorized ? null : context.reason ?? 'Allow read access to this bot workspace',
+          })
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/list') {
+          const input = await readWorkspaceRequest(req, WorkspaceListDirectoryIpcInputSchema)
+          if (input.teamId) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Group workspace requires an authorized task scope', {
+              statusCode: 403,
+            })
+          }
+          const grant = input.botId ? this.workspaceReadGrants.get(input.botId) : undefined
+          if (grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
+              statusCode: 403,
+            })
+          }
+          const result = await this.workspaceFilesService.listDirectory(input)
+          sendJson(res, 200, result)
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/read') {
+          const input = await readWorkspaceRequest(req, WorkspaceReadFileIpcInputSchema)
+          if (input.teamId) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Group workspace requires an authorized task scope', {
+              statusCode: 403,
+            })
+          }
+          const grant = input.botId ? this.workspaceReadGrants.get(input.botId) : undefined
+          if (grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
+              statusCode: 403,
+            })
+          }
+          const result = await this.workspaceFilesService.readFile(input)
+          sendJson(res, 200, { ...result, readOnly: true })
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/save') {
+          throw new DaemonError('WORKSPACE_WRITES_DISABLED', 'Workspace file saving is disabled pending write-boundary verification', {
+            statusCode: 403,
+          })
+        }
       }
 
       const sessionRepo = this.sessionRepo
@@ -3159,7 +3266,11 @@ export class GhostBotDaemon {
         statusCode: 404,
       })
     } catch (err) {
-      const normalized = normalizeDaemonError(err)
+      const normalized = normalizeDaemonError(
+        err instanceof z.ZodError && req.url?.startsWith('/workspace/')
+          ? new DaemonError('VALIDATION_ERROR', 'Invalid workspace request', { statusCode: 400 })
+          : err,
+      )
       sendJson(res, normalized.statusCode, normalized.body)
     }
   }
