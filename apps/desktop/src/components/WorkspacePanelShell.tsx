@@ -187,6 +187,7 @@ export function WorkspacePanelShell({
             <WorkspaceBrowserTab visible={activeTabDef.id === 'browser'} isMockMode={isMockMode} />
           ) : activeTabDef.id === 'output' ? (
             <WorkspaceOutputTab
+              key={contextKey}
               contextKey={contextKey}
               contextKind={contextKind}
               ownerId={ownerId}

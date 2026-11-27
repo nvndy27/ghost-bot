@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
 import { DaemonError } from '../apps/daemon/src/errors.ts'
 import { WorkspaceOutputService } from '../apps/daemon/src/workspace/output-service.ts'
@@ -98,6 +98,15 @@ test('Alpha.2F WorkspaceOutputService: chronological output, redaction, hidden r
     const outB = service.listOutput({ botId: 'bot-b' })
     assert.equal(outB.runs[0]?.status, 'uncertain')
 
+    const cancelling = await service.cancelExecution({ botId: 'bot-a', runId: 'run-a' }, {
+      cancelRun: async () => ({ status: 'cancelling' }),
+    })
+    assert.equal(cancelling.cancelled, false)
+    assert.equal(cancelling.status, 'running')
+    db.sqlite.prepare("UPDATE runs SET status = 'cancelling' WHERE id = 'run-a'").run()
+    assert.deepEqual(service.listOutput({ botId: 'bot-a' }).runs.map(({ status, cancellable }) =>
+      ({ status, cancellable })), [{ status: 'running', cancellable: false }])
+
     // Cross-bot cancel rejected
     await assert.rejects(
       () =>
@@ -113,62 +122,85 @@ test('Alpha.2F WorkspaceOutputService: chronological output, redaction, hidden r
   }
 })
 
-test('Alpha.2F Electron E2E: Output tab renders real mock run output, filters, clears, and isolates bots', async () => {
+test('Alpha.2F Electron Output filters, cancels, isolates and recovers persisted runs', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-alpha2f-e2e-'))
-  const desktop = join(process.cwd(), 'apps', 'desktop')
-  const app = await electron.launch({
-    executablePath: join(desktop, 'node_modules', '.bin', 'electron'),
-    args: [join(desktop, 'dist-electron', 'main.js')],
-    cwd: desktop,
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_BOT_SMOKE_EXIT: '0',
-    },
-  })
+  let app = await launchWorkspaceElectron(dataDir)
 
   try {
     const page = await app.firstWindow()
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.waitForSelector('text=Chief of Staff')
+    await page.getByTestId('workspace-tab-output').click()
+    const output = page.getByTestId('workspace-output-tab')
+    await output.waitFor()
 
-    // Trigger a real daemon mock run via IPC -> RunOrchestrator so SQLite persists runs + run_events
-    await page.evaluate(async () => {
+    const fixture = await page.evaluate(async () => {
       const bridge = window.ghostBot!
       const { activeBotId } = await bridge.listBots()
       if (!activeBotId) throw new Error('Missing active bot')
-      const { activeSessionId } = await bridge.listSessions({ agentId: activeBotId })
-      const sessionId =
-        activeSessionId ?? (await bridge.createSession({ agentId: activeBotId })).session.id
-      await bridge.startRun({
-        sessionId,
-        idempotencyKey: crypto.randomUUID(),
-        text: 'Hello mock runtime',
+      const first = await bridge.createSession({ agentId: activeBotId })
+      const { run: completed } = await bridge.startRun({
+        sessionId: first.id, idempotencyKey: crypto.randomUUID(), text: 'Hello mock runtime',
       })
+      const second = await bridge.createSession({ agentId: activeBotId })
+      const { run: pending } = await bridge.startRun({
+        sessionId: second.id, idempotencyKey: crypto.randomUUID(), text: 'Test approval flow',
+      })
+      return { botId: activeBotId, completedId: completed.id, pendingId: pending.id, pendingSession: second.id }
     })
-    await page.waitForTimeout(500)
-    await page.getByTestId('workspace-tab-output').click()
-    await page.waitForSelector('[data-testid="workspace-output-tab"]')
-    await page.getByTestId('output-refresh-btn').click()
-    await page.waitForSelector('[data-testid^="output-entry-"]')
+    await output.getByTestId('output-refresh-btn').click()
+    const pending = output.getByTestId(`output-entry-run-summary:${fixture.pendingId}`)
+    await pending.getByText('Run awaiting_approval', { exact: true }).waitFor()
+    await pending.getByRole('button', { name: 'Cancel', exact: true }).click()
+    const cancelledTitle = pending.getByText('Run cancelled', { exact: true })
+    const outputError = output.getByTestId('output-error-banner')
+    await cancelledTitle.or(outputError).waitFor()
+    assert.deepEqual(await outputError.allTextContents(), [])
+    await cancelledTitle.waitFor()
+    assert.equal(await page.evaluate(async (id) => (await window.ghostBot!.getRun(id)).status, fixture.pendingId), 'cancelled')
+    assert.equal(await pending.getByRole('button', { name: 'Cancel', exact: true }).count(), 0)
+    const completed = output.getByTestId(`output-entry-run-summary:${fixture.completedId}`)
+    await completed.getByText('Run completed', { exact: true }).waitFor()
 
-    // Filter by source & search
-    await page.getByTestId('output-source-filter').selectOption('run')
-    await page.getByTestId('output-search-input').fill('Run')
-    assert.ok((await page.locator('[data-testid^="output-entry-"]').count()) >= 1)
+    await output.getByTestId('output-source-filter').selectOption('run')
+    await output.getByTestId('output-search-input').fill('Run')
+    await completed.waitFor()
+    await output.getByTestId('output-clear-btn').click()
+    await output.getByTestId('output-empty-state').waitFor()
+    await output.getByTestId('output-refresh-btn').click()
+    await completed.waitFor()
+    await pending.waitFor()
 
-    // Clear local view & Refresh restores persisted output
-    await page.getByTestId('output-clear-btn').click()
-    await page.waitForSelector('[data-testid="output-empty-state"]')
-    await page.getByTestId('output-refresh-btn').click()
-    await page.waitForSelector('[data-testid^="output-entry-"]')
+    const bot = page.locator('[role="listbox"][aria-label="Bots"] [role="option"]').nth(1)
+    await bot.click()
+    await output.getByTestId('output-empty-state').waitFor()
+    assert.equal(await completed.count(), 0)
+    assert.equal(await pending.count(), 0)
 
-    // Switching to another bot isolates output
-    const botOptions = page.locator('[role="listbox"][aria-label="Bots"] [role="option"]')
-    await botOptions.nth(1).click()
-    await page.getByTestId('workspace-tab-output').click()
-    await page.waitForSelector('[data-testid="output-empty-state"]')
+    await app.close()
+    // Persist a stranded run to model a process interrupted before terminal status was written.
+    const db = await openGhostBotDatabase(dataDir)
+    const interruptedId = 'alpha2g-interrupted-fixture'
+    try {
+      const now = new Date().toISOString()
+      db.sqlite.prepare(`
+        INSERT INTO runs (id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode,
+          config_snapshot_json, status, started_at, created_at)
+        VALUES (?, ?, ?, 'alpha2g-interrupted', 'mock', 'mock-fast', 'medium', 'read-only', '{}', 'running', ?, ?)
+      `).run(interruptedId, fixture.pendingSession, fixture.botId, now, now)
+    } finally {
+      db.close()
+    }
+
+    app = await launchWorkspaceElectron(dataDir)
+    const restarted = await app.firstWindow()
+    const restartedOutput = restarted.getByTestId('workspace-output-tab')
+    await restartedOutput.getByTestId('output-empty-state').waitFor()
+    await restarted.locator('[role="listbox"][aria-label="Bots"] [role="option"]').first().click()
+    await restartedOutput.getByTestId(`output-entry-run-summary:${fixture.pendingId}`)
+      .getByText('Run cancelled', { exact: true }).waitFor()
+    const interrupted = restartedOutput.getByTestId(`output-entry-run-summary:${interruptedId}`)
+    await interrupted.getByText('uncertain', { exact: true }).waitFor()
+    assert.equal(await interrupted.getByRole('button', { name: 'Cancel', exact: true }).count(), 0)
+    assert.equal(await restarted.evaluate(async (id) => (await window.ghostBot!.getRun(id)).status, interruptedId), 'interrupted')
   } finally {
     await app.close()
     await rm(dataDir, { recursive: true, force: true })

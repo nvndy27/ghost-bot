@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import { avatarPresets } from '../packages/avatar/presets.ts'
 import {
   WORKSPACE_TABS,
@@ -15,20 +15,13 @@ import {
   resolveEffectiveTheme,
 } from '../apps/desktop/src/state/preferences.ts'
 
-const repoRoot = process.cwd()
-const desktopDir = join(repoRoot, 'apps', 'desktop')
-
 test('Alpha.2A workspace tab definitions and keyboard navigation contract', () => {
   assert.deepEqual(
     WORKSPACE_TABS.map((t) => t.id),
     ['overview', 'files', 'changes', 'browser', 'output'],
   )
-  assert.equal(WORKSPACE_TABS[0].implemented, true)
-  assert.equal(WORKSPACE_TABS[1].implemented, true)
-  assert.equal(WORKSPACE_TABS[2].implemented, true)
-  for (const deferred of WORKSPACE_TABS.slice(3)) {
-    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2D.1`)
-    assert.ok(deferred.milestone?.startsWith('Alpha.2'), `${deferred.id} must declare future milestone`)
+  for (const tab of WORKSPACE_TABS) {
+    assert.equal(tab.implemented, true, `${tab.id} is part of the integrated Workspace`)
   }
 
   assert.equal(getNextWorkspaceTab('overview', 'ArrowRight'), 'files')
@@ -58,20 +51,10 @@ test('Alpha.2A preserves UiPreferences compatibility and 12 avatar presets', () 
 
 test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, maximize, keyboard & bot identity', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-alpha2a-'))
-  const screenshotDir = join(repoRoot, 'design', 'reviews', 'alpha-2a')
+  const screenshotDir = join(dataDir, 'screenshots')
   await mkdir(screenshotDir, { recursive: true })
 
-  const launch = () => electron.launch({
-    executablePath: join(desktopDir, 'node_modules', '.bin', 'electron'),
-    args: [join(desktopDir, 'dist-electron', 'main.js')],
-    cwd: desktopDir,
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_BOT_SMOKE_EXIT: '0',
-    },
-  })
+  const launch = () => launchWorkspaceElectron(dataDir)
 
   let app = await launch()
   try {
@@ -103,7 +86,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const firstBotText = (await botOptions.first().innerText()).trim()
     assert.ok(!/gpt-|claude-|gemini-|kimi-|high|medium|low/i.test(firstBotText), `Unexpected model/effort in sidebar: ${firstBotText}`)
 
-    // 3. Keyboard-accessible tab navigation + honest unimplemented states
+    // 3. Keyboard-accessible tab navigation and scoped capability states
     const overviewTab = page.getByTestId('workspace-tab-overview')
     await overviewTab.focus()
     await page.keyboard.press('ArrowRight')
@@ -118,11 +101,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
 
     await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-active-tab="browser"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-browser"]')
+    await page.waitForSelector('[data-testid="workspace-browser-tab"]')
 
     await page.keyboard.press('End')
     await page.waitForSelector('[data-active-tab="output"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-output"]')
+    await page.waitForSelector('[data-testid="workspace-output-tab"]')
 
     // 4. The selected section persists across bots while the workspace context switches.
     await botOptions.nth(1).click()
@@ -226,8 +209,8 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await editor.waitFor()
     assert.equal(await editor.inputValue(), 'Initial fixture\n')
 
-    await page.getByText('Workspace search and preview are unavailable.', { exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: 'Add selection to chat draft' }).count(), 0)
+    await page.getByRole('searchbox', { name: 'Search workspace' }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Add selection to chat draft' }).isDisabled(), true)
     assert.equal(await editor.getAttribute('readonly'), '')
     assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
 
@@ -262,7 +245,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       page.evaluate(async ({ target, expectedRevision }) => {
         return window.ghostBot!.saveWorkspaceFile({ ...target, expectedRevision, content: 'Denied edit' })
       }, { target: original, expectedRevision: revision }),
-      /saving is disabled/i,
+      /native write consent is required/i,
     )
     assert.equal(await readFile(file, 'utf8'), 'External edit\n')
 

@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.2G to Alpha.3 handoff
+
+Review the consolidated Workspace draft against current main and confirm its hosted Ubuntu CI run. Use the [executable package acceptance harness](extensions/alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance) for fresh Ubuntu desktop and installed Fedora artifacts. Preserve the current mutation gates. Reconcile the independently reviewed Alpha.1 stack for full Alpha.3 and track the PR #42 fixture follow-up with Agent 1.
+
 ## Alpha.2D.2 Git mutation handoff
 
 Reconcile the provisional stack before acceptance. Keep Git write admission denied until a separate native per-operation approval can be bound to the repository, selected paths and expected revisions, and used with a commit mechanism that preserves external writes. Verify race, revocation and partial-publication behavior in real repositories and Electron before enabling any action. Agent 1 can resolve the exact-SHA Private Task Chat findings independently.

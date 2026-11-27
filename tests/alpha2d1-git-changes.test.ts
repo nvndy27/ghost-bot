@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
 import { WorkspaceFilesService } from '../apps/daemon/src/workspace/files-service.ts'
 import { WorkspaceGitService } from '../apps/daemon/src/workspace/git-service.ts'
@@ -144,16 +144,9 @@ test('Electron Changes tab renders native-granted status, file diffs and commit 
   await withRepo(async (root, outside) => {
     await writeFile(join(root, 'tracked.txt'), 'changed in Electron\n')
     await writeFile(join(root, 'new.txt'), 'new file\n')
-    const desktop = join(process.cwd(), 'apps', 'desktop')
-    const app = await electron.launch({
-      executablePath: join(desktop, 'node_modules', '.bin', 'electron'),
-      args: [join(desktop, 'dist-electron', 'main.js')],
-      cwd: desktop,
-      env: {
-        ...process.env, GHOST_BOT_DATA_DIR: join(outside, 'electron-data'),
-        GHOST_BOT_RUNTIME_MODE: 'mock', GHOST_BOT_SMOKE_EXIT: '0',
-      },
-    })
+    const dataDir = join(outside, 'electron-data')
+    await mkdir(dataDir)
+    const app = await launchWorkspaceElectron(dataDir)
     try {
       const page = await app.firstWindow()
       await page.getByTestId('workspace-tab-changes').waitFor()

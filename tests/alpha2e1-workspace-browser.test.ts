@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { assertPackagedRendererSandbox, launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import {
   browserScope,
   parseBrowserUrl,
@@ -40,14 +40,19 @@ test('Alpha.2E.1 network policy blocks unsafe schemes, credentials, private IPs,
   assert.equal(publicIpv4('192.168.1.10'), false)
 })
 
-test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, screenshot, console redaction, and blocking', async () => {
-  let portB = 0
+test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, screenshot, console redaction, and cleanup', async (t) => {
+  let blockedOriginRequests = 0
   const serverB = createServer((_req, res) => {
+    blockedOriginRequests += 1
     res.writeHead(200, { 'content-type': 'text/html' })
     res.end('<html><title>Forbidden Other Local</title><body>Other</body></html>')
   })
   await new Promise<void>((resolve) => serverB.listen(0, '127.0.0.1', () => resolve()))
-  portB = (serverB.address() as { port: number }).port
+  t.after(() => {
+    serverB.close()
+    serverB.closeAllConnections()
+  })
+  const portB = (serverB.address() as { port: number }).port
 
   const serverA = createServer((req, res) => {
     if (req.url === '/redirect-other') {
@@ -66,25 +71,20 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
       <script>
         console.warn('Bearer secret_token_should_never_appear');
         window.__hasGhostBot = typeof window.ghostBot !== 'undefined';
+        window.__hasNode = typeof require !== 'undefined' || typeof process !== 'undefined';
       </script>
     </body></html>`)
   })
   await new Promise<void>((resolve) => serverA.listen(0, '127.0.0.1', () => resolve()))
+  t.after(() => {
+    serverA.close()
+    serverA.closeAllConnections()
+  })
   const portA = (serverA.address() as { port: number }).port
 
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-alpha2e1-'))
-  const desktop = join(process.cwd(), 'apps', 'desktop')
-  const app = await electron.launch({
-    executablePath: join(desktop, 'node_modules', '.bin', 'electron'),
-    args: [join(desktop, 'dist-electron', 'main.js')],
-    cwd: desktop,
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_BOT_SMOKE_EXIT: '0',
-    },
-  })
+  t.after(() => rm(dataDir, { recursive: true, force: true }))
+  const app = await launchWorkspaceElectron(dataDir)
 
   try {
     const page = await app.firstWindow()
@@ -99,6 +99,24 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
       const tab = document.querySelector('[data-testid="browser-tab-0"]')
       return Boolean(tab?.textContent?.includes('Fixture Home'))
     })
+
+    const target = await app.evaluate(async ({ webContents }, url) => {
+      const preview = webContents.getAllWebContents().find((entry) => entry.getURL() === url)
+      if (!preview) throw new Error('Missing isolated browser preview')
+      const isolated = await preview.executeJavaScript('window.__hasGhostBot === false && window.__hasNode === false')
+      const preferences = preview.getLastWebPreferences()
+      return {
+        id: preview.id,
+        rendererPid: preview.getOSProcessId(),
+        isolated,
+        sandbox: preferences?.sandbox,
+        contextIsolation: preferences?.contextIsolation,
+        node: preferences?.nodeIntegration,
+      }
+    }, `http://127.0.0.1:${portA}/`)
+    const { id: previewId, rendererPid, ...security } = target
+    assert.deepEqual(security, { isolated: true, sandbox: true, contextIsolation: true, node: false })
+    await assertPackagedRendererSandbox(rendererPid)
 
     // Navigate to /page2, then Back and Forward
     await page.getByTestId('browser-url-input').fill(`http://127.0.0.1:${portA}/page2`)
@@ -131,7 +149,9 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
 
     // Console redaction: severity/timestamp only, never raw secret string
     await page.getByTestId('browser-console-btn').click()
-    const consoleText = await page.getByTestId('browser-console-panel').innerText()
+    const consolePanel = page.getByTestId('browser-console-panel')
+    await consolePanel.getByText(/redacted untrusted output/).first().waitFor()
+    const consoleText = await consolePanel.innerText()
     assert.equal(consoleText.includes('secret_token_should_never_appear'), false)
 
     // Unsafe scheme & cross-origin redirect blocked
@@ -141,15 +161,17 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
 
     await page.getByTestId('browser-url-input').fill(`http://127.0.0.1:${portA}/redirect-other`)
     await page.getByTestId('browser-go-btn').click()
-    await page.waitForSelector('[data-testid="browser-error-banner"]')
+    await page.getByTestId('browser-error-banner').getByText(/redirect|navigation|could not be loaded/i).waitFor()
+    assert.equal(blockedOriginRequests, 0)
 
-    // Switch back to Overview and confirm clean hide
+    // Hiding Browser must detach the overlay from the visible panel.
     await page.getByTestId('workspace-tab-overview').click()
-    await page.waitForSelector('text=Live computer')
+    await page.getByText('Live computer', { exact: false }).waitFor()
+    await page.getByTestId('workspace-tab-browser').click()
+    await page.getByRole('button', { name: 'Close browser tab 1' }).click()
+    await page.getByTestId('browser-tab-0').waitFor({ state: 'detached' })
+    assert.equal(await app.evaluate(({ webContents }, id) => webContents.fromId(id) == null, previewId), true)
   } finally {
     await app.close()
-    await rm(dataDir, { recursive: true, force: true })
-    serverA.close()
-    serverB.close()
   }
 })

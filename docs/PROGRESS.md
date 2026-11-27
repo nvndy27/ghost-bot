@@ -1,5 +1,11 @@
 # Progress log
 
+## Alpha.2G Workspace convergence
+
+**Tested** on the provisional `integration/alpha2g-workspace` stack. Main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f` and PRs #33, #35, #36, #39, and #43 are preserved by ancestry. Fixed Output cancellation wiring and polling, protected output state across context switches, and updated the shell and discovery tests for the integrated surface. CI targets Ubuntu 24.04 with the required Bubblewrap and Poppler behavior. The six Alpha.3 Workspace scenarios now accept a real packaged executable and assert Linux renderer sandboxing, offline daemon startup and mock runtime availability. See [evidence and commands](extensions/alpha2g-workspace-convergence.md).
+
+Stage, unstage and revert remain **Blocked**. The Git lock probe confirmed cooperating index exclusion while the working tree and HEAD remained independently writable. PR #42 received a [targeted Changes requested review](https://github.com/nvndy27/ghost-bot/pull/42#issuecomment-7217776424) at `ca8e951636828c59739b3e172a22f3885612fe1f`. New private binding, routing and scoped cancellation fixtures passed. An older Alpha.1D restart fixture fails against the reserved delegation boundary. Agent 1 owns that follow-up.
+
 ## Alpha.2D.2 Git mutations
 
 **Blocked** for stage, unstage and revert on the provisional PR #39 base `963dde64c02f6f4287221a705aa438081b194203`. Changes shows disabled mutation controls and the reason. Dedicated daemon admission rejects Git write authorization and dispatch regardless of read or Files write grants. Renderer IPC carries only inspection and cancellation. Refresh rereads the repository in the existing read-only sandbox. The UI reports acknowledged, inactive or unconfirmed inspection cancellation.

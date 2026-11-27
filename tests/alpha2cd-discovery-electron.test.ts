@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 
 function pdf() {
   const stream = '0 0 30 20 re f\n'
@@ -28,12 +28,7 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
   await mkdir(workspace)
   await writeFile(join(workspace, 'notes.md'), '# Review\nThis is the fixture needle.\n')
   await writeFile(join(workspace, 'page.pdf'), pdf())
-  const desktop = join(process.cwd(), 'apps', 'desktop')
-  const app = await electron.launch({
-    executablePath: join(desktop, 'node_modules', '.bin', 'electron'),
-    args: [join(desktop, 'dist-electron', 'main.js')], cwd: desktop,
-    env: { ...process.env, GHOST_BOT_DATA_DIR: data, GHOST_BOT_RUNTIME_MODE: 'mock', GHOST_BOT_SMOKE_EXIT: '0' },
-  })
+  const app = await launchWorkspaceElectron(data)
   try {
     const page = await app.firstWindow()
     const botId = await page.evaluate(async (root) => {
@@ -51,7 +46,7 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
     const search = page.getByRole('searchbox', { name: 'Search workspace' })
     await search.fill('notes')
     await search.press('Enter')
-    await page.getByRole('button', { name: 'notes.md', exact: true }).waitFor()
+    await page.getByRole('listitem').getByRole('button', { name: 'notes.md', exact: true }).waitFor()
     await page.getByRole('combobox', { name: 'Search scope' }).selectOption('content')
     await search.fill('needle')
     await search.press('Enter')

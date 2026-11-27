@@ -37,6 +37,7 @@ export function WorkspaceOutputTab({
   const [copied, setCopied] = useState(false)
 
   const epochRef = useRef(0)
+  const mountedRef = useRef(false)
   const streamRef = useRef<HTMLDivElement | null>(null)
 
   const loadOutput = useCallback(async () => {
@@ -63,12 +64,12 @@ export function WorkspaceOutputTab({
   }, [bridge, contextKind, ownerId, supported])
 
   useEffect(() => {
-    setRunFilter('all')
-    setSourceFilter('all')
-    setSeverityFilter('all')
-    setSearchQuery('')
-    setClearedAt(null)
+    mountedRef.current = true
     void loadOutput()
+    return () => {
+      mountedRef.current = false
+      epochRef.current += 1
+    }
   }, [contextKey, loadOutput])
 
   const hasRunning = Boolean(data?.runs.some((r) => r.status === 'running'))
@@ -145,14 +146,15 @@ export function WorkspaceOutputTab({
       await bridge.cancelWorkspaceOutput({
         botId: ownerId,
         runId: entry.runId,
+        sessionId: entry.sessionId ?? undefined,
         terminalCommandId:
           entry.source === 'terminal' || entry.source === 'build'
             ? entry.taskId ?? undefined
             : undefined,
       })
-      await loadOutput()
+      if (mountedRef.current) await loadOutput()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Cancellation failed.')
+      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Cancellation failed.')
     }
   }
 

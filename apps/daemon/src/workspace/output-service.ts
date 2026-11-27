@@ -67,6 +67,8 @@ function mapRunStatus(
     case 'running':
     case 'awaiting_approval':
       return { status: 'running', cancellable: true }
+    case 'cancelling':
+      return { status: 'running', cancellable: false }
     case 'completed':
       return { status: 'completed', cancellable: false }
     case 'cancelled':

@@ -8,7 +8,9 @@
 - The Alpha.2A/B candidate exposes personal workspace list and read after native directory confirmation. Read grants expire when the daemon stops or the bot authorization changes. Group filesystem access requires an authorized task scope.
 - The PR #39 checkpoint allows native-granted personal Workspace mode to save text and create empty files/folders on Linux. Save performs bounded verification after atomic replacement. External processes can race POSIX namespace operations. Non-empty creation needs descriptor-bound publication and cleanup. Rename and delete need source identity guarantees, and delete also needs safe quarantine creation and recovery. Existing quarantine entries stay recoverable. Ask Approval and group writes remain gated.
 - Alpha.2D.2 Git writes are unavailable. Snapshot inspection is read-only. Real index publication needs to preserve external index and lock changes and validate the approved revision at publication. Reverting a working-tree file also needs a safe expected-revision replacement.
-- Final Personal & Friends Alpha integrated packaging, platform, and remaining live acceptance gates are open.
+- Alpha.2G Workspace package acceptance is scoped to Fedora desktop fixtures and the offline mock runtime. Installed RPM launcher, AppImage FUSE path, Ubuntu desktop packaging, public browser networking and live runtime checks require separate evidence.
+- Group integrity PR #42 prevents new split private bindings and fails closed on legacy orphan metadata. The stacked Alpha.1D restart fixture needs to exercise the reserved private delegation path. Alpha.1 integration remains separate from Workspace.
+- Final Personal & Friends Alpha platform and live acceptance gates are open.
 
 ## Alpha.1A limits
 

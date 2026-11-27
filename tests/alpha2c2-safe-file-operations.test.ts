@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
 import { DaemonError } from '../apps/daemon/src/errors.ts'
 import { WorkspaceFilesService } from '../apps/daemon/src/workspace/files-service.ts'
@@ -202,18 +202,7 @@ test('Alpha.2C.2 Electron E2E: native consent, create, save, watch, dirty draft 
   await mkdir(ws, { recursive: true })
   await writeFile(join(ws, 'readme.txt'), 'initial\n', 'utf8')
 
-  const desktop = join(process.cwd(), 'apps', 'desktop')
-  const app = await electron.launch({
-    executablePath: join(desktop, 'node_modules', '.bin', 'electron'),
-    args: [join(desktop, 'dist-electron', 'main.js')],
-    cwd: desktop,
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_BOT_SMOKE_EXIT: '0',
-    },
-  })
+  const app = await launchWorkspaceElectron(dataDir)
 
   try {
     const page = await app.firstWindow()

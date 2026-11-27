@@ -1878,6 +1878,7 @@ export class GhostBotDaemon {
           return
         }
         if (url.pathname === '/workspace/output/cancel') {
+          const orchestrator = this.runOrchestrator
           const body = await readJsonBody(req)
           const result = await workspaceOutput.cancelExecution(body, {
             cancelRun: async (runId) => {

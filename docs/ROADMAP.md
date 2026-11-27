@@ -40,6 +40,8 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Candidate libraries (not mandatory until justified against current lockfile/architecture): Monaco Editor, Chokidar, Git CLI, Ripgrep, Electron WebContentsView, optional Dockview, PDF.js and safe Markdown renderer. Avoid unnecessary dependencies; verify licenses, packaging and security.
 - Gate: actual file/diff/live-preview/output vertical slices through validated IPC, workspace isolation and write-conflict tests, browser isolation and loopback fixture tests, no regression in existing Overview/Team/Computer Use/approval behavior, no fake production data, responsive panel layout and keyboard access.
 
+- **Tested** — Alpha.2G integrates all five Workspace tabs with native grant and restart coverage on the provisional integration branch. See [convergence and package acceptance](extensions/alpha2g-workspace-convergence.md). Hosted CI and independent acceptance remain pending.
+
 ### Alpha.3 — Personal & Friends Alpha release acceptance
 - **Not Started** — Integrate Alpha.0–2 after review on the accepted baseline. Existing migrations `0001–0013` are immutable; any schema change must use a coordinated forward migration, tested fresh/upgrade/restart/rollback. Do not bypass the existing policy broker, authenticated daemon, sandbox, approvals, or provider-specific gates.
 - Two-agent parallel work is permitted only after agreeing contracts and ownership: separate worktrees/branches; one owner for shared IPC, schema/migration allocation and desktop shell integration; independent review and draft PRs; never edit the other agent's uncommitted work or auto-merge main. Keep existing assignments until explicitly changed.
