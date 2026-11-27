@@ -1,5 +1,9 @@
 # Progress log
 
+## Alpha.2C.1 shared discovery integration
+
+**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance is pending with Agent 2. Reconcile against accepted main before merge. Zero live inference.
+
 ## Shared baseline convergence
 
 **Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Agent 2 accepted the implementation at `78d0822` and requested targeted acceptance after bringing in current main. The reconciliation preserves both documentation histories and the newer main changes. See the [combined evidence](extensions/alpha-shared-convergence.md).
@@ -7,6 +11,17 @@
 ## Alpha.1A — Bot and Conversation Management
 
 **Tested** on post-UI.1 main. Continued from `290d956` and fixed legacy workspace path handling for provider edits, explicit bot navigation read state and conversation paging. Focused tests passed 3/3, database and Teams regressions 8/8, and the offline two-launch Electron scenario passed. Zero live inference. See [Alpha.1A scope and evidence](extensions/alpha1a-bot-conversation-management.md).
+## Alpha.2C.1 — Workspace search and previews
+
+The maintainer authorized the read-only feature branch from `c91ebcba34a9308ce5e3645417f5afaacd56e472` (PR #19). Workspace-owned modules implement descriptor-relative name and text search, matching-line navigation, preview loading, Markdown text rendering, sanitized SVG and bounded static PNG/GIF data, isolated PDF rasterization, and a draft insertion callback. Search limits are 8 levels, 96 directory visits, 4,000 scanned entries, 600 files, 100 results, 64 KiB per text file and a 2.5-second cooperative deadline. An in-flight filesystem operation completes before the deadline or cancellation can be observed. Preview inputs are capped at 1 MiB, with a lower SVG limit and a raster pixel limit.
+
+Agent 1 owns shared DTOs, daemon grant checks and route registration, preload/main, and draft insertion. The workspace UI reports the integration as unavailable until those capabilities are wired. PDF rasterization runs through fixed system Poppler commands in Bubblewrap with separate network and PID namespaces, read-only system runtime files and fonts, an empty environment and no workspace or home bind. The process receives at most 1 MiB on stdin. Each job is limited to 20 source pages, one 1000-pixel page and 1 MiB output, a shared three-second wall deadline, and one concurrent job. The sandbox child also has CPU, address-space, file-size and descriptor limits. Missing runtime or isolation fails closed. Save, create, rename, delete and group filesystem access stay gated.
+
+| State | Evidence |
+|---|---|
+| Tested | Three isolated discovery tests passed. They cover filename and text results, matching lines, search bounds, cancellation, stale context, sensitive files, validated raster input and missing preview files. The continuation adds real sandboxed Poppler fixtures, operation grant and cancellation tests, and raster admission tests for animation, compressed metadata and oversized frames. |
+| Tested | Seven scoped Electron and daemon IPC baseline checks passed, including read-only file opening and the Alpha.2C.1 unavailable UI without shared wiring. Lint, recursive typecheck and recursive build passed. |
+| Blocked | Integrated search, preview, cancellation and composer acceptance require Agent 1's shared wiring and the refreshed convergence baseline. PDF is verified at the workspace module boundary on the recorded host, and end-to-end preview acceptance is pending. |
 
 ## Alpha.2A–B — Shared Workspace Integration
 

@@ -14,6 +14,7 @@ import { MOCK_ROUTINES, MOCK_TOOLS } from '../data/mockWorkspace.ts'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { WorkspacePanelShell } from './WorkspacePanelShell.tsx'
+import type { WorkspaceDraftSelection } from './workspace/workspaceDiscoveryClient.ts'
 import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
 import type { WorkspaceTabId } from './workspace/workspaceTabs.ts'
 
@@ -28,6 +29,7 @@ export interface RightPanelProps {
   activeTab?: WorkspaceTabId
   onTabChange?: (tab: WorkspaceTabId) => void
   filesTransport?: WorkspaceFilesTransport | null
+  onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
   onOpenRoutines?: () => void
   onOpenComputerUse?: () => void
   onOpenTerminal?: () => void
@@ -47,6 +49,7 @@ export function RightPanel({
   activeTab,
   onTabChange,
   filesTransport,
+  onAddSelectionToDraft,
   onOpenRoutines,
   onOpenComputerUse,
   onOpenTerminal,
@@ -355,6 +358,7 @@ export function RightPanel({
       onCollapse={onCollapse}
       overviewContent={overviewContent}
       filesTransport={filesTransport}
+      onAddSelectionToDraft={onAddSelectionToDraft}
     />
   )
 }

@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +17,9 @@ import {
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
   ProviderSummarySchema,
+  WorkspaceContextIpcResponseSchema,
+  WorkspaceSearchResultSchema,
+  WorkspacePreviewResultSchema,
 } from '../packages/shared-types/ipc.ts'
 
 function requestSocket(
@@ -23,6 +27,7 @@ function requestSocket(
   path: string,
   token?: string,
   payload?: unknown,
+  method = payload === undefined ? 'GET' : 'POST',
 ): Promise<{ status: number; body: unknown }> {
   const encoded = payload === undefined ? undefined : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
@@ -30,7 +35,7 @@ function requestSocket(
       {
         socketPath,
         path,
-        method: encoded === undefined ? 'GET' : 'POST',
+        method,
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(encoded === undefined ? {} : {
@@ -95,6 +100,43 @@ test('daemon rejects weak authToken and unauthenticated requests', async () => {
   } finally {
     await daemon.stop()
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('workspace discovery routes require and revalidate the native personal grant', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ghost-discovery-ipc-'))
+  const socket = join(root, 'daemon.sock')
+  const token = randomUUID()
+  const daemon = new GhostBotDaemon({ authToken: token, socketPath: socket, dataDir: join(root, 'data'), runtimeMode: 'mock' })
+  try {
+    await daemon.start()
+    await writeFile(join(root, 'notes.md'), '# Searchable fixture')
+    const request = (route: string, payload: unknown, method = 'POST') => requestSocket(socket, route, token, payload, method)
+    assert.equal((await request('/bots/chief', { workspacePath: root }, 'PATCH')).status, 200)
+    const contextReply = await request('/workspace/context', { botId: 'chief' })
+    const context = WorkspaceContextIpcResponseSchema.parse(contextReply.body)
+    assert.ok(context.workspaceId)
+    const scope = { botId: 'chief', workspaceId: context.workspaceId }
+    const beforeConsent = { ...scope, authGeneration: 'unknown', operationId: randomUUID() }
+    assert.equal((await request('/workspace/search', { ...beforeConsent, mode: 'content', query: 'Searchable' })).status, 403)
+    assert.equal((await request('/workspace/authorize-read', { ...scope, selectedRoot: root })).status, 200)
+    const authorized = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', { botId: 'chief' })).body)
+    assert.ok(authorized.authGeneration)
+    const input = { ...scope, authGeneration: authorized.authGeneration, operationId: randomUUID() }
+    const search = await request('/workspace/search', { ...input, mode: 'content', query: 'Searchable' })
+    assert.equal(search.status, 200)
+    assert.equal(WorkspaceSearchResultSchema.parse(search.body).results[0]?.relativePath, 'notes.md')
+    const preview = await request('/workspace/preview', { ...input, relativePath: 'notes.md' })
+    assert.equal(preview.status, 200)
+    assert.equal(WorkspacePreviewResultSchema.parse(preview.body).preview.kind, 'markdown')
+    assert.equal((await request('/workspace/cancel-discovery', input)).body, false)
+    assert.equal((await request('/workspace/search', { ...input, teamId: 'team-fixture', mode: 'content', query: 'Searchable' })).status, 400)
+    assert.equal((await request('/bots/chief', { permission: 'read-only' }, 'PATCH')).status, 200)
+    assert.equal((await request('/workspace/cancel-discovery', input)).status, 403)
+    assert.equal((await request('/workspace/preview', { ...input, relativePath: 'notes.md' })).status, 403)
+  } finally {
+    await daemon.stop()
+    await rm(root, { recursive: true, force: true })
   }
 })
 

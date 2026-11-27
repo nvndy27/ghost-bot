@@ -110,6 +110,11 @@ import {
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceListDirectoryIpcResponseSchema,
   WorkspaceReadFileIpcInputSchema,
+  WorkspaceDiscoveryOperationSchema,
+  WorkspacePreviewInputSchema,
+  WorkspacePreviewResultSchema,
+  WorkspaceSearchInputSchema,
+  WorkspaceSearchResultSchema,
   WorkspaceReadFileIpcResponseSchema,
   WorkspaceSaveFileIpcInputSchema,
   WorkspaceSaveFileIpcResponseSchema,
@@ -568,6 +573,30 @@ function registerIpcHandlers(): void {
     return queryDaemon('/workspace/list', WorkspaceListDirectoryIpcResponseSchema, {
       method: 'POST',
       body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_SEARCH, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/search', WorkspaceSearchResultSchema, {
+      method: 'POST',
+      body: WorkspaceSearchInputSchema.parse(params),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_PREVIEW, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/preview', WorkspacePreviewResultSchema, {
+      method: 'POST',
+      body: WorkspacePreviewInputSchema.parse(params),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_CANCEL_DISCOVERY, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/cancel-discovery', z.boolean(), {
+      method: 'POST',
+      body: WorkspaceDiscoveryOperationSchema.parse(params),
     })
   })
 
