@@ -7,6 +7,8 @@
 
 - Alpha.2C.1 search, preview and chat draft insertion require Agent 1 shared IPC and composer integration. PDF previews require compatible host Poppler, prlimit and Bubblewrap with isolated user and network namespaces. Preview is unavailable when those capabilities cannot be established.
 
+- Read-only Git Changes requires an isolated Linux runtime and an ordinary local repository at the granted root. Linked, redirected and oversized repositories fail closed. Packaging support awaits Alpha.3 verification.
+
 ## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.
