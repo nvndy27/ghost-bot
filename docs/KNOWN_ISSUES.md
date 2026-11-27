@@ -71,3 +71,7 @@ CI, CodeQL, Scorecard, Dependabot and dependency-graph SBOM export are configure
 
 **Tested** — Run `46045474681` observed a disabled Save button before persistence completed. PR #47 now waits for the acknowledged clean state. The focused scenario and daemon-paused reproduction pass with the correction. Hosted complete-suite verification remains pending for this updated head. Existing final-package acceptance gaps still apply.
 Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM and repository settings retain their own verification requirements. OpenSSF Best Practices and REUSE compliance have not been achieved. A graph SBOM is not a complete packaged-binary SBOM or legal attribution inventory.
+
+## Alpha.4B visual integration dependencies
+
+**In Progress** — Workspace consumes A1 shared tokens at `85f4b7f`. Global App/settings still use the previous 285px default and 420px cap. Reference 400px default, 65 percent cap and mobile shell behavior need coordinated A1 App/settings work. `RightPanel.onOpenTools` awaits App wiring. Actual quota is retained only in collapsed runtime details pending the shared Usage Center. Screenshots use real mock-runtime state and explicitly synthetic files. Maintainer visual approval is pending. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).

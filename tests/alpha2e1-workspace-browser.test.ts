@@ -118,6 +118,33 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
     assert.deepEqual(security, { isolated: true, sandbox: true, contextIsolation: true, node: false })
     await assertPackagedRendererSandbox(rendererPid)
 
+    // Renderer overlays must occlude native views without destroying the isolated session.
+    await page.evaluate(() => {
+      const dialog = document.createElement('div')
+      dialog.role = 'dialog'
+      dialog.id = 'workspace-overlay-fixture'
+      dialog.textContent = 'Synthetic overlay fixture'
+      document.body.append(dialog)
+    })
+    await page.waitForFunction(async () => {
+      const state = await window.ghostBot!.workspaceBrowserCommand({ kind: 'state' })
+      return state.tabs.length === 1
+    })
+    const attached = () => app.evaluate(({ BrowserWindow }, id) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      return window.contentView.children.some((view) =>
+        'webContents' in view && (view.webContents as { id: number }).id === id && view.getVisible())
+    }, previewId)
+    for (let attempt = 0; attempt < 100 && await attached(); attempt++) {
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    }
+    assert.equal(await attached(), false)
+    await page.evaluate(() => document.getElementById('workspace-overlay-fixture')?.remove())
+    for (let attempt = 0; attempt < 100 && !await attached(); attempt++) {
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    }
+    assert.equal(await attached(), true)
+
     // Navigate to /page2, then Back and Forward
     await page.getByTestId('browser-url-input').fill(`http://127.0.0.1:${portA}/page2`)
     await page.getByTestId('browser-go-btn').click()
@@ -131,9 +158,9 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
 
     // Viewport toggle (Desktop -> Mobile -> Desktop)
     await page.getByTestId('browser-viewport-btn').click()
-    await page.waitForFunction(() => document.querySelector('[data-testid="browser-viewport-btn"]')?.textContent === 'Mobile')
+    await page.waitForFunction(() => document.querySelector('[data-testid="browser-viewport-btn"]')?.getAttribute('aria-pressed') === 'true')
     await page.getByTestId('browser-viewport-btn').click()
-    await page.waitForFunction(() => document.querySelector('[data-testid="browser-viewport-btn"]')?.textContent === 'Desktop')
+    await page.waitForFunction(() => document.querySelector('[data-testid="browser-viewport-btn"]')?.getAttribute('aria-pressed') === 'false')
 
     // Screenshot capture
     await page.getByTestId('browser-screenshot-btn').click()
@@ -166,7 +193,7 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
 
     // Hiding Browser must detach the overlay from the visible panel.
     await page.getByTestId('workspace-tab-overview').click()
-    await page.getByText('Live computer', { exact: false }).waitFor()
+    await page.getByRole('button', { name: 'Open Live Viewer', exact: true }).waitFor()
     await page.getByTestId('workspace-tab-browser').click()
     await page.getByRole('button', { name: 'Close browser tab 1' }).click()
     await page.getByTestId('browser-tab-0').waitFor({ state: 'detached' })

@@ -59,12 +59,13 @@ export function TeamRightPanel({
   const maxDurationMs = asNumber(team.bounds.maxDurationMs)
   const maxConcurrent = asNumber(team.bounds.maxConcurrentTasks)
 
+  const currentTask = tasks.find((task) => task.status === 'running' || task.status === 'awaiting_approval')
   const runStatus = activeRun ? asString(activeRun.status, 'unknown') : 'idle'
   const quarantineReason = diagnostics ? asString(diagnostics.quarantineReason, '') : ''
   const cancellationState = diagnostics ? asString(diagnostics.cancellationState, '') : ''
 
   const overview = (
-    <section aria-label="Team activity panel">
+    <section className="gb-workspace-overview" aria-label="Team activity panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="gb-section-label gb-icon-inline" style={{ margin: 0 }}>
           <Activity size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -92,7 +93,7 @@ export function TeamRightPanel({
                 {bot && <BotAvatar config={bot.avatar} status="idle" size={22} />}
                 <div className="gb-overview-member-label">
                   <span title={name}>{name}</span>
-                  <small className="gb-muted" title={metadata}>{metadata}</small>
+                  <small className="gb-muted" title={metadata}>{bot?.statusLabel ?? 'Unavailable'}</small>
                 </div>
               </div>
             )
@@ -102,24 +103,30 @@ export function TeamRightPanel({
 
       <div className="gb-team-overview-section" style={{ display: 'grid', gap: 6, fontSize: 12 }}>
         <div className="gb-section-label" style={{ margin: 0 }}>
-          Task Progress & Concurrency
+          Task progress
         </div>
+        <div className="gb-overview-metrics">
+          <div><strong>{counts.active}</strong><span>Active</span></div>
+          <div><strong>{counts.queued}</strong><span>Queued</span></div>
+          <div><strong>{counts.completed}</strong><span>Done</span></div>
+        </div>
+      </div>
+
+      <div className="gb-team-overview-section">
+        <div className="gb-section-label">Current task</div>
+        <p className="gb-muted">{currentTask ? asString(currentTask.title, asString(currentTask.id, 'Unavailable')) : 'No active task.'}</p>
+      </div>
+      <details className="gb-team-overview-section">
+        <summary>Budget, concurrency & diagnostics</summary>
+        {team.memberBotIds.map((id) => {
+          const bot = botById.get(id)
+          return <p key={id} className="gb-muted">{bot?.name ?? id} · {bot ? `${bot.modelId} default · ${bot.permission}` : 'Unavailable'}</p>
+        })}
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="gb-muted">Run status</span>
           <strong>{runStatus}</strong>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span className="gb-muted">Active / Queued</span>
-          <span>
-            {counts.active} / {counts.queued}
-          </span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span className="gb-muted">Completed / Blocked</span>
-          <span>
-            {counts.completed} / {counts.blocked}
-          </span>
-        </div>
+        <div className="gb-muted">Blocked {counts.blocked}</div>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="gb-muted">Uncertain</span>
           <span>{counts.uncertain}</span>
@@ -128,10 +135,6 @@ export function TeamRightPanel({
           <span className="gb-muted">Concurrency limit</span>
           <span>{maxConcurrent ?? '—'}</span>
         </div>
-      </div>
-
-      <details className="gb-team-overview-section">
-        <summary>Budget and usage details</summary>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="gb-muted">Estimated token cap</span>
           <span>{maxTokens !== null ? maxTokens.toLocaleString() : '—'}</span>
