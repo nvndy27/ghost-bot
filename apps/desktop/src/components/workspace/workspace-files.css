@@ -82,12 +82,12 @@
 }
 
 .gb-tree-item:hover:not(:disabled) {
-  background: var(--gb-panel);
+  background: var(--gb-surface-hover);
   border-color: var(--gb-border);
 }
 
 .gb-tree-item[aria-current='true'] {
-  background: var(--gb-panel);
+  background: var(--gb-surface-active);
   border-color: transparent;
   font-weight: 500;
 }
@@ -135,7 +135,7 @@
 }
 
 .gb-editor-tab.active {
-  background: var(--gb-panel);
+  background: var(--gb-surface);
   border-color: transparent;
   box-shadow: inset 0 -2px var(--gb-muted);
   color: var(--gb-text);

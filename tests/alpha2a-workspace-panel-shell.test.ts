@@ -196,7 +196,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       await tablist.getByRole('tab', { name: 'Output', exact: true }).click()
       await shell.getByTestId('workspace-output-tab').waitFor()
       assert.equal(await tablist.getByRole('tab', { name: 'Output', exact: true }).getAttribute('aria-selected'), 'true')
-      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(250, 249, 246)'
+      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(253, 253, 252)'
       await page.waitForFunction(({ theme, expectedBackground }) => {
         const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
         return panel?.getBoundingClientRect().width === 220 &&

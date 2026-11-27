@@ -17,13 +17,15 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
   try {
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 1440, height: 900 })
+    await page.getByRole('option').filter({ hasText: 'Developer' }).click()
     await page.evaluate(async (root) => {
       const bridge = window.ghostBot!
       const { activeBotId } = await bridge.listBots()
-      assertDefined(activeBotId)
+      if (!activeBotId) throw new Error('Missing fixture bot')
       await bridge.updateBot({ id: activeBotId!, patch: { workspacePath: root, permission: 'workspace' } })
-      function assertDefined(value: unknown) { if (!value) throw new Error('Missing fixture bot') }
     }, workspace)
+    await page.reload()
+    await page.getByRole('option').filter({ hasText: 'Developer' }).waitFor()
     const shell = page.getByTestId('workspace-panel-shell')
     const resize = page.getByRole('separator', { name: 'Resize right workspace panel' })
     const setWidth = async (width: number) => {
@@ -66,6 +68,8 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     for (const theme of ['dark', 'light', 'system']) {
       await page.getByRole('button', { name: 'Open Settings' }).click()
       await page.getByLabel('Theme').selectOption(theme)
+      await page.waitForFunction((expected) => document.documentElement.dataset.theme ===
+        (expected === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : expected), theme)
       await page.keyboard.press('Escape')
       for (const tab of ['overview', 'files', 'changes', 'browser', 'output']) {
         await page.getByTestId('workspace-tab-' + tab).click()
@@ -102,6 +106,27 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await capture('files-maximized')
     await page.getByTestId('workspace-maximize-btn').click()
     assert.equal(await page.locator('.gb-center').isVisible(), true)
+    await page.evaluate(async () => {
+      const bridge = window.ghostBot!
+      const { bots } = await bridge.listBots()
+      await bridge.createTeam({ name: 'Workspace UI fixture team', leadBotId: bots[0].id,
+        memberBotIds: [bots[0].id, bots[1].id] })
+    })
+    await page.reload()
+    await page.locator('[data-team-id] .gb-team-item').filter({ hasText: 'Workspace UI fixture team' }).click()
+    await setWidth(400)
+    await page.getByTestId('workspace-tab-overview').click()
+    await page.getByLabel('Team activity panel').waitFor()
+    for (const theme of ['dark', 'light']) {
+      await page.getByRole('button', { name: 'Open Settings' }).click()
+      await page.getByLabel('Theme').selectOption(theme)
+      await page.waitForFunction((expected) => document.documentElement.dataset.theme ===
+        (expected === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : expected), theme)
+      await page.keyboard.press('Escape')
+      await capture('team-overview-' + theme + '-1440x900')
+    }
+    await page.getByTestId('workspace-tab-files').click()
+    await page.getByText('Group workspace requires an authorized task scope', { exact: false }).waitFor()
   } finally {
     await app.close()
     await rm(data, { recursive: true, force: true })

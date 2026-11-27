@@ -127,10 +127,10 @@ export function WorkspacePanelShell({
           <strong className="gb-workspace-title">{title}</strong>
         </div>
         <div className="gb-workspace-actions">
-          <IconButton label="Open Live Viewer" onClick={onOpenComputerUse}
+          {contextKind === 'bot' && <IconButton label="Open Live Viewer" onClick={onOpenComputerUse}
             disabled={!onOpenComputerUse}>
             <Monitor size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          </IconButton>
+          </IconButton>}
           <button
             ref={maximizeBtnRef}
             type="button"
