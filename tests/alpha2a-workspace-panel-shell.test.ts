@@ -278,6 +278,13 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.evaluate(async ({ id, workspacePath }) => {
       await window.ghostBot!.updateBot({ id, patch: { workspacePath } })
     }, { id: original.botId, workspacePath: workspace })
+    const restoredContext = await page.evaluate((botId) => (
+      window.ghostBot!.resolveWorkspaceContext({ botId })
+    ), original.botId)
+    assert.equal(restoredContext.authorized, false, 'Restoring a root must not revive the old grant')
+    await page.reload()
+    await authorize.click()
+    await page.getByTestId('workspace-tree-entry-sample.txt').waitFor()
     await app.close()
     app = await launch()
     const restartedPage = await app.firstWindow()

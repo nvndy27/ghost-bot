@@ -744,6 +744,8 @@ export async function saveContainedTextFile(
       stagedEntry.dev !== rootDev ||
       stagedEntry.ino !== stagedStat.ino ||
       stagedEntry.size !== nextBytes.length ||
+      stagedEntry.ctimeMs !== stagedStat.ctimeMs ||
+      stagedEntry.mtimeMs !== stagedStat.mtimeMs ||
       (stagedEntry.mode & 0o777) !== origMode ||
       Buffer.compare(stagedBytes, nextBytes) !== 0
     ) {

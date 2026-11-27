@@ -579,6 +579,46 @@ test('Alpha.2B.1 Final Closure: cross-bot physical file serialization, external 
   }
 })
 
+test('Alpha.2B staged content and entry tampering leave the target untouched', async () => {
+  const ctx = await createTempDaemonAndWorkspaces()
+  try {
+    const botId = 'bot-ws1'
+    const context = await ctx.service.resolveContext({ botId })
+    assert.ok(context.workspaceId && context.authGeneration)
+    const target = {
+      botId,
+      workspaceId: context.workspaceId,
+      authGeneration: context.authGeneration,
+      relativePath: 'README.md',
+    }
+    const initial = await ctx.service.readFile(target)
+
+    for (const replaceEntry of [false, true]) {
+      let stagedPath = ''
+      await assert.rejects(
+        ctx.service.saveFile({ ...target, content: 'staged', expectedRevision: initial.revision }, {
+          onBeforeCommit: async () => {
+            const stage = (await readdir(ctx.ws1)).find((name) => name.startsWith('.ghost-tmp-'))
+            assert.ok(stage)
+            stagedPath = join(ctx.ws1, stage)
+            if (replaceEntry) await fsRename(stagedPath, join(ctx.ws1, 'displaced-stage'))
+            await writeFile(stagedPath, 'edited')
+          },
+        }),
+        (err: unknown) => err instanceof DaemonError && err.code === 'STAGED_FILE_INVALID',
+      )
+      assert.equal(await readFile(join(ctx.ws1, target.relativePath), 'utf8'), initial.content)
+      if (replaceEntry) {
+        assert.equal(await readFile(stagedPath, 'utf8'), 'edited')
+      } else {
+        await assert.rejects(stat(stagedPath), { code: 'ENOENT' })
+      }
+    }
+  } finally {
+    await ctx.cleanup()
+  }
+})
+
 test('Alpha.2B.1 A2B-FS-03: raw traversal segments rejected & whitespace filenames supported', async () => {
   const ctx = await createTempDaemonAndWorkspaces()
   try {

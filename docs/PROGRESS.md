@@ -2,6 +2,8 @@
 
 ## Alpha.2A–B — Shared Workspace Integration
 
+The integration branch preserves the merge at `d3dc3c3`. The reconciliation follow-up binds native read grants to the bot, workspace identity, and current authorization generation. A workspace or permission change clears the grant. The staged save service checks the pinned inode, staged entry metadata, and bytes before rename. Regression coverage includes restoring a prior root, replacing the stage entry, and modifying staged bytes without changing their length. See the coordination handoff for the exact tested revision and acceptance results.
+
 The integration candidate joins the accepted UI.1 baseline `3ce8c3f6f7dcc925461010dab1ffa0f729562e00` with PR #18 at `9a0e07ec3e20cd036785b256f81d77d258f3f8a2`, which already includes PR #16 at `821d5d1a0a64d3b14c4f5d9757be3fc0d91d1c8b`.
 
 | State | Evidence |

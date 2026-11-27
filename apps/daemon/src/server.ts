@@ -207,7 +207,7 @@ export class GhostBotDaemon {
   private computerUseService: ComputerUseService | null = null
   private terminalService: ScopedTerminalService | null = null
   private skillsService: LocalSkillsService | null = null
-  private readonly workspaceReadGrants = new Map<string, string>()
+  private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
@@ -1644,6 +1644,9 @@ export class GhostBotDaemon {
             })
           }
           const updatedBot = await repo.updateBot(parsed.data)
+          if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
+            this.workspaceReadGrants.delete(idCheck.data)
+          }
           if (parsed.data.patch.permission === 'read-only' || parsed.data.patch.workspacePath) {
             await this.terminalService?.revokeByBotId(idCheck.data, 'bot_policy_updated').catch(() => {})
           }
@@ -1661,6 +1664,7 @@ export class GhostBotDaemon {
               }
             },
           })
+          this.workspaceReadGrants.delete(idCheck.data)
           await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
@@ -1710,6 +1714,7 @@ export class GhostBotDaemon {
           if (
             !context.authorized ||
             context.workspaceId !== workspaceId ||
+            !context.authGeneration ||
             !root ||
             root !== context.canonicalRoot
           ) {
@@ -1717,7 +1722,7 @@ export class GhostBotDaemon {
               statusCode: 403,
             })
           }
-          this.workspaceReadGrants.set(botId, workspaceId)
+          this.workspaceReadGrants.set(botId, { workspaceId, authGeneration: context.authGeneration })
           sendJson(res, 200, true)
           return
         }
@@ -1730,9 +1735,11 @@ export class GhostBotDaemon {
             })
           }
           const context = await this.workspaceFilesService.resolveContext(selector)
+          const grant = this.workspaceReadGrants.get(context.ownerId)
           const authorized = context.authorized &&
-            context.workspaceId !== null &&
-            this.workspaceReadGrants.get(context.ownerId) === context.workspaceId
+            grant !== undefined &&
+            grant.workspaceId === context.workspaceId &&
+            grant.authGeneration === context.authGeneration
           sendJson(res, 200, {
             ...context,
             authorized,
@@ -1749,8 +1756,9 @@ export class GhostBotDaemon {
               statusCode: 403,
             })
           }
-          if (!input.botId || this.workspaceReadGrants.get(input.botId) !== input.workspaceId) {
-            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Allow read access to this bot workspace', {
+          const grant = input.botId ? this.workspaceReadGrants.get(input.botId) : undefined
+          if (grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
               statusCode: 403,
             })
           }
@@ -1765,8 +1773,9 @@ export class GhostBotDaemon {
               statusCode: 403,
             })
           }
-          if (!input.botId || this.workspaceReadGrants.get(input.botId) !== input.workspaceId) {
-            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Allow read access to this bot workspace', {
+          const grant = input.botId ? this.workspaceReadGrants.get(input.botId) : undefined
+          if (grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+            throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
               statusCode: 403,
             })
           }
