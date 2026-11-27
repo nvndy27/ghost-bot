@@ -85,18 +85,15 @@ export function TeamRightPanel({
           {team.memberBotIds.map((memberId) => {
             const bot = botById.get(memberId)
             const isLead = memberId === team.leadBotId
+            const name = `${bot?.name ?? memberId}${isLead ? ' · Lead' : ''}`
+            const metadata = bot ? `${bot.modelId} default · ${bot.permission}` : 'Unavailable'
             return (
-              <div
-                key={memberId}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, fontSize: 12 }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  {bot && <BotAvatar config={bot.avatar} status="idle" size={20} />}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {bot?.name ?? memberId}{isLead ? ' · Lead' : ''}
-                  </span>
-                </span>
-                <small className="gb-muted">{bot ? `${bot.modelId} default · ${bot.permission}` : 'Unavailable'}</small>
+              <div key={memberId} className="gb-overview-member">
+                {bot && <BotAvatar config={bot.avatar} status="idle" size={22} />}
+                <div className="gb-overview-member-label">
+                  <span title={name}>{name}</span>
+                  <small className="gb-muted" title={metadata}>{metadata}</small>
+                </div>
               </div>
             )
           })}

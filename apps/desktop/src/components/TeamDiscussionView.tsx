@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PrivateTaskChatRecord, TeamDiscussionTurn, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
-import { AtSign, ListTodo, Send, Square } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
+import { useComposerTextareaHeight } from '../hooks/useComposerTextareaHeight.ts'
+import { ComposerSendButton } from './ComposerSendButton.tsx'
+import { GroupComposerControls } from './GroupComposerControls.tsx'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
-import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { ICON_SIZE, ICON_STROKE } from './IconButton.tsx'
 
 const ACTIVE_TASK_STATUSES = new Set(['pending', 'queued', 'running', 'awaiting_approval', 'cancelling'])
 
@@ -23,8 +26,10 @@ export function TeamDiscussionView({
   const [turns, setTurns] = useState<TeamDiscussionTurn[]>([])
   const [beforeSeq, setBeforeSeq] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const textareaRef = useComposerTextareaHeight(draft)
   const [rounds, setRounds] = useState<1 | 2>(1)
   const [busy, setBusy] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [statusLabel, setStatusLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [delegateOpen, setDelegateOpen] = useState(false)
@@ -160,8 +165,8 @@ export function TeamDiscussionView({
   }
 
   async function loadEarlier() {
-    if (!bridge || beforeSeq === null || busy) return
-    setBusy(true)
+    if (!bridge || beforeSeq === null || busy || loadingEarlier) return
+    setLoadingEarlier(true)
     setError(null)
     try {
       const result = await bridge.listTeamDiscussion({ teamId: team.id, beforeSeq })
@@ -170,7 +175,7 @@ export function TeamDiscussionView({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load earlier messages')
     } finally {
-      setBusy(false)
+      setLoadingEarlier(false)
     }
   }
 
@@ -234,7 +239,7 @@ export function TeamDiscussionView({
               })}
             </section>
           )}
-          {beforeSeq !== null && <button className="gb-btn-outline" disabled={busy} onClick={() => void loadEarlier()}>Load earlier messages</button>}
+          {beforeSeq !== null && <button className="gb-btn-outline" disabled={busy || loadingEarlier} onClick={() => void loadEarlier()}>Load earlier messages</button>}
           {!available && <p className="gb-muted">Group replies are available in offline mock mode.</p>}
           {turns.map((turn) => {
             const summary = turn.taskSummary
@@ -242,43 +247,28 @@ export function TeamDiscussionView({
               const bot = bots.find((entry) => entry.id === summary.assignedBotId)
               const linkedTask = privateTasks.find((t) => t.teamRunId === summary.teamRunId)
               return (
-                <section
-                  className="gb-team-summary"
-                  key={turn.id}
-                  data-task-summary={summary.teamRunId}
-                  style={{ display: 'grid', gap: 6 }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                    <div className="gb-icon-inline" style={{ gap: 6 }}>
-                      {bot && <BotAvatar config={bot.avatar} status="idle" size={22} />}
+                <section className="gb-discussion-reply gb-discussion-summary" key={turn.id}
+                  data-task-summary={summary.teamRunId}>
+                  {bot && <BotAvatar config={bot.avatar} status="idle" size={24} />}
+                  <div className="gb-discussion-content">
+                    <div className="gb-discussion-author">
                       <strong>{bot?.name ?? summary.assignedBotId}</strong>
-                      <span className="gb-badge">Task Summary</span>
-                      <span className="gb-badge">{summary.status}</span>
+                      <small className="gb-muted">Task Summary</small>
                     </div>
-                    {onOpenPrivateTask && linkedTask && (
-                      <button
-                        type="button"
-                        className="gb-btn-outline"
-                        style={{ fontSize: 11.5, padding: '2px 8px' }}
-                        onClick={() => onOpenPrivateTask(linkedTask)}
-                      >
-                        View task chat
-                      </button>
-                    )}
+                    <div className="gb-discussion-bubble gb-task-summary-bubble">
+                      <div className="gb-task-summary-heading">
+                        <strong>{summary.objective}</strong>
+                        <small className="gb-muted">{summary.status.replaceAll('_', ' ')}</small>
+                      </div>
+                      {turn.replies.map((reply, idx) => <p key={`${reply.botId}-${idx}`}>{reply.text}</p>)}
+                      {summary.blocker && <p className="gb-task-summary-blocker">Blocker: {summary.blocker}</p>}
+                      {onOpenPrivateTask && linkedTask && (
+                        <button type="button" className="gb-task-summary-link" onClick={() => onOpenPrivateTask(linkedTask)}>
+                          View task chat <ArrowUpRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="gb-muted" style={{ fontSize: 12 }}>
-                    Objective: {summary.objective}
-                  </div>
-                  {turn.replies.map((reply, idx) => (
-                    <p key={`${reply.botId}-${idx}`} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                      {reply.text}
-                    </p>
-                  ))}
-                  {summary.blocker && (
-                    <p style={{ margin: 0, color: 'var(--gb-danger)', fontSize: 12 }}>
-                      Blocker: {summary.blocker}
-                    </p>
-                  )}
                 </section>
               )
             }
@@ -364,40 +354,35 @@ export function TeamDiscussionView({
           </div>
         </div>
       )}
-      <form className="gb-composer-wrap" onSubmit={(event) => { event.preventDefault(); void send() }}>
-        <div className="gb-composer">
-          <textarea aria-label="Group discussion message" placeholder="Message the group" maxLength={4000}
-            disabled={!available || busy} value={draft} onChange={(event) => setDraft(event.target.value)} />
+      <div className="gb-composer-wrap">
+        <form className="gb-composer gb-group-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
+          <textarea ref={textareaRef} rows={1} aria-label="Group discussion message" placeholder="Message the group"
+            maxLength={4000} disabled={!available || busy} value={draft} onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                void send()
+              }
+            }} />
           <div className="gb-composer-footer">
-            <label className="gb-group-mention" title="Insert member mention">
-              <AtSign size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            <select aria-label="Insert member mention" value="" disabled={!available || busy}
-              onChange={(event) => setDraft((previous) => `${previous.trimEnd()}${previous.trim() ? ' ' : ''}@${event.target.value} `.slice(0, 4000))}>
-              <option value="" disabled>Mention</option>
-              <option value="all">Everyone</option>
-              {team.memberBotIds.map((id) => <option key={id} value={id}>{bots.find((bot) => bot.id === id)?.name ?? id}</option>)}
-            </select>
-            </label>
-            <select aria-label="Discussion rounds" value={String(rounds)} disabled={!available || busy}
-              onChange={(event) => setRounds(event.target.value === '2' ? 2 : 1)}>
-              <option value="1">1 round</option>
-              <option value="2">2 rounds</option>
-            </select>
-            <IconButton label="Delegate task" disabled={!available} pressed={delegateOpen} onClick={() => setDelegateOpen(!delegateOpen)}>
-              <ListTodo size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            </IconButton>
-            {busy ? (
-              <IconButton label="Stop" onClick={() => void cancelDiscussion()}>
-                <Square size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              </IconButton>
-            ) : (
-              <IconButton label="Send to group" type="submit" variant="outline" disabled={!available || !draft.trim()}>
-                <Send size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              </IconButton>
-            )}
+            <GroupComposerControls memberIds={team.memberBotIds} bots={bots} rounds={rounds}
+              disabled={!available || busy} delegationOpen={delegateOpen} onRounds={setRounds}
+              onDelegate={() => setDelegateOpen(!delegateOpen)}
+              onMention={(memberId) => {
+                setDraft((previous) => {
+                  const text = previous.trimEnd()
+                  const next = `${text}${text ? ' ' : ''}@${memberId} `
+                  return next.length <= 4000 ? next : previous
+                })
+                textareaRef.current?.focus()
+              }} />
+            <ComposerSendButton canSend={available && !busy && Boolean(draft.trim())} stopping={busy}
+              onStop={() => void cancelDiscussion()} sendLabel="Send to group" stopLabel="Stop"
+              disabledTitle={available ? 'Enter a group message' : 'Group replies require offline mock mode'} />
           </div>
-        </div>
-      </form>
+        </form>
+      </div>
     </>
   )
 }

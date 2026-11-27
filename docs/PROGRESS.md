@@ -2,7 +2,7 @@
 
 ## Alpha.1 integrity and Issue #41
 
-**Tested** — Original Private Task findings fixed on Draft PR #42. Successor adds a compact Group Chat, native validated avatar selection and crop, and persisted Auto, bot snapshot and upload modes. Focused daemon integrity tests passed 4/4. Lint, affected typechecks/build, and combined offline Electron acceptance passed. Synthetic light/dark screenshots kept locally. Zero live inference.
+**Tested** — Original Private Task findings fixed on Draft PR #42. Successor adds a compact Group Chat, native validated avatar selection and crop, and persisted Auto, bot snapshot and upload modes. Focused daemon integrity tests passed 4/4. Lint, affected typechecks/build, and combined offline Electron acceptance passed. The visual refinement shares the Personal Chat composer and send button, adds searchable keyboard-accessible mention and rounds popovers, and compacts summary bubbles and Overview member rows. Desktop checks and the combined offline Electron scenario passed after refinement. Synthetic light/dark screenshots at 1440×900 and 900×700 are kept locally. Zero live inference.
 
 ## Alpha.1B — Group membership and model routing
 

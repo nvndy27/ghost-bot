@@ -26,7 +26,8 @@ try {
   await selectTeam()
   const compose = page.getByLabel('Group discussion message')
   await compose.fill('Offline hello')
-  await page.getByLabel('Insert member mention').selectOption('developer')
+  await page.getByRole('button', { name: 'Insert member mention' }).click()
+  await page.getByRole('button', { name: /Developer.*@developer/i }).click()
   await page.getByRole('button', { name: 'Send to group' }).click()
   await page.getByText('[Mock response] Offline hello @developer', { exact: true }).waitFor()
   const turns = () => page.evaluate((id) => window.ghostBot.listTeamDiscussion({ teamId: id }), teamId)
@@ -42,7 +43,8 @@ try {
   await assert.rejects(page.evaluate((id) => window.ghostBot.sendTeamDiscussion({
     teamId: id, text: '@researcher outside this group', operationId: crypto.randomUUID(),
   }), teamId), /Mention only members/)
-  await page.getByLabel('Discussion rounds').selectOption('2')
+  await page.getByRole('button', { name: /Discussion rounds/ }).click()
+  await page.getByRole('button', { name: '2 rounds' }).click()
   await compose.fill('@all two round check')
   await page.getByRole('button', { name: 'Send to group' }).click()
   await page.getByText('Round 2', { exact: true }).first().waitFor()
