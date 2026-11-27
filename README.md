@@ -1,19 +1,38 @@
-# Ghost Bot
+<p align="center">
+  <img src="apps/desktop/build/icon.svg" alt="Ghost Bot logo" width="88" height="88" />
+</p>
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
-![Status: Alpha development](https://img.shields.io/badge/status-alpha%20development-orange)
-![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue)
-![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)
-![Architecture: Local-first](https://img.shields.io/badge/architecture-local--first-green)
+<h1 align="center">Ghost Bot</h1>
 
-[![CI](https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nvndy27/ghost-bot/badge)](https://scorecard.dev/viewer/?uri=github.com/nvndy27/ghost-bot)
+<p align="center"><strong>Your AI team, in one local-first workspace.</strong></p>
 
-Workflow badges reflect actual status, not certification. See [Open-source readiness](docs/OPEN_SOURCE_READINESS.md) for SBOM and remaining checks.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-2878b8" alt="License: Apache 2.0" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/License-MIT-b19a3e" alt="License: MIT" /></a>
+  <a href="docs/ROADMAP.md"><img src="https://img.shields.io/badge/Status-Alpha%20development-c68628" alt="Status: Alpha development" /></a>
+  <img src="https://img.shields.io/badge/Platform-Linux-397eaa" alt="Platform: Linux" />
+  <img src="https://img.shields.io/badge/TypeScript-Strict-2878b8" alt="TypeScript: Strict" />
+  <img src="https://img.shields.io/badge/Architecture-Local--first-367f58" alt="Architecture: Local-first" />
+</p>
 
-**Your AI team, in one local-first workspace.**
+---
+
+<p align="center">
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Build status" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL status" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml/badge.svg?branch=main" alt="OpenSSF Scorecard workflow status" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="https://img.shields.io/badge/Best%20Practices-Not%20registered-lightgrey" alt="OpenSSF Best Practices: Not registered" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="https://img.shields.io/badge/REUSE-Pending-lightgrey" alt="REUSE: Pending" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/sbom.yml"><img src="https://img.shields.io/badge/SBOM-Export%20configured-397eaa" alt="SBOM export configured" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/nvndy27/ghost-bot/actions">Workflow results</a> ·
+  <a href="https://scorecard.dev/viewer/?uri=github.com/nvndy27/ghost-bot">Scorecard report</a> ·
+  <a href="docs/OPEN_SOURCE_READINESS.md">Open-source readiness</a>
+</p>
+
+<p align="center"><sub>Workflow badges report actual main-branch runs, not certifications. Best Practices and REUSE are not yet verified; SBOM export is configured, not a verified release SBOM.</sub></p>
 
 Ghost Bot is a desktop AI workspace for personal agents, multi-model collaboration and developer workflows. Connect supported AI runtimes using your own accounts, API keys or local models, organize bots with independent configurations, and keep conversations and project data under your control.
 
