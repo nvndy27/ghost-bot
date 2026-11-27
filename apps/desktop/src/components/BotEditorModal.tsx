@@ -692,17 +692,41 @@ export function BotEditorModal({
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
               <span>Effort</span>
-              <select
-                value={effort}
-                onChange={(e) => {
-                  setDirty(true)
-                  setEffort(e.target.value as 'low' | 'medium' | 'high')
-                }}
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+              {(() => {
+                const supportedEfforts =
+                  runtimeId === 'mock-offline' || runtimeId === 'codex'
+                    ? ['low', 'medium', 'high']
+                    : []
+                const effortDisabled = supportedEfforts.length === 0
+                return (
+                  <select
+                    data-testid="bot-effort-select"
+                    value={effort}
+                    disabled={effortDisabled}
+                    title={
+                      effortDisabled
+                        ? 'Effort selection is not supported by this provider'
+                        : undefined
+                    }
+                    onChange={(e) => {
+                      setDirty(true)
+                      setEffort(e.target.value as 'low' | 'medium' | 'high')
+                    }}
+                  >
+                    {effortDisabled ? (
+                      <option value={effort}>Not supported by provider</option>
+                    ) : (
+                      <>
+                        {supportedEfforts.includes('low') && <option value="low">Low</option>}
+                        {supportedEfforts.includes('medium') && (
+                          <option value="medium">Medium</option>
+                        )}
+                        {supportedEfforts.includes('high') && <option value="high">High</option>}
+                      </>
+                    )}
+                  </select>
+                )
+              })()}
             </label>
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>

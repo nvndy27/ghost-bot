@@ -5,7 +5,8 @@ export type AuthState = { status: 'connected' | 'disconnected' | 'pending' | 'er
 export interface ModelInfo { id: string; label: string; efforts: string[]; permissionModes: PermissionMode[]; supportsTools: boolean; supportsAttachments: boolean }
 export interface Capabilities { streaming: boolean; cancellation: boolean; resume: boolean; approvals: boolean; usage: boolean; sandbox: boolean; models: ModelInfo[] }
 export interface UsageSnapshot { source: 'provider' | 'local' | 'estimated'; observedAt: string; windows: { label: string; usedPercent: number | null; resetAt: string | null }[]; inputTokens?: number; outputTokens?: number; costUsd?: number }
-export interface SessionConfig { agentId: string; accountId: string; modelId: string; effort?: string; permission: PermissionMode; workspace: string; instructions: string }
+export interface ConversationHistoryTurn { role: 'user' | 'assistant'; content: string }
+export interface SessionConfig { agentId: string; accountId: string; modelId: string; effort?: string; permission: PermissionMode; workspace: string; instructions: string; history?: ConversationHistoryTurn[] }
 export interface Session { id: string; externalId: string; runtimeId: string }
 export interface AgentRequest {
   runId: string

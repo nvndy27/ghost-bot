@@ -280,11 +280,22 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
       )
     }
     const validModelId = assertValidClaudeModelId(config.modelId)
+    const seededHistory = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-CLAUDE_MAX_HISTORY_MESSAGES)
+      : []
     const id = `claude-${randomUUID()}`
     this.sessions.set(id, {
       config: { ...config, modelId: validModelId },
       credentialGeneration: this.getCredentialGeneration(),
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id, externalId: id, runtimeId: this.id }
@@ -297,6 +308,18 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
         this.sessions.delete(externalId)
         throw new Error('Anthropic credential rotated; session authorization invalidated')
       }
+      if (config) {
+        const validModelId = assertValidClaudeModelId(config.modelId)
+        if (
+          existing.config.modelId !== validModelId ||
+          (existing.config.effort ?? '') !== (config.effort ?? '') ||
+          existing.config.permission !== config.permission ||
+          existing.config.instructions !== config.instructions
+        ) {
+          this.sessions.delete(externalId)
+          throw new Error('Anthropic Claude session configuration changed; start a New conversation')
+        }
+      }
       return { id: externalId, externalId, runtimeId: this.id }
     }
     if (!config) {
@@ -308,10 +331,21 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
       )
     }
     const validModelId = assertValidClaudeModelId(config.modelId)
+    const seededHistory = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-CLAUDE_MAX_HISTORY_MESSAGES)
+      : []
     this.sessions.set(externalId, {
       config: { ...config, modelId: validModelId },
       credentialGeneration: this.getCredentialGeneration(),
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id: externalId, externalId, runtimeId: this.id }

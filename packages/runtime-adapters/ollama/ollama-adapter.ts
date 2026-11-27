@@ -577,10 +577,22 @@ export class OllamaLocalAdapter implements AgentRuntime {
       throw new Error(`Ollama model "${validModelId}" reports remote cloud backing and is rejected`)
     }
 
+    const seededHistory = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-OLLAMA_MAX_HISTORY_MESSAGES)
+      : []
+
     const id = `ollama-${randomUUID()}`
     this.sessions.set(id, {
       config: { ...config, modelId: validModelId },
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id, externalId: id, runtimeId: this.id }
@@ -589,6 +601,18 @@ export class OllamaLocalAdapter implements AgentRuntime {
   async resumeSession(externalId: string, config?: SessionConfig): Promise<Session> {
     const existing = this.sessions.get(externalId)
     if (existing) {
+      if (config) {
+        const validModelId = assertValidLocalOllamaModelId(config.modelId)
+        if (
+          existing.config.modelId !== validModelId ||
+          (existing.config.effort ?? '') !== (config.effort ?? '') ||
+          existing.config.permission !== config.permission ||
+          existing.config.instructions !== config.instructions
+        ) {
+          this.sessions.delete(externalId)
+          throw new Error('Ollama session configuration changed; start a New conversation')
+        }
+      }
       return { id: externalId, externalId, runtimeId: this.id }
     }
     if (!config) {
@@ -600,9 +624,32 @@ export class OllamaLocalAdapter implements AgentRuntime {
       )
     }
     const validModelId = assertValidLocalOllamaModelId(config.modelId)
+    const installed = await this.listModelDetails()
+    const match = installed.find((m) => m.id === validModelId)
+    if (!match) {
+      throw new Error(`Ollama model "${validModelId}" is not installed locally at ${this.baseUrl}`)
+    }
+    if (match.isCloud) {
+      throw new Error(`Cloud-backed Ollama model "${validModelId}" is rejected by local-only policy`)
+    }
+    const show = await this.inspectModel(validModelId)
+    if (show?.isCloud) {
+      throw new Error(`Ollama model "${validModelId}" reports remote cloud backing and is rejected`)
+    }
+    const seededHistory = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-OLLAMA_MAX_HISTORY_MESSAGES)
+      : []
     this.sessions.set(externalId, {
       config: { ...config, modelId: validModelId },
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id: externalId, externalId, runtimeId: this.id }

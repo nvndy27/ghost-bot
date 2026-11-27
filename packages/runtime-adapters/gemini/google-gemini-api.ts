@@ -322,12 +322,27 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
       )
     }
     const validModelId = assertValidGeminiModelId(config.modelId)
+    const seededHistory: Array<{ role: 'user' | 'model'; text: string }> = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-GEMINI_MAX_HISTORY_MESSAGES)
+          .map((t) => ({
+            role: t.role === 'assistant' ? 'model' : 'user',
+            text: t.content.trim(),
+          }))
+      : []
     const id = `gemini-${randomUUID()}`
     this.sessions.set(id, {
       config: { ...config, modelId: validModelId },
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id, externalId: id, runtimeId: this.id }
@@ -343,6 +358,18 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
         this.sessions.delete(externalId)
         throw new Error('Gemini credential or account changed; session authorization invalidated')
       }
+      if (config) {
+        const validModelId = assertValidGeminiModelId(config.modelId)
+        if (
+          existing.config.modelId !== validModelId ||
+          (existing.config.effort ?? '') !== (config.effort ?? '') ||
+          existing.config.permission !== config.permission ||
+          existing.config.instructions !== config.instructions
+        ) {
+          this.sessions.delete(externalId)
+          throw new Error('Google Gemini session configuration changed; start a New conversation')
+        }
+      }
       return { id: externalId, externalId, runtimeId: this.id }
     }
     if (!config) {
@@ -354,11 +381,26 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
       )
     }
     const validModelId = assertValidGeminiModelId(config.modelId)
+    const seededHistory: Array<{ role: 'user' | 'model'; text: string }> = Array.isArray(config.history)
+      ? config.history
+          .filter(
+            (t): t is { role: 'user' | 'assistant'; content: string } =>
+              Boolean(t) &&
+              (t.role === 'user' || t.role === 'assistant') &&
+              typeof t.content === 'string' &&
+              t.content.trim().length > 0,
+          )
+          .slice(-GEMINI_MAX_HISTORY_MESSAGES)
+          .map((t) => ({
+            role: t.role === 'assistant' ? 'model' : 'user',
+            text: t.content.trim(),
+          }))
+      : []
     this.sessions.set(externalId, {
       config: { ...config, modelId: validModelId },
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
-      history: [],
+      history: seededHistory,
       lastRunId: null,
     })
     return { id: externalId, externalId, runtimeId: this.id }

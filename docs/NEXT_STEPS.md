@@ -1,5 +1,11 @@
 # Next steps
 
+## Alpha.0A — Native Chat Closure & Integration Readiness (Completed Offline)
+
+1. Converge stacked PRs #6–#13, documentation PR #12 (`docs/v0.1-personal-friends-alpha`), and Alpha.0A PR per `docs/extensions/alpha0a-native-chat-closure.md`.
+2. Complete Agent 2 platform/packaging verification and bounded live acceptance (only when explicitly authorized) to close Alpha.0.
+3. Once Alpha.0 is accepted, allocate shared `0014+` migration, `packages/shared-types/ipc.ts`, and `apps/desktop/src/App.tsx` ownership before starting parallel Alpha.1 (Group Bot) and Alpha.2 (Workspace Panel) tracks.
+
 ## Provider.7 — Unified Multi-Provider Execution Integration (Completed Offline / Live Spend Gated)
 
 1. Proceed to **Agent 2 Cross-Provider Security Audit & Main Integration** (or Phase 6 Packaging/Release Candidate sign-off) once stacked PRs #6–#12 are reviewed.

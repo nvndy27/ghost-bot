@@ -1,4 +1,10 @@
-# Known issues
+## Personal & Friends Alpha release risks (2026-11-27)
+
+- Stacked provider PRs #6–#13, docs PR #12, and Alpha.0A PR require controlled convergence before Alpha.0 release sign-off; live Teams/Autonomous/Computer Use gates remain enforced.
+- Group Bot discussion-first UX, member-scoped model routing, user-visible private task chats, and Workspace Panel (Files/Editor, Git Diff, Browser/Live Demo, Output) are planned for Alpha.1–Alpha.2 and not yet implemented.
+- Final integrated packaging/platform and bounded live provider acceptance remain open for Alpha.0/Alpha.3 sign-off.
+
+## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.
 - AppImage native FUSE launch requires `libfuse.so.2`, which is absent on Fedora 45; use `APPIMAGE_EXTRACT_AND_RUN=1` until FUSE2 or RPM distribution is available.

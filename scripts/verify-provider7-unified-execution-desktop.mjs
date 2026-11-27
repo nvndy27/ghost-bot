@@ -19,7 +19,7 @@ let activeStallRes = null
 const lmServer = createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/v1/models') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ data: [{ id: 'local-qwen-7b' }] }))
+    res.end(JSON.stringify({ data: [{ id: 'gpt-6.2-mock' }, { id: 'local-qwen-7b' }] }))
     return
   }
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {

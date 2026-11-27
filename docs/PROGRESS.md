@@ -1,5 +1,15 @@
 # Progress log
 
+## Alpha.0A — Native Chat Closure & Integration Readiness
+
+2026-11-27. Branched `feat/alpha0a-native-chat-closure` from `0291693` (`feat/provider7-unified-execution`). Closed A0-01..A0-06 native Chat correctness/security findings, extended daemon-path provider acceptance (`llamacpp`, `claude-api`, `gemini-api`, `ollama` via deterministic fixtures), and prepared PR #6–#13 + PR #12 reconciliation and Alpha.1/Alpha.2 contract inventory with zero live inference or paid API spend. See [Alpha.0A report](extensions/alpha0a-native-chat-closure.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | **A0-01/A0-03**: Enforced `modelId`/`effort`/`permission`/`instructions` equality in `resumeSession()` across `OpenAiCompatibleRuntimeBase`, `AnthropicClaudeApiAdapter`, `GoogleGeminiApiAdapter`, and `OllamaLocalAdapter`; added `SESSION_CONFIG_MISMATCH` (409), `UNSUPPORTED_MODEL` (400), `UNSUPPORTED_EFFORT` (400), and `PERMISSION_DENIED` (403) dispatch checks in `RunOrchestrator.startRun()`; disabled unsupported Effort `<select>` in `BotEditorModal.tsx`. |
+| Implemented | **A0-02/A0-04/A0-06**: Added atomic preflight-to-transaction equality & pre-dispatch DB snapshot checks (`EXECUTION_CONFIG_CHANGED` 409) in `RunOrchestrator` (`startRun`, `executeUnifiedProviderRun`, `executeCodexRun`); added structured `ConversationHistoryTurn[]` (`SessionConfig.history`) with `LIMIT 40` SQLite query + `redactSecrets()` so untrusted history is never elevated into `system` instructions; added `assertNoLoopbackProxyBypass()` for `NODE_USE_ENV_PROXY=1`. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/alpha0a-native-chat-closure.test.ts` (2/2), 3 consecutive full-workspace regression runs (**234/234** per run: `root` 141/141, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts, and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
 ## Provider.7 — Unified Multi-Provider Execution Integration
 
 2026-11-27. Branched `feat/provider7-unified-execution` from `5d57c39` (`feat/provider6-openai-compatible`). Resolved the HTTP 501 `LIVE_INFERENCE_DISABLED` execution gap in `RunOrchestrator`, `RuntimeRegistry`, and `DaemonServer` across `openclaw`, `ollama`, `claude-api`, `gemini-api`, `kimi-acp`, `lmstudio`, `llamacpp`, and `openrouter` while preserving Codex and fail-closed `RuntimePolicyBroker` gating, and closed the targeted Provider.6 residual checks with zero live inference or paid API spend. See [Provider.7 report](extensions/provider7-unified-execution.md).

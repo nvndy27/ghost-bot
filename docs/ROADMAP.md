@@ -2,6 +2,23 @@
 
 States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. See [progress](PROGRESS.md) for test evidence.
 
+## Product release track — v0.1 Personal & Friends Alpha
+
+Owner scope decision (2026-11-27): the first daily-use build for the maintainer and a small circle of friends is the existing Chat workspace foundation plus **exactly two new feature areas: Group Bot and the right-hand Workspace Panel**. Local-first, open-source-first direction, BYOK/local AI and supported subscription flows; no Ghost Bot account, payment, paid plan, central server or cloud dependency.
+
+### Alpha.0 — Usable native Chat foundation
+- **In Progress** (Alpha.0A offline closure **Tested**; PR convergence & authorized live/packaging sign-off remaining) — Resolved `LIVE_INFERENCE_DISABLED` 501 execution gap in Provider.7 and closed Alpha.0A native chat consistency, atomic preflight/dispatch barriers, structured canonical history role separation, provider coverage (`llamacpp`, `claude-api`, `gemini-api`, `ollama` via deterministic fixtures), and loopback proxy/sandbox checks (see [Alpha.0A report](extensions/alpha0a-native-chat-closure.md)).
+- Gate: at least one verified live provider path remains functional; each advertised live provider/capability has matching evidence; unsupported paths fail closed with clear status; no unauthorized inference or billing.
+
+### Alpha.1 — Group Bot & private task collaboration
+- **Not Started** — Extend existing `TeamsService` / `TeamsExecutionBridge` / task ledger / session infrastructure (no duplicate team engine).
+
+### Alpha.2 — Workspace Panel
+- **Not Started** — Right-hand Workspace Panel (Files/Editor, Git Changes, Browser/Live Demo, Output) with workspace-scoped authorization.
+
+### Alpha.3 — Personal & Friends Alpha Release Readiness
+- **Not Started** — Integrated acceptance, packaging smoke checks, and security review.
+
 ## Phase 0 — Technical proof
 
 - **Verified** — Starter kit audit, project rename, Git initialization and initial private GitHub push.

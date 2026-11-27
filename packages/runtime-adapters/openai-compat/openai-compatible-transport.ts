@@ -6,6 +6,7 @@ import type {
   ApprovalDecision,
   AuthState,
   Capabilities,
+  ConversationHistoryTurn,
   ModelInfo,
   Session,
   SessionConfig,
@@ -170,6 +171,47 @@ interface CompatSessionState {
   accountRef: string
   history: Array<{ role: 'user' | 'assistant'; content: string }>
   lastRunId: string | null
+}
+
+function seedBoundedOpenAiCompatHistory(
+  history?: ConversationHistoryTurn[],
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  if (!Array.isArray(history) || history.length === 0) return []
+  const out: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  let totalBytes = 0
+  for (const turn of history.slice(-OPENAI_COMPAT_MAX_HISTORY_MESSAGES)) {
+    if (!turn || (turn.role !== 'user' && turn.role !== 'assistant')) continue
+    const content = typeof turn.content === 'string' ? turn.content.trim() : ''
+    if (!content) continue
+    const bytes = Buffer.byteLength(content, 'utf8')
+    if (totalBytes + bytes > OPENAI_COMPAT_MAX_HISTORY_BYTES) break
+    totalBytes += bytes
+    out.push({ role: turn.role, content })
+  }
+  return out
+}
+
+export function assertNoLoopbackProxyBypass(baseUrl: string): void {
+  if (process.env.NODE_USE_ENV_PROXY !== '1') return
+  const hasProxy = Boolean(
+    process.env.HTTP_PROXY ||
+      process.env.http_proxy ||
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.ALL_PROXY ||
+      process.env.all_proxy,
+  )
+  if (!hasProxy) return
+  const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  const noProxy = (process.env.NO_PROXY || process.env.no_proxy || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+  if (!noProxy.includes(host) && !noProxy.includes('*')) {
+    throw new Error(
+      `Loopback request to ${baseUrl} blocked while NODE_USE_ENV_PROXY=1 proxy is active without NO_PROXY=${host}`,
+    )
+  }
 }
 
 export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
@@ -363,6 +405,9 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     }
     const validatedBase = this.validateEndpoint(this.baseUrl)
     const url = `${validatedBase}/models`
+    if (this.kind === 'local') {
+      assertNoLoopbackProxyBypass(url)
+    }
     const res = await this.transport(url, {
       method: 'GET',
       redirect: 'error',
@@ -433,7 +478,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
       configGeneration: this.configGeneration,
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
-      history: [],
+      history: seedBoundedOpenAiCompatHistory(config.history),
       lastRunId: null,
     })
     return { id, externalId: id, runtimeId: this.id }
@@ -450,6 +495,18 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
       ) {
         this.sessions.delete(externalId)
         throw new Error(`${this.label} endpoint or credential changed; session invalidated`)
+      }
+      if (config) {
+        const validModelId = assertValidOpenAiCompatModelId(config.modelId)
+        if (
+          existing.config.modelId !== validModelId ||
+          (existing.config.effort ?? '') !== (config.effort ?? '') ||
+          existing.config.permission !== config.permission ||
+          existing.config.instructions !== config.instructions
+        ) {
+          this.sessions.delete(externalId)
+          throw new Error(`${this.label} session configuration changed; start a New conversation`)
+        }
       }
       return { id: externalId, externalId, runtimeId: this.id }
     }
@@ -468,7 +525,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
       configGeneration: this.configGeneration,
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
-      history: [],
+      history: seedBoundedOpenAiCompatHistory(config.history),
       lastRunId: null,
     })
     return { id: externalId, externalId, runtimeId: this.id }
@@ -659,6 +716,9 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
         ...this.extraBodyFields,
       }
 
+      if (this.kind === 'local') {
+        assertNoLoopbackProxyBypass(url)
+      }
       const response = await this.transport(url, {
         method: 'POST',
         redirect: 'error',

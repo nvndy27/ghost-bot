@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { AgentRuntime, PermissionMode, Session, SessionConfig } from '@ghost-bot/shared-types/runtime'
+import type {
+  AgentRuntime,
+  ConversationHistoryTurn,
+  PermissionMode,
+  Session,
+  SessionConfig,
+} from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
 import type { KnowledgeService, PreparedExecutionKnowledgeContext } from '../knowledge/service.ts'
@@ -178,6 +184,8 @@ export interface RunOrchestratorOptions {
     policyInput: PolicyAuthorizationInput
     accountKey: string
   }>
+  onBeforeTransactionInStartRun?: () => Promise<void> | void
+  onBeforeDispatchInRun?: () => Promise<void> | void
 }
 
 const UNIFIED_PROVIDER_RUNTIMES = new Set([
@@ -203,6 +211,8 @@ export class RunOrchestrator {
   private readonly knowledgeService?: KnowledgeService
   private readonly mcpService?: McpService
   private readonly getProviderPolicyInput?: RunOrchestratorOptions['getProviderPolicyInput']
+  private readonly onBeforeTransactionInStartRun?: () => Promise<void> | void
+  private readonly onBeforeDispatchInRun?: () => Promise<void> | void
   private readonly activeUnifiedProcessSessions = new Set<string>()
   private onRunTerminated?: (runId: string, reason: string) => void
 
@@ -222,6 +232,8 @@ export class RunOrchestrator {
     this.knowledgeService = options?.knowledgeService
     this.mcpService = options?.mcpService
     this.getProviderPolicyInput = options?.getProviderPolicyInput
+    this.onBeforeTransactionInStartRun = options?.onBeforeTransactionInStartRun
+    this.onBeforeDispatchInRun = options?.onBeforeDispatchInRun
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
   }
@@ -803,6 +815,66 @@ export class RunOrchestrator {
           { statusCode: 409 },
         )
       }
+      if (preSession.external_session_id) {
+        const latestRun = this.dbHandle.sqlite
+          .prepare(
+            `SELECT model_id, effort, permission_mode FROM runs
+             WHERE session_id = ?
+             ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get(input.sessionId) as
+          | { model_id: string; effort: string; permission_mode: string }
+          | undefined
+        if (
+          latestRun &&
+          (latestRun.model_id !== preBot.model_id ||
+            latestRun.effort !== preBot.effort ||
+            latestRun.permission_mode !== preBot.permission_mode)
+        ) {
+          throw new DaemonError(
+            'SESSION_CONFIG_MISMATCH',
+            'Bot model, effort, or permission changed; start a New conversation.',
+            { statusCode: 409 },
+          )
+        }
+      }
+      const discoveredModels = await execInfo.adapter.listModels().catch(() => [])
+      if (
+        (preBot.runtime_id === 'lmstudio' ||
+          preBot.runtime_id === 'llamacpp' ||
+          preBot.runtime_id === 'ollama') &&
+        discoveredModels.length > 0 &&
+        !discoveredModels.some((m) => m.id === preBot.model_id)
+      ) {
+        throw new DaemonError(
+          'UNSUPPORTED_MODEL',
+          `Model "${preBot.model_id}" was not discovered on "${preBot.runtime_id}".`,
+          { statusCode: 400 },
+        )
+      }
+      const matchedModel = discoveredModels.find((m) => m.id === preBot.model_id)
+      if (
+        matchedModel &&
+        matchedModel.efforts.length > 0 &&
+        !matchedModel.efforts.includes(preBot.effort)
+      ) {
+        throw new DaemonError(
+          'UNSUPPORTED_EFFORT',
+          `Effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
+          { statusCode: 400 },
+        )
+      }
+      if (
+        matchedModel &&
+        matchedModel.permissionModes.length > 0 &&
+        !matchedModel.permissionModes.includes(preBot.permission_mode as PermissionMode)
+      ) {
+        throw new DaemonError(
+          'PERMISSION_DENIED',
+          `Permission "${preBot.permission_mode}" is not supported by model "${preBot.model_id}".`,
+          { statusCode: 403 },
+        )
+      }
       const instructionParts: string[] = []
       if (preBot.instructions.trim()) instructionParts.push(preBot.instructions.trim())
       const personalization = this.settingsRepo?.getSettings().personalization
@@ -837,6 +909,10 @@ export class RunOrchestrator {
         `Runtime "${preBot.runtime_id}" is not supported for execution.`,
         { statusCode: 501 },
       )
+    }
+
+    if (this.onBeforeTransactionInStartRun) {
+      await this.onBeforeTransactionInStartRun()
     }
 
     const activePlaceholders = ACTIVE_RUN_STATUSES.map(() => '?').join(', ')
@@ -938,7 +1014,7 @@ export class RunOrchestrator {
 
       const bot = this.dbHandle.sqlite
         .prepare(
-          `SELECT id, name, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
+          `SELECT id, name, instructions, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
            FROM agents
            WHERE id = ?`,
         )
@@ -946,6 +1022,7 @@ export class RunOrchestrator {
         | {
             id: string
             name: string
+            instructions: string
             runtime_id: string
             model_id: string
             effort: string
@@ -959,6 +1036,22 @@ export class RunOrchestrator {
         throw new DaemonError('BOT_NOT_FOUND', `Bot "${session.agent_id}" was not found or is archived`, {
           statusCode: 404,
         })
+      }
+
+      if (
+        session.agent_id !== preSession.agent_id ||
+        bot.runtime_id !== preBot.runtime_id ||
+        bot.model_id !== preBot.model_id ||
+        bot.effort !== preBot.effort ||
+        bot.permission_mode !== preBot.permission_mode ||
+        bot.workspace_path !== preBot.workspace_path ||
+        bot.instructions !== preBot.instructions
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot or session configuration changed during preflight; please retry.',
+          { statusCode: 409, retryable: true },
+        )
       }
 
       if (bot.permission_mode === 'full-access') {
@@ -998,6 +1091,9 @@ export class RunOrchestrator {
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode,
+        instructions: bot.instructions,
+        accountKey:
+          codexPreflight?.accountKey ?? unifiedPreflight?.accountKey ?? null,
         workspacePath:
           codexPreflight?.canonicalWorkspace ??
           unifiedPreflight?.canonicalWorkspace ??
@@ -2596,6 +2692,48 @@ export class RunOrchestrator {
         )
       }
 
+      if (this.onBeforeDispatchInRun) {
+        await this.onBeforeDispatchInRun()
+      }
+      const dispatchSession = this.dbHandle.sqlite
+        .prepare('SELECT id, archived_at FROM sessions WHERE id = ?')
+        .get(sessionId) as { id: string; archived_at: string | null } | undefined
+      if (!dispatchSession || dispatchSession.archived_at !== null) {
+        throw new DaemonError('SESSION_ARCHIVED', 'Session was archived before dispatch.', {
+          statusCode: 409,
+        })
+      }
+      const dispatchBot = this.dbHandle.sqlite
+        .prepare(
+          `SELECT runtime_id, model_id, effort, permission_mode, archived_at FROM agents WHERE id = ?`,
+        )
+        .get(agentId) as
+        | {
+            runtime_id: string
+            model_id: string
+            effort: string
+            permission_mode: string
+            archived_at: string | null
+          }
+        | undefined
+      if (!dispatchBot || dispatchBot.archived_at !== null) {
+        throw new DaemonError('BOT_NOT_FOUND', 'Bot was archived before dispatch.', {
+          statusCode: 404,
+        })
+      }
+      if (
+        dispatchBot.runtime_id !== 'codex' ||
+        dispatchBot.model_id !== modelId ||
+        dispatchBot.effort !== effort ||
+        dispatchBot.permission_mode !== permission
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot configuration changed before Codex dispatch; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
       const sessionConfig: SessionConfig = {
         agentId,
         accountId: accountKey,
@@ -2976,41 +3114,43 @@ export class RunOrchestrator {
     }
   }
 
-  private buildBoundedCanonicalHistory(sessionId: string, currentRunId: string): string {
+  private buildBoundedCanonicalHistory(
+    sessionId: string,
+    currentRunId: string,
+  ): ConversationHistoryTurn[] {
     const rows = this.dbHandle.sqlite
       .prepare(
         `SELECT role, content_json FROM messages
          WHERE session_id = ? AND status = 'complete' AND (run_id IS NULL OR run_id != ?)
-         ORDER BY seq_order ASC`,
+         ORDER BY seq_order DESC
+         LIMIT 40`,
       )
       .all(sessionId, currentRunId) as Array<{ role: string; content_json: string }>
 
-    if (rows.length === 0) return ''
+    if (rows.length === 0) return []
 
     const maxMessages = 20
     const maxBytes = 16_000
-    const selected: string[] = []
+    const selectedReversed: ConversationHistoryTurn[] = []
     let totalBytes = 0
 
-    for (const row of rows.slice(-maxMessages)) {
+    for (const row of rows.slice(0, maxMessages)) {
       if (row.role !== 'user' && row.role !== 'assistant') continue
       let text = ''
       try {
         const parsed = JSON.parse(row.content_json) as { text?: unknown }
-        if (typeof parsed.text === 'string') text = parsed.text.trim()
+        if (typeof parsed.text === 'string') text = redactSecrets(parsed.text).trim()
       } catch {
         continue
       }
       if (!text) continue
-      const line = `${row.role === 'user' ? 'User' : 'Assistant'}: ${text}`
-      const bytes = Buffer.byteLength(line, 'utf8')
+      const bytes = Buffer.byteLength(text, 'utf8')
       if (totalBytes + bytes > maxBytes) break
       totalBytes += bytes
-      selected.push(line)
+      selectedReversed.push({ role: row.role, content: text })
     }
 
-    if (selected.length === 0) return ''
-    return `Prior conversation history (reconstructed from canonical store):\n${selected.join('\n')}`
+    return selectedReversed.reverse()
   }
 
   private async executeUnifiedProviderRun(params: {
@@ -3105,6 +3245,50 @@ export class RunOrchestrator {
         )
       }
 
+      if (this.onBeforeDispatchInRun) {
+        await this.onBeforeDispatchInRun()
+      }
+
+      const dispatchSession = this.dbHandle.sqlite
+        .prepare('SELECT id, agent_id, archived_at FROM sessions WHERE id = ?')
+        .get(sessionId) as { id: string; agent_id: string; archived_at: string | null } | undefined
+      if (!dispatchSession || dispatchSession.archived_at !== null) {
+        throw new DaemonError('SESSION_ARCHIVED', 'Session was archived before dispatch.', {
+          statusCode: 409,
+        })
+      }
+      const dispatchBot = this.dbHandle.sqlite
+        .prepare(
+          `SELECT runtime_id, model_id, effort, permission_mode, archived_at
+           FROM agents WHERE id = ?`,
+        )
+        .get(agentId) as
+        | {
+            runtime_id: string
+            model_id: string
+            effort: string
+            permission_mode: string
+            archived_at: string | null
+          }
+        | undefined
+      if (!dispatchBot || dispatchBot.archived_at !== null) {
+        throw new DaemonError('BOT_NOT_FOUND', 'Bot was archived before dispatch.', {
+          statusCode: 404,
+        })
+      }
+      if (
+        dispatchBot.runtime_id !== runtimeId ||
+        dispatchBot.model_id !== modelId ||
+        dispatchBot.effort !== effort ||
+        dispatchBot.permission_mode !== permission
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot configuration changed before provider dispatch; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
       if (!this.getProviderPolicyInput) {
         throw new DaemonError(
           'LIVE_INFERENCE_DISABLED',
@@ -3141,7 +3325,6 @@ export class RunOrchestrator {
       }
 
       let providerSession: Session
-      let initialExtraHistory: string | undefined
       if (preflight.externalSessionId) {
         if (this.activeUnifiedProcessSessions.has(sessionId)) {
           if (typeof maybeResumable.resumeSession === 'function') {
@@ -3158,15 +3341,16 @@ export class RunOrchestrator {
           }
         } else {
           // Stateless HTTP / in-memory-session provider after daemon restart:
-          // recreate/reseed adapter session with bounded canonical history.
-          const extraHistory = this.buildBoundedCanonicalHistory(sessionId, runId)
-          const seededConfig: SessionConfig = extraHistory
-            ? {
-                ...sessionConfig,
-                instructions: [sessionConfig.instructions, extraHistory].filter(Boolean).join('\n\n'),
-              }
-            : sessionConfig
-          initialExtraHistory = extraHistory || undefined
+          // recreate/reseed adapter session with structured canonical history
+          // (preserving user/assistant role separation, never elevating into system instructions).
+          const reconstructedHistory = this.buildBoundedCanonicalHistory(sessionId, runId)
+          const seededConfig: SessionConfig =
+            reconstructedHistory.length > 0
+              ? {
+                  ...sessionConfig,
+                  history: reconstructedHistory,
+                }
+              : sessionConfig
           if (typeof maybeResumable.resumeSession === 'function') {
             providerSession = await maybeResumable.resumeSession(
               preflight.externalSessionId,
@@ -3221,7 +3405,7 @@ export class RunOrchestrator {
 
       let sawTerminal = false
 
-      const buildPrepareReferenceContext = (extraHistory?: string) => async () => {
+      const buildPrepareReferenceContext = () => async () => {
         if (signal.aborted || this.stopping) {
           throw new DaemonError('RUN_CANCELLED', 'Run cancelled before turn dispatch', {
             statusCode: 409,
@@ -3262,18 +3446,15 @@ export class RunOrchestrator {
             combinedContextBytes: latestCombined.totalBytes,
           },
         })
-        if (extraHistory && latestCombined.envelopeJson) {
-          return `${extraHistory}\n\n${latestCombined.envelopeJson}`
-        }
-        return extraHistory || latestCombined.envelopeJson || undefined
+        return latestCombined.envelopeJson || undefined
       }
 
-      const consumeAdapterStream = async (activeSession: Session, extraHistory?: string) => {
+      const consumeAdapterStream = async (activeSession: Session) => {
         for await (const ev of adapter.run({
           runId,
           session: activeSession,
           text: prompt,
-          prepareReferenceContext: buildPrepareReferenceContext(extraHistory),
+          prepareReferenceContext: buildPrepareReferenceContext(),
         })) {
           if (
             this.runtimeRegistry &&
@@ -3392,7 +3573,7 @@ export class RunOrchestrator {
         }
       }
 
-      await consumeAdapterStream(providerSession, initialExtraHistory)
+      await consumeAdapterStream(providerSession)
 
       if (!sawTerminal) {
         flushBuffer(true)
