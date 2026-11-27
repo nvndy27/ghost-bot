@@ -129,7 +129,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
 
     // 6. Maximize and restore (button + Escape)
     const maxBtn = page.getByTestId('workspace-maximize-btn')
+    await maxBtn.locator('svg.lucide-maximize-2').waitFor()
+    assert.equal(await maxBtn.getAttribute('title'), 'Maximize workspace panel')
     await maxBtn.click()
+    await maxBtn.locator('svg.lucide-minimize-2').waitFor()
+    assert.equal(await maxBtn.getAttribute('aria-label'), 'Restore workspace panel')
     assert.equal(await shell.getAttribute('data-maximized'), 'true')
     const maxWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     assert.ok(maxWidth > resizedWidth, `Expected maximized width (${maxWidth}) > resized width (${resizedWidth})`)
@@ -146,12 +150,60 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.getByRole('button', { name: 'Expand right workspace' }).click()
     await page.waitForSelector('[data-testid="workspace-panel-shell"]')
 
-    // 8. Theme switching (light & system) + Team Activity preservation if a team exists
-    await page.getByRole('button', { name: 'Open Settings' }).click()
-    await page.getByLabel('Theme').selectOption('light')
-    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
-    await page.keyboard.press('Escape')
-    await page.screenshot({ path: join(screenshotDir, 'alpha2a-overview-light-1440x900.png') })
+    // 8. The five icon-only tabs fit at the minimum width in both themes.
+    const handleBounds = await resizeHandle.boundingBox()
+    assert.ok(handleBounds)
+    const handleY = handleBounds.y + handleBounds.height / 2
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleY)
+    await page.mouse.down()
+    await page.mouse.move(1438, handleY)
+    await page.mouse.up()
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === 220)
+    const screenshotOutput = process.env.GHOST_BOT_WORKSPACE_SCREENSHOT_DIR ?? screenshotDir
+    await mkdir(screenshotOutput, { recursive: true })
+    const tablist = shell.getByRole('tablist', { name: 'Workspace sections' })
+    for (const theme of ['dark', 'light'] as const) {
+      await page.getByRole('button', { name: 'Open Settings' }).click()
+      await page.getByLabel('Theme').selectOption(theme)
+      await page.waitForFunction((expected) => document.documentElement.dataset.theme === expected, theme)
+      await page.keyboard.press('Escape')
+      for (const [label, glyph] of [
+        ['Overview', 'layout-dashboard'], ['Files', 'files'], ['Changes', 'git-branch'],
+        ['Browser', 'globe'], ['Output', 'terminal'],
+      ] as const) {
+        const tab = tablist.getByRole('tab', { name: label, exact: true })
+        assert.equal(await tab.getAttribute('title'), label)
+        assert.equal(await tab.textContent(), '')
+        const icon = tab.locator(`svg.lucide-${glyph}`)
+        assert.equal(await icon.getAttribute('aria-hidden'), 'true')
+        assert.equal(await icon.getAttribute('width'), '18')
+        assert.equal(await icon.getAttribute('height'), '18')
+      }
+      const row = await tablist.evaluate((list) => {
+        const bounds = list.getBoundingClientRect()
+        return Array.from(list.querySelectorAll('[role="tab"]'), (tab) => {
+          const rect = tab.getBoundingClientRect()
+          return { top: rect.top, width: rect.width, height: rect.height,
+            inside: rect.left >= bounds.left && rect.right <= bounds.right }
+        })
+      })
+      assert.equal(row.length, 5)
+      assert.ok(row.every((tab) => tab.top === row[0].top && tab.width === 32 && tab.height === 32 && tab.inside))
+      await tablist.getByRole('tab', { name: 'Output', exact: true }).click()
+      await shell.getByTestId('workspace-output-tab').waitFor()
+      assert.equal(await tablist.getByRole('tab', { name: 'Output', exact: true }).getAttribute('aria-selected'), 'true')
+      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(250, 249, 246)'
+      await page.waitForFunction(({ theme, expectedBackground }) => {
+        const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
+        return panel?.getBoundingClientRect().width === 220 &&
+          document.documentElement.dataset.theme === theme &&
+          getComputedStyle(panel).backgroundColor === expectedBackground
+      }, { theme, expectedBackground })
+      await page.mouse.move(700, 100)
+      await shell.screenshot({ path: join(screenshotOutput, `workspace-icons-${theme}-220px.png`), scale: 'css' })
+      await tablist.getByRole('tab', { name: 'Overview', exact: true }).click()
+    }
 
     // Switch to system theme and restore dark-friendly layout
     await page.getByRole('button', { name: 'Open Settings' }).click()

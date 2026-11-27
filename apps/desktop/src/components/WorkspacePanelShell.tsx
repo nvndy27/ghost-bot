@@ -1,4 +1,4 @@
-import { PanelRight } from 'lucide-react'
+import { Files, GitBranch, Globe, LayoutDashboard, Maximize2, Minimize2, PanelRight, Terminal } from 'lucide-react'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { WorkspaceGitChanges } from './workspace/WorkspaceGitChanges.tsx'
@@ -14,6 +14,14 @@ import {
   type WorkspaceTabId,
 } from './workspace/workspaceTabs.ts'
 import './workspace/workspace-shell.css'
+
+const TAB_ICONS = {
+  overview: LayoutDashboard,
+  files: Files,
+  changes: GitBranch,
+  browser: Globe,
+  output: Terminal,
+} satisfies Record<WorkspaceTabId, typeof LayoutDashboard>
 
 export interface WorkspacePanelShellProps {
   width: number
@@ -90,6 +98,7 @@ export function WorkspacePanelShell({
     tabRefs.current[nextTab]?.focus()
   }
 
+  const MaximizeIcon = maximized ? Minimize2 : Maximize2
   const title = contextKind === 'team' ? 'Team workspace' : 'Bot workspace'
   const activeTabDef = WORKSPACE_TABS.find((t) => t.id === activeTab) ?? WORKSPACE_TABS[0]
 
@@ -119,14 +128,14 @@ export function WorkspacePanelShell({
           <button
             ref={maximizeBtnRef}
             type="button"
-            className="gb-workspace-icon-btn"
+            className={maximized ? 'gb-icon-btn active' : 'gb-icon-btn'}
             onClick={() => setMaximized((prev) => !prev)}
             aria-pressed={maximized}
             aria-label={maximized ? 'Restore workspace panel' : 'Maximize workspace panel'}
             title={maximized ? 'Restore workspace panel' : 'Maximize workspace panel'}
             data-testid="workspace-maximize-btn"
           >
-            {maximized ? 'Restore' : 'Max'}
+            <MaximizeIcon size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </button>
           <IconButton
             label="Collapse workspace panel"
@@ -145,6 +154,7 @@ export function WorkspacePanelShell({
         aria-orientation="horizontal"
       >
         {WORKSPACE_TABS.map((tab) => {
+          const TabIcon = TAB_ICONS[tab.id]
           const selected = tab.id === activeTab
           const tabHtmlId = `${baseId}-tab-${tab.id}`
           const panelHtmlId = `${baseId}-panel-${tab.id}`
@@ -160,12 +170,14 @@ export function WorkspacePanelShell({
               aria-selected={selected}
               aria-controls={panelHtmlId}
               tabIndex={selected ? 0 : -1}
-              className="gb-workspace-tab"
+              className={selected ? 'gb-icon-btn gb-workspace-tab active' : 'gb-icon-btn gb-workspace-tab'}
+              aria-label={tab.shortLabel}
+              title={tab.shortLabel}
               data-testid={`workspace-tab-${tab.id}`}
               onClick={() => selectTab(tab.id)}
               onKeyDown={(e) => handleTabKeyDown(tab.id, e)}
             >
-              {tab.shortLabel}
+              <TabIcon size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </button>
           )
         })}

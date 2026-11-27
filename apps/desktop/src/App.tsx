@@ -626,7 +626,11 @@ export function App() {
   const handleUpdateSettings = async (patch: AppSettingsPatch): Promise<void> => {
     const bridge = window.ghostBot
     if (bridge) {
-      const updated = await bridge.updateSettings(patch)
+      // The IPC schema fills omitted appearance fields with their defaults.
+      const update = patch.appearance
+        ? { ...patch, appearance: { ...settings.appearance, ...patch.appearance } }
+        : patch
+      const updated = await bridge.updateSettings(update)
       setSettings(updated)
       return
     }
