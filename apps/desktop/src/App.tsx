@@ -1,4 +1,5 @@
 import { ProviderUsage } from './components/ProviderUsage.tsx'
+import { effectiveWorkspaceWidth } from './state/workspaceLayout.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
@@ -150,12 +151,12 @@ export function App() {
   const [mobileSidebarExpanded, setMobileSidebarExpanded] = useState(false)
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)')
-    const update = () => {
+    const resetMobileSidebar = () => {
       setNarrowViewport(media.matches)
       setMobileSidebarExpanded(false)
     }
-    media.addEventListener('change', update)
-    return () => media.removeEventListener('change', update)
+    media.addEventListener('change', resetMobileSidebar)
+    return () => media.removeEventListener('change', resetMobileSidebar)
   }, [])
 
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -186,7 +187,7 @@ export function App() {
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
-  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines' | 'accounts'>('appearance')
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines' | 'accounts' | 'tools'>('appearance')
   const [routines, setRoutines] = useState<RoutineRecordDto[]>([])
   const [unreadRoutineNotifications, setUnreadRoutineNotifications] = useState(0)
   const [botEditor, setBotEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
@@ -704,14 +705,16 @@ export function App() {
     (side: 'left' | 'right') => (e: ReactMouseEvent<HTMLDivElement>) => {
       e.preventDefault()
       const startX = e.clientX
-      const startWidth = side === 'left' ? prefs.leftWidth : prefs.rightWidth
+      const startWidth = side === 'left'
+        ? prefs.leftWidth
+        : effectiveWorkspaceWidth(prefs.rightWidth, window.innerWidth, narrowViewport)
 
       const onMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startX
         if (side === 'left') {
           updateAppearance({ leftWidth: Math.min(360, Math.max(180, startWidth + delta)) })
         } else {
-          updateAppearance({ rightWidth: Math.min(420, Math.max(220, startWidth - delta)) })
+          updateAppearance({ rightWidth: effectiveWorkspaceWidth(startWidth - delta, window.innerWidth, narrowViewport) })
         }
       }
       const onUp = () => {
@@ -730,7 +733,7 @@ export function App() {
       if (side === 'left') {
         updateAppearance({ leftWidth: Math.min(360, Math.max(180, prefs.leftWidth + step)) })
       } else {
-        updateAppearance({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
+        updateAppearance({ rightWidth: effectiveWorkspaceWidth(prefs.rightWidth - step, window.innerWidth, narrowViewport) })
       }
     }
 
@@ -1956,7 +1959,7 @@ export function App() {
                   : undefined
               }
               onOpenTerminal={hasBridge ? () => setTerminalOpen(true) : undefined}
-              onRefreshUsage={() => void handleRefreshRuntime()}
+              onOpenTools={hasBridge ? () => { setSettingsInitialSection('tools'); setSettingsOpen(true) } : undefined}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
             />

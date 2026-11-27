@@ -198,6 +198,7 @@ hr.gb-divider {
 
 /* Three-panel shell */
 .gb-shell {
+  position: relative;
   display: flex;
   height: 100dvh;
   width: 100vw;
@@ -217,6 +218,7 @@ hr.gb-divider {
 
 .gb-right-panel {
   flex-shrink: 0;
+  max-width: 65vw;
   background: var(--gb-panel);
   display: flex;
   flex-direction: column;
@@ -1168,6 +1170,14 @@ hr.gb-divider {
   .gb-composer-select-wrap { padding-inline: 2px; }
 }
 @media (max-width: 760px) {
+  .gb-right-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    max-width: 90vw;
+    z-index: 5;
+    box-shadow: -8px 0 28px rgba(0, 0, 0, 0.22);
+  }
+  .gb-resize-handle { display: none; }
   .gb-settings-nav { width: 150px; }
   .gb-settings-content { padding: 18px; }
   .gb-chat-header { padding-inline: 8px; }

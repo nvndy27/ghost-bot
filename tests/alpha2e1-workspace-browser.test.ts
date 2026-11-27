@@ -135,15 +135,30 @@ test('Alpha.2E.1 Electron E2E: isolated WebContentsView navigation, viewport, sc
       return window.contentView.children.some((view) =>
         'webContents' in view && (view.webContents as { id: number }).id === id && view.getVisible())
     }, previewId)
+    const waitForAttached = async (expected: boolean) => {
+      for (let attempt = 0; attempt < 100 && (await attached()) !== expected; attempt++) {
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+      }
+      assert.equal(await attached(), expected)
+    }
     for (let attempt = 0; attempt < 100 && await attached(); attempt++) {
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
     }
     assert.equal(await attached(), false)
     await page.evaluate(() => document.getElementById('workspace-overlay-fixture')?.remove())
-    for (let attempt = 0; attempt < 100 && !await attached(); attempt++) {
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
-    }
-    assert.equal(await attached(), true)
+    await waitForAttached(true)
+
+    // Real shared Usage and Settings dialogs must occlude and then restore the native view.
+    await page.getByRole('button', { name: 'Provider usage' }).click()
+    await page.getByRole('dialog', { name: 'Provider usage' }).waitFor()
+    await waitForAttached(false)
+    await page.getByRole('button', { name: 'Close provider usage' }).click()
+    await waitForAttached(true)
+    await page.getByRole('button', { name: 'Open Settings' }).click()
+    await page.getByRole('dialog').waitFor()
+    await waitForAttached(false)
+    await page.keyboard.press('Escape')
+    await waitForAttached(true)
 
     // Navigate to /page2, then Back and Forward
     await page.getByTestId('browser-url-input').fill(`http://127.0.0.1:${portA}/page2`)

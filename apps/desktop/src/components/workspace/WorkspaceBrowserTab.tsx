@@ -55,7 +55,9 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
 
   const syncBounds = useCallback(() => {
     if (!supported || !bridge) return
-    const obscured = Array.from(document.querySelectorAll('[role="dialog"], [role="menu"], [popover]:popover-open, .gb-modal-backdrop'))
+    const obscured = Array.from(document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"], [popover]:popover-open, .gb-modal-backdrop, .gb-conv-popover, .gb-group-composer-popover',
+    ))
       .some((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
     if (obscured || !visible || !activeTab || !activeTab.url || !viewportRef.current) {
       void bridge.setWorkspaceBrowserBounds(null).catch(() => {})

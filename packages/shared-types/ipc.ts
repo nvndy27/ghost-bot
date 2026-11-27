@@ -362,7 +362,7 @@ export const AppearanceSettingsSchema = z.object({
   theme: z.enum(['system', 'dark', 'light']).default('dark'),
   reducedMotion: z.boolean().default(false),
   leftWidth: z.number().min(180).max(380).default(240),
-  rightWidth: z.number().min(220).max(420).default(285),
+  rightWidth: z.number().min(220).max(2048).default(400),
   leftCollapsed: z.boolean().default(false),
   rightCollapsed: z.boolean().default(false),
   workspaceTab: WorkspaceTabIdSchema.default('overview'),

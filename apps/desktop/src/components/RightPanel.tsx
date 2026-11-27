@@ -1,17 +1,15 @@
 import type { RoutineRecordDto, RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import {
   CalendarClock,
-  ChartNoAxesColumn,
   Check,
   Activity,
   ChevronRight,
   Folder,
   Plug,
-  RefreshCw,
   Terminal,
 } from 'lucide-react'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
-import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { ICON_STROKE } from './IconButton.tsx'
 import { WorkspacePanelShell } from './WorkspacePanelShell.tsx'
 import type { WorkspaceDraftSelection } from './workspace/workspaceDiscoveryClient.ts'
 import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
@@ -33,7 +31,6 @@ export interface RightPanelProps {
   onOpenComputerUse?: () => void
   onOpenTools?: () => void
   onOpenTerminal?: () => void
-  onRefreshUsage?: () => void
   onReconnectRuntime?: () => void
   onCollapse: () => void
 }
@@ -54,7 +51,6 @@ export function RightPanel({
   onOpenComputerUse,
   onOpenTerminal,
   onOpenTools,
-  onRefreshUsage,
   onReconnectRuntime,
   onCollapse,
 }: RightPanelProps) {
@@ -100,97 +96,12 @@ export function RightPanel({
       <details className="gb-overview-runtime">
         <summary>Runtime details</summary>
         <p className="gb-muted">{runtimeSnapshot?.runtimeMode ?? (isMockMode ? 'Offline mock' : 'Unavailable')} · {bot?.statusLabel ?? 'No active bot'}</p>
-      <div>
-        <div
-          className="gb-section-label"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-        >
-          <span className="gb-icon-inline">
-            <ChartNoAxesColumn size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            <span>Account usage</span>
-          </span>
-          {!isMockMode && onRefreshUsage && (
-            <IconButton
-              label="Refresh account usage"
-              onClick={onRefreshUsage}
-              style={{ width: 24, height: 24 }}
-            >
-              <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            </IconButton>
+        <p className="gb-muted">Connection: {runtimeSnapshot?.lifecycleState ?? runtimeSnapshot?.status ?? 'unavailable'}</p>
+        {(!runtimeSnapshot || runtimeSnapshot.lifecycleState !== 'connected') && !isMockMode && onReconnectRuntime && (
+            <button type="button" className="gb-btn-outline" onClick={onReconnectRuntime}>
+              Reconnect runtime
+            </button>
           )}
-        </div>
-        {runtimeSnapshot && runtimeSnapshot.usageWindows.length > 0 ? (
-          <div style={{ display: 'grid', gap: '8px' }}>
-            <small className="gb-muted" style={{ fontSize: '11px' }}>
-              Source: Provider subscription ({runtimeSnapshot.runtimeMode}
-              {runtimeSnapshot.planType ? ` · ${runtimeSnapshot.planType}` : ''})
-            </small>
-            {runtimeSnapshot.usageWindows.map((w) => (
-              <div key={w.label}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                  <span className="gb-muted">Window {w.label}</span>
-                  <span>
-                    {w.usedPercent !== null
-                      ? `${w.usedPercent}% used (${Math.max(0, 100 - w.usedPercent)}% left)`
-                      : 'Unavailable'}
-                  </span>
-                </div>
-                <div className="gb-bar" aria-hidden="true">
-                  <div className="gb-bar-fill" style={{ width: `${w.usedPercent ?? 0}%` }} />
-                </div>
-                {w.resetAt && (
-                  <small className="gb-muted" style={{ fontSize: '10.5px' }}>
-                    Resets{' '}
-                    {new Date(w.resetAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </small>
-                )}
-              </div>
-            ))}
-            <small className="gb-muted" style={{ fontSize: '11px' }}>
-              Status: {runtimeSnapshot.status === 'stale' ? 'stale' : runtimeSnapshot.usageStatus}
-              {runtimeSnapshot.usageObservedAt
-                ? ` · Refreshed ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}`
-                : ''}
-            </small>
-            {runtimeSnapshot.lifecycleState &&
-              runtimeSnapshot.lifecycleState !== 'connected' &&
-              onReconnectRuntime && (
-                <button
-                  type="button"
-                  className="gb-btn-outline"
-                  onClick={onReconnectRuntime}
-                  style={{ fontSize: '11.5px', padding: '4px 8px' }}
-                >
-                  Reconnect runtime
-                </button>
-              )}
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gap: '6px' }}>
-            <p className="gb-muted" style={{ margin: '4px 0', fontSize: '12.5px' }}>
-              {runtimeSnapshot
-                ? `Usage ${runtimeSnapshot.usageStatus} (${runtimeSnapshot.lifecycleState ?? runtimeSnapshot.status})`
-                : 'Usage unavailable.'}
-            </p>
-            {!isMockMode && onReconnectRuntime && (
-              <button
-                type="button"
-                className="gb-btn-outline"
-                onClick={onReconnectRuntime}
-                style={{ fontSize: '11.5px', padding: '4px 8px' }}
-              >
-                Reconnect runtime
-              </button>
-            )}
-          </div>
-        )}
-      </div>
       </details>
     </section>
   )

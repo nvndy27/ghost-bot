@@ -17,6 +17,13 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
   try {
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 1440, height: 900 })
+    const setViewport = async (width: number, height: number) => {
+      await page.setViewportSize({ width, height })
+      await page.waitForFunction((expected) => window.innerWidth === expected, width)
+      await page.evaluate(() => new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ))
+    }
     await page.getByRole('option').filter({ hasText: 'Developer' }).click()
     await page.evaluate(async (root) => {
       const bridge = window.ghostBot!
@@ -28,8 +35,19 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await page.getByRole('option').filter({ hasText: 'Developer' }).waitFor()
     const shell = page.getByTestId('workspace-panel-shell')
     const resize = page.getByRole('separator', { name: 'Resize right workspace panel' })
+    assert.equal(await shell.evaluate((element) => element.getBoundingClientRect().width), 400)
+    const toolsLink = page.getByRole('button', { name: 'Connected tools' })
+    assert.equal(await toolsLink.isEnabled(), true)
+    await toolsLink.click()
+    await page.getByTestId('mcp-settings-section').waitFor()
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Provider usage' }).click()
+    await page.getByRole('dialog', { name: 'Provider usage' }).waitFor()
+    assert.equal(await shell.getByText('Account usage', { exact: true }).count(), 0)
+    await page.getByRole('button', { name: 'Close provider usage' }).click()
     const setWidth = async (width: number) => {
       const current = await shell.evaluate((element) => element.getBoundingClientRect().width)
+      if (current === width) return
       const handle = await resize.boundingBox()
       assert.ok(handle)
       await page.mouse.move(handle.x + handle.width / 2, 400)
@@ -80,10 +98,26 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     }
     await page.getByTestId('workspace-tab-files').click()
     for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
-      await page.setViewportSize(viewport)
+      await setViewport(viewport.width, viewport.height)
       await capture('files-system-' + viewport.width + 'x' + viewport.height)
     }
-    await page.setViewportSize({ width: 1440, height: 900 })
+    await setViewport(1440, 900)
+    const narrowUsage = page.getByRole('button', { name: 'Provider usage' })
+    await setWidth(850)
+    const preferenceAtWide = await page.evaluate(() => window.ghostBot!.getSettings())
+    assert.equal(preferenceAtWide.appearance.rightWidth, 850)
+    await setViewport(1280, 720)
+    await page.waitForFunction(() => document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === 832)
+    await setViewport(720, 900)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="workspace-panel-shell"]')!).position === 'absolute')
+    const narrowPanel = await shell.boundingBox()
+    assert.ok(narrowPanel && narrowPanel.width <= 648)
+    assert.equal(await resize.isVisible(), false)
+    assert.equal((await page.evaluate(() => window.ghostBot!.getSettings())).appearance.rightWidth, 850)
+    await capture('workspace-overlay-narrow')
+    await setViewport(1440, 900)
+    await setWidth(400)
+    assert.equal(await narrowUsage.isVisible(), true)
     await setWidth(220)
     await tree.waitFor({ state: 'hidden' })
     const toggle = page.getByTestId('workspace-explorer-toggle')
@@ -97,6 +131,8 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await capture('files-explorer-overlay-220')
     await page.getByTestId('workspace-tree-entry-notes.md').click()
     await tree.waitFor({ state: 'hidden' })
+    await shell.getByRole('tab', { name: 'workspace.ts', exact: true }).waitFor()
+    await shell.getByRole('tab', { name: 'notes.md', exact: true }).waitFor()
     assert.equal(await shell.getByRole('tab', { name: 'workspace.ts', exact: true }).count(), 1)
     assert.equal(await shell.getByRole('tab', { name: 'notes.md', exact: true }).count(), 1)
     assert.equal(await editor.inputValue(), '# Workspace review\nLocal fixture content.\n')
@@ -132,6 +168,9 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     }
     await page.getByTestId('workspace-tab-files').click()
     await page.getByText('Group workspace requires an authorized task scope', { exact: false }).waitFor()
+    await setViewport(720, 900)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="workspace-panel-shell"]')!).position === 'absolute')
+    await capture('team-workspace-overlay-narrow')
   } finally {
     await app.close()
     await rm(data, { recursive: true, force: true })

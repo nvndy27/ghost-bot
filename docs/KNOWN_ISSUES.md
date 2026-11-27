@@ -82,4 +82,4 @@ Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM 
 
 ## Alpha.4B visual integration dependencies
 
-**In Progress** — Workspace consumes A1 shared tokens at `85f4b7f`. Global App/settings still use the previous 285px default and 420px cap. Reference 400px default, 65 percent cap and mobile shell behavior need coordinated A1 App/settings work. `RightPanel.onOpenTools` awaits App wiring. Actual quota is retained only in collapsed runtime details pending the shared Usage Center. Screenshots use real mock-runtime state and explicitly synthetic files. Maintainer visual approval is pending. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
+**Tested** — The Alpha.4C candidate now applies the V03.2 Workspace default/bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed on the combined worktree. Maintainer visual approval, Agent 2 exact-head independent review and hosted CI remain pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).

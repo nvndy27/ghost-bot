@@ -192,3 +192,7 @@ Review the PR #47 test-only save completion wait and its focused evidence. Let h
 ## Alpha.4B handoff
 
 Review actual Workspace screenshots against the approved V03.2 archive. Agent 1 reconciles the Workspace draft with the completed shared UI and wires Tools navigation, canonical Usage ownership and coordinated persisted width bounds. Preserve both histories and current capability gates. Then obtain maintainer visual approval before final RC freeze and package acceptance. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
+
+## Alpha.4C integration checkpoint
+
+**In Progress** — Unified Alpha.4A and Alpha.4B on `integration/alpha4-unified`; focused Electron acceptance and actual Dark/Light screenshots are recorded in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md). Publish/request exact-SHA independent review and hosted CI. Maintainer reviews the integrated screenshots and genuine V03.2 differences. Continue Alpha.3 readiness planning while those gates run. No package build or merge is authorized by this checkpoint.

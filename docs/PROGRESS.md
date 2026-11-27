@@ -444,3 +444,9 @@ Focused independent Alpha.3C review accepted `5a8c69dc1b9a6d590273dcd05f0d546291
 Final Alpha.4B capture acceptance passed 1/1 with loaded-bot and effective-theme waits. These state-based waits corrected screenshot fixture timing without delays. Twenty-four actual Electron PNGs were retained. The capture-only test was linted after the final correction.
 
 Final Group Overview refinement follows the approved task/current-task/diagnostics hierarchy. Runtime, permission, concurrency and uncertainty information remains accessible, and safety notices stay visible. The affected capture/layout scenario passed 1/1 with diagnostics checks after the refinement. Affected lint/typechecks and desktop build passed.
+
+## Alpha.4C shared UI convergence — 2026-11-28
+
+**Tested** — On `integration/alpha4-unified`, preserved Alpha.3C `5a8c69d`, Alpha.4A `3d35918` and Alpha.4B `41623c5` by history-preserving merges. Reconciled V03.2 Workspace width/default behavior, Tools & MCP Settings navigation, canonical sidebar Usage, and native Browser occlusion for shared overlays. New profiles use the 400 px Workspace default; existing saved widths remain intact and are bounded visually to 220 px / 65% desktop, with <=760 px overlay up to 90% viewport.
+
+Lint, recursive typecheck, desktop source build, focused bounds tests (2/2), Alpha.4B Electron layout test (1/1 final screenshot run), Browser Electron test (2/2), Alpha.4A Electron scenario and `git diff --check` passed. Actual offline Electron captures are under `design/reviews/alpha4c-shared/` and `design/reviews/alpha4c-workspace/`. No inference or package build. Exact final SHA, CI and review verdict will be recorded in the published convergence PR. Maintainer visual approval and Agent 2 combined review remain pending.
