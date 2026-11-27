@@ -4,6 +4,10 @@
 - Group Bot discussion-first UX, member-scoped model routing, user-visible private task chats, and Workspace Panel (Files/Editor, Git Diff, Browser/Live Demo, Output) are planned for Alpha.1–Alpha.2 and not yet implemented.
 - Final integrated packaging/platform and bounded live provider acceptance remain open for Alpha.0/Alpha.3 sign-off.
 
+## Alpha.1A limits
+
+- Durable unread and completion indicators cover personal conversation activity. Group task indicators require the Alpha.1D task and conversation contract.
+
 ## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.

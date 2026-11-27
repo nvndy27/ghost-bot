@@ -29,11 +29,16 @@ async function getBotOrder(page) {
   )
 }
 
+let chiefSessionId
+let researcherSessionId
+let teamId
+
 try {
   // Launch 1: Provider labels, pinning/ordering, team creation+pin, multi-conversation, unread/read, screenshots
   const app1 = await launchDesktop()
   try {
     const page = await app1.firstWindow()
+    page.setDefaultTimeout(8000)
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.waitForSelector('text=Chief of Staff')
 
@@ -55,6 +60,10 @@ try {
     // Change Chief of Staff runtime to Claude API -> sidebar provider label immediately updates to 'Claude'
     await page.getByTestId('bot-runtime-select').selectOption('claude-api')
     await page.getByRole('button', { name: 'Save changes' }).click()
+    await page.getByRole('dialog', { name: 'Edit bot' }).waitFor({ state: 'hidden' }).catch(async (error) => {
+      const details = await page.getByRole('dialog', { name: 'Edit bot' }).getByRole('alert').allTextContents()
+      throw new Error(details.join(' ') || error.message)
+    })
     await page.waitForSelector('.gb-bot-list [data-bot-id="chief"] .gb-bot-status:has-text("Claude")')
 
     // Revert Chief of Staff back to mock-offline so we can run mock conversations on it too
@@ -81,6 +90,8 @@ try {
     // Pin Chief of Staff and move it above Researcher
     await page.locator('.gb-bot-list [data-bot-id="chief"]').hover()
     await page.getByRole('button', { name: 'Pin Chief of Staff' }).click()
+    await page.getByRole('button', { name: 'Move Chief of Staff down' }).click()
+    await page.waitForFunction(() => document.querySelector('.gb-bot-list [data-bot-id]')?.getAttribute('data-bot-id') === 'researcher')
     await page.getByRole('button', { name: 'Move Chief of Staff up' }).click()
     await page.waitForFunction(() => {
       const els = [...document.querySelectorAll('.gb-bot-list [data-bot-id]')]
@@ -92,10 +103,15 @@ try {
 
     // Create a Team and pin it
     await page.getByRole('button', { name: 'Create team' }).click()
-    await page.getByPlaceholder('e.g. Architecture Review').fill('Alpha Review Team')
+    await page.getByPlaceholder('e.g. Research & Verification Squad').fill('Alpha Review Team')
     await page.getByRole('button', { name: 'Create team' }).last().click()
     await page.waitForSelector('.gb-left-sidebar >> text=Alpha Review Team')
-    await page.getByRole('button', { name: 'Pin Alpha Review Team' }).click()
+    const pinTeam = page.getByRole('button', { name: 'Pin Alpha Review Team' })
+    await pinTeam.focus()
+    await page.keyboard.press('Enter')
+    const teamRow = page.locator('[data-team-id]').filter({ hasText: 'Alpha Review Team' })
+    teamId = await teamRow.getAttribute('data-team-id')
+    await teamRow.getByRole('button', { name: 'Unpin Alpha Review Team' }).waitFor()
 
     // Search filters both bots and teams
     await page.getByLabel('Search bots').fill('Alpha Review')
@@ -109,6 +125,7 @@ try {
     await page.waitForSelector('header >> text=Chief of Staff')
 
     const initialSessId = await page.getByLabel('Conversation session').inputValue()
+    chiefSessionId = initialSessId
     await page.getByRole('button', { name: 'New conversation' }).click()
     await page.waitForFunction(
       (oldId) => {
@@ -156,12 +173,28 @@ try {
       timeout: 10000,
     })
 
+    const researcherConversation = page.getByLabel('Conversation session')
+    const firstResearcherSession = await researcherConversation.inputValue()
+    await page.getByRole('button', { name: 'New conversation' }).click()
+    await page.waitForFunction((previous) => {
+      const select = document.querySelector('select[aria-label="Conversation session"]')
+      return select?.value && select.value !== previous
+    }, firstResearcherSession)
+    researcherSessionId = await researcherConversation.inputValue()
+    const histories = await page.evaluate(async (ids) => {
+      return Promise.all(ids.map(async (sessionId) => window.ghostBot.listMessages({ sessionId })))
+    }, [chiefSessionId, researcherSessionId])
+    assert.match(histories[0].messages.find((message) => message.role === 'assistant')?.text ?? '', /Received your request:.*Background task prompt/)
+    assert.equal(histories[1].messages.length, 0)
+    assert.equal(await page.getByText(/Received your request:.*Background task prompt/).count(), 0)
+
     if (screenshotDir) {
       await page.screenshot({ path: join(screenshotDir, 'alpha1a-dark.png') })
       // Also capture light theme screenshot
       await page.getByRole('button', { name: 'Open Settings' }).click()
       await page.getByRole('button', { name: 'Appearance' }).click()
       await page.getByLabel('Theme').selectOption('light')
+      await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
       await page.getByRole('button', { name: 'Close settings' }).click()
       await page.screenshot({ path: join(screenshotDir, 'alpha1a-light.png') })
       // Restore dark theme
@@ -178,6 +211,7 @@ try {
   const app2 = await launchDesktop()
   try {
     const page = await app2.firstWindow()
+    page.setDefaultTimeout(8000)
     await page.waitForSelector('text=Chief of Staff')
 
     const order = await getBotOrder(page)
@@ -189,6 +223,11 @@ try {
       .textContent()
     assert.equal(devProvider?.trim(), 'Claude')
 
+    await page.waitForFunction((expected) => {
+      return document.querySelector('select[aria-label="Conversation session"]')?.value === expected
+    }, researcherSessionId)
+    await page.getByRole('button', { name: 'Unpin Alpha Review Team' }).waitFor()
+
     // Chief of Staff still shows unread pill after restart until visited
     await page.waitForSelector('.gb-bot-list [data-bot-id="chief"] .gb-unread-pill')
     await page.locator('.gb-bot-list [data-bot-id="chief"] [role="option"]').click()
@@ -197,6 +236,29 @@ try {
     await page.waitForFunction(
       () => !document.querySelector('.gb-bot-list [data-bot-id="chief"] .gb-unread-pill'),
     )
+    await page.getByText(/Received your request:.*Background task prompt/).waitFor()
+
+    const researcherRow = page.locator('[data-bot-id="researcher"]')
+    await researcherRow.getByRole('button', { name: 'Unpin Researcher' }).press('Enter')
+    await researcherRow.getByRole('button', { name: 'Pin Researcher', exact: true }).press('Enter')
+    await researcherRow.getByRole('button', { name: 'Unpin Researcher' }).waitFor()
+    await researcherRow.getByRole('option').click()
+    await page.getByRole('button', { name: 'Edit bot' }).click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await page.getByRole('button', { name: 'Confirm delete', exact: true }).click()
+    await researcherRow.waitFor({ state: 'detached' })
+
+    await page.locator(`[data-team-id="${teamId}"]`).getByText('Alpha Review Team').click()
+    await page.getByRole('button', { name: 'Edit team' }).click()
+    await page.getByRole('button', { name: 'Archive team' }).click()
+    await page.getByRole('button', { name: 'Confirm archive' }).click()
+    await page.locator(`[data-team-id="${teamId}"]`).waitFor({ state: 'detached' })
+    const saved = await page.evaluate(() => window.ghostBot.getSidebarOrganization())
+    assert.ok(!saved.pinnedBotIds.includes('researcher'))
+    assert.ok(!saved.botOrder.includes('researcher'))
+    assert.ok(!saved.pinnedTeamIds.includes(teamId))
+    assert.ok(!saved.teamOrder.includes(teamId))
+
   } finally {
     await app2.close()
   }

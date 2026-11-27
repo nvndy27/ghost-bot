@@ -369,7 +369,7 @@ export class SessionRepository {
         `SELECT id, agent_id, account_id, runtime_id, external_session_id, title, created_at, updated_at, archived_at
          FROM sessions
          ${whereClause}
-         ORDER BY updated_at DESC, created_at DESC
+         ORDER BY updated_at DESC, created_at DESC, id DESC
          LIMIT ? OFFSET ?`,
       )
       .all(agentId, limit, offset) as unknown as RawSessionRow[]

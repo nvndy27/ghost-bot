@@ -59,6 +59,17 @@ declare global {
 
 const DEFAULT_APP_SETTINGS: AppSettings = AppSettingsSchema.parse({})
 
+async function listBotConversations(bridge: GhostBotBridge, agentId: string) {
+  const limit = 100
+  const first = await bridge.listSessions({ agentId, limit })
+  const sessions = new Map(first.sessions.map((session) => [session.id, session]))
+  for (let offset = limit; offset < first.total; offset += limit) {
+    const page = await bridge.listSessions({ agentId, limit, offset })
+    for (const session of page.sessions) sessions.set(session.id, session)
+  }
+  return { ...first, sessions: [...sessions.values()] }
+}
+
 function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
   return {
     id: rec.id,
@@ -268,8 +279,7 @@ export function App() {
         )
         setBotsLoaded(true)
         for (const b of botsRes.bots) {
-          void bridge
-            .listSessions({ agentId: b.id, limit: 20 })
+          void listBotConversations(bridge, b.id)
             .then((sessRes) => {
               setSessionsByBot((prev) => ({
                 ...prev,
@@ -501,7 +511,7 @@ export function App() {
             await bridge.markSessionRead(sessionId).catch(() => undefined)
           }
           const [sessRes, insp] = await Promise.all([
-            bridge.listSessions({ agentId: botId }),
+            listBotConversations(bridge, botId),
             bridge.inspectSession(sessionId),
           ])
           setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
@@ -528,7 +538,7 @@ export function App() {
     let cancelled = false
     const syncSessions = async () => {
       try {
-        let listRes = await bridge.listSessions({ agentId: activeBotId })
+        let listRes = await listBotConversations(bridge, activeBotId)
         if (cancelled) return
 
         if (listRes.sessions.length === 0) {
@@ -905,11 +915,21 @@ export function App() {
     setActiveTeamId(null)
     setActiveBotId(id)
     const bridge = window.ghostBot
-    if (bridge) {
-      void bridge.setActiveBot(id).catch((err: unknown) => {
-        setBannerError(err instanceof Error ? err.message : 'Failed to persist active bot')
-      })
-    }
+    if (!bridge) return
+    void (async () => {
+      await bridge.setActiveBot(id)
+      const sessionId = activeSessionByBot[id] ?? (await bridge.listSessions({ agentId: id })).activeSessionId
+      if (!sessionId) return
+      const { lastReadAt } = await bridge.markSessionRead(sessionId)
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [id]: (prev[id] ?? []).map((session) =>
+          session.id === sessionId ? { ...session, unread: false, lastReadAt } : session,
+        ),
+      }))
+    })().catch((err: unknown) => {
+      setBannerError(err instanceof Error ? err.message : 'Failed to open bot conversation')
+    })
   }
 
   const updateActiveBotInline = (patch: Partial<WorkspaceBot>) => {
@@ -1158,7 +1178,7 @@ export function App() {
     const targetBotId = activeBot.id
     try {
       await bridge.archiveSession(sessionId)
-      let listRes = await bridge.listSessions({ agentId: targetBotId })
+      let listRes = await listBotConversations(bridge, targetBotId)
       if (listRes.sessions.length === 0) {
         const created = await bridge.createSession({
           agentId: targetBotId,

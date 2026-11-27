@@ -1,5 +1,9 @@
 # Progress log
 
+## Alpha.1A — Bot and Conversation Management
+
+**Tested** on post-UI.1 main. Continued from `290d956` and fixed legacy workspace path handling for provider edits, explicit bot navigation read state and conversation paging. Focused tests passed 3/3, database and Teams regressions 8/8, and the offline two-launch Electron scenario passed. Zero live inference. See [Alpha.1A scope and evidence](extensions/alpha1a-bot-conversation-management.md).
+
 ## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
 
 2026-11-27. Executed the finalized bounded 3-prompt live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on `22b3b16` (`integration/alpha0-native-chat-rc`, production baseline `6779ab3`, PR #15) using the dedicated ChatGPT `plus` profile (`gpt-6.2-sol`, `effort: low`, `read-only` permission, isolated temp dirs). See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).

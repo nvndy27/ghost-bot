@@ -261,7 +261,9 @@ export function BotEditorModal({
             runtimeId,
             modelId,
             effort,
-            workspacePath: workspacePath.trim(),
+            ...(workspacePath.trim() === initialBot.workspacePath
+              ? {}
+              : { workspacePath: workspacePath.trim() }),
             permission,
           },
         })

@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.1A — Draft review
+
+Review the Alpha.1A branch against accepted UI.1 main. Reconcile shared wiring with Alpha.2AB only after maintainer acceptance. Keep Group task indicators and Private Task Chats scoped to Alpha.1D.
+
 ## Alpha.0B — Integrated Native Chat Release Candidate (Offline RC Ready)
 
 1. Agent 2 performs independent security review and Fedora GNOME / Ubuntu AppImage + RPM packaging smoke verification on `integration/alpha0-native-chat-rc`.
