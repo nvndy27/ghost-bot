@@ -59,6 +59,12 @@ export function TeamDiscussionView({
   }, [bridge, team.id])
 
   const hasActiveTasks = privateTasks.some((t) => ACTIVE_TASK_STATUSES.has(t.status))
+  const missingSummary = privateTasks.some(
+    (t) =>
+      !ACTIVE_TASK_STATUSES.has(t.status) &&
+      !turns.some((turn) => turn.taskSummary?.teamRunId === t.teamRunId),
+  )
+  const shouldPollTasks = hasActiveTasks || missingSummary
 
   useEffect(() => {
     if (!bridge) return
@@ -66,13 +72,23 @@ export function TeamDiscussionView({
     const loadTasks = async () => {
       try {
         const res = await bridge.listPrivateTaskChats({ teamId: team.id })
-        if (!cancelled) setPrivateTasks(res.tasks)
+        const disc = await bridge.listTeamDiscussion({ teamId: team.id })
+        if (!cancelled) {
+          setPrivateTasks(res.tasks)
+          setTurns((previous) => {
+            const byId = new Map(previous.map((t) => [t.id, t]))
+            for (const t of disc.turns) byId.set(t.id, t)
+            return [...byId.values()].sort((a, b) => a.seq - b.seq)
+          })
+        }
       } catch {
         // ignore transient refresh failure
       }
     }
     void loadTasks()
-    if (!hasActiveTasks) return () => { cancelled = true }
+    if (!shouldPollTasks) {
+      return () => { cancelled = true }
+    }
     const timer = window.setInterval(() => {
       void loadTasks()
     }, 150)
@@ -80,7 +96,7 @@ export function TeamDiscussionView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [bridge, team.id, hasActiveTasks])
+  }, [bridge, team.id, shouldPollTasks])
 
   async function send() {
     const text = draft.trim()
@@ -222,24 +238,71 @@ export function TeamDiscussionView({
           )}
           {beforeSeq !== null && <button className="gb-btn-outline" disabled={busy} onClick={() => void loadEarlier()}>Load earlier messages</button>}
           {!available && <p className="gb-muted">Group replies are available in offline mock mode.</p>}
-          {turns.map((turn) => (
-            <section className="gb-card" key={turn.id}>
-              <strong>You</strong>
-              <p style={{ whiteSpace: 'pre-wrap' }}>{turn.text}</p>
-              {turn.replies.map((reply, idx) => {
-                const bot = bots.find((entry) => entry.id === reply.botId)
-                return <div key={`${reply.botId}-${reply.round ?? 1}-${idx}`} style={{ marginTop: 8 }}>
-                  <div className="gb-icon-inline" style={{ flexWrap: 'wrap', gap: 6 }}>
-                    {bot && <BotAvatar config={bot.avatar} status="idle" size={24} />}
-                    <strong>{bot?.name ?? reply.botId}</strong>
-                    <span className="gb-badge">{reply.routing.modelId}</span>
-                    {reply.round === 2 && <span className="gb-badge">Round 2</span>}
+          {turns.map((turn) => {
+            const summary = turn.taskSummary
+            if (summary) {
+              const bot = bots.find((entry) => entry.id === summary.assignedBotId)
+              const linkedTask = privateTasks.find((t) => t.teamRunId === summary.teamRunId)
+              return (
+                <section
+                  className="gb-card"
+                  key={turn.id}
+                  data-task-summary={summary.teamRunId}
+                  style={{ display: 'grid', gap: 6 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                    <div className="gb-icon-inline" style={{ gap: 6 }}>
+                      {bot && <BotAvatar config={bot.avatar} status="idle" size={22} />}
+                      <strong>{bot?.name ?? summary.assignedBotId}</strong>
+                      <span className="gb-badge">Task Summary</span>
+                      <span className="gb-badge">{summary.status}</span>
+                    </div>
+                    {onOpenPrivateTask && linkedTask && (
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        style={{ fontSize: 11.5, padding: '2px 8px' }}
+                        onClick={() => onOpenPrivateTask(linkedTask)}
+                      >
+                        View task chat
+                      </button>
+                    )}
                   </div>
-                  <p style={{ whiteSpace: 'pre-wrap' }}>{reply.text}</p>
-                </div>
-              })}
-            </section>
-          ))}
+                  <div className="gb-muted" style={{ fontSize: 12 }}>
+                    Objective: {summary.objective}
+                  </div>
+                  {turn.replies.map((reply, idx) => (
+                    <p key={`${reply.botId}-${idx}`} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {reply.text}
+                    </p>
+                  ))}
+                  {summary.blocker && (
+                    <p style={{ margin: 0, color: 'var(--gb-danger)', fontSize: 12 }}>
+                      Blocker: {summary.blocker}
+                    </p>
+                  )}
+                </section>
+              )
+            }
+            return (
+              <section className="gb-card" key={turn.id}>
+                <strong>You</strong>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{turn.text}</p>
+                {turn.replies.map((reply, idx) => {
+                  const bot = bots.find((entry) => entry.id === reply.botId)
+                  return <div key={`${reply.botId}-${reply.round ?? 1}-${idx}`} style={{ marginTop: 8 }}>
+                    <div className="gb-icon-inline" style={{ flexWrap: 'wrap', gap: 6 }}>
+                      {bot && <BotAvatar config={bot.avatar} status="idle" size={24} />}
+                      <strong>{bot?.name ?? reply.botId}</strong>
+                      <span className="gb-badge">{reply.routing.modelId}</span>
+                      {reply.round === 2 && <span className="gb-badge">Round 2</span>}
+                    </div>
+                    <p style={{ whiteSpace: 'pre-wrap' }}>{reply.text}</p>
+                  </div>
+                })}
+              </section>
+            )
+          })}
           {statusLabel && <p className="gb-muted" role="status">{statusLabel}</p>}
           {error && <p role="alert">{error}</p>}
         </div>

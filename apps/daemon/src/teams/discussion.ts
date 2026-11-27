@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import {
+  TaskSummaryMetaSchema,
   TeamDiscussionRepliesSchema,
   type TeamDiscussionCancel,
   type TeamDiscussionCancelResponse,
@@ -100,7 +101,23 @@ export class TeamDiscussion {
       SELECT id, seq, prompt, replies_json, created_at FROM team_discussion_turns
       WHERE team_id = ? AND seq < ? ORDER BY seq DESC LIMIT 21
     `).all(input.teamId, input.beforeSeq ?? Number.MAX_SAFE_INTEGER) as unknown as DiscussionRow[]
-    const turns = rows.slice(0, 20).map(toTurn).reverse()
+    const turns = rows.slice(0, 20).map((row) => {
+      const turn = toTurn(row)
+      const metaRow = this.db.sqlite
+        .prepare(`SELECT value_json FROM settings WHERE key = ?`)
+        .get(`teams.task-summary-turn:${row.id}`) as { value_json: string } | undefined
+      if (metaRow) {
+        try {
+          const parsed = TaskSummaryMetaSchema.safeParse(JSON.parse(metaRow.value_json))
+          if (parsed.success) {
+            turn.taskSummary = parsed.data
+          }
+        } catch {
+          // ignore malformed task summary metadata
+        }
+      }
+      return turn
+    }).reverse()
     return { turns, nextBeforeSeq: rows.length > 20 ? turns[0].seq : null }
   }
 

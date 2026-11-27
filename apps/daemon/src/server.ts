@@ -368,6 +368,7 @@ export class GhostBotDaemon {
       this.sessionRepo,
       () => this.runtimeMode === 'mock',
     )
+    this.privateTasks.reconcileTerminalSummaries()
 
     this.schedulerService = new SchedulerService(dbHandle, this.botRepo, this.teamsService, {
       tickIntervalMs: 5_000,

@@ -1480,28 +1480,6 @@ export const TeamDiscussionRepliesSchema = z.array(z.object({
   text: z.string().min(1).max(8192),
   round: z.number().int().min(1).max(2).optional(),
 })).min(1).max(24)
-export const TeamDiscussionTurnSchema = z.object({
-  id: z.uuid(),
-  seq: z.number().int().positive(),
-  text: z.string().min(1).max(4000),
-  replies: TeamDiscussionRepliesSchema,
-  createdAt: z.string(),
-})
-export const TeamDiscussionPageSchema = z.object({
-  turns: z.array(TeamDiscussionTurnSchema).max(20),
-  nextBeforeSeq: z.number().int().positive().nullable(),
-})
-export type TeamDiscussionList = z.infer<typeof TeamDiscussionListSchema>
-export type TeamDiscussionSend = z.infer<typeof TeamDiscussionSendSchema>
-export type TeamDiscussionCancel = z.infer<typeof TeamDiscussionCancelSchema>
-export type TeamDiscussionCancelResponse = z.infer<typeof TeamDiscussionCancelResponseSchema>
-
-export const DelegateTeamTaskInputSchema = TeamIdParamSchema.extend({
-  assignedBotId: BotIdSchema,
-  objective: z.string().trim().min(1).max(2000),
-  operationId: z.uuid(),
-}).strict()
-
 export const PrivateTaskStatusSchema = z.enum([
   'queued',
   'running',
@@ -1517,6 +1495,40 @@ export const PrivateTaskStatusSchema = z.enum([
   'pending',
   'cancelling',
 ])
+
+export const TaskSummaryMetaSchema = z.object({
+  teamRunId: TeamIpcIdSchema,
+  taskId: z.string().min(1),
+  assignedBotId: BotIdSchema,
+  sessionId: SessionIdSchema.nullable(),
+  status: PrivateTaskStatusSchema,
+  objective: z.string().max(500),
+  blocker: z.string().max(500).nullable(),
+})
+export type TaskSummaryMeta = z.infer<typeof TaskSummaryMetaSchema>
+
+export const TeamDiscussionTurnSchema = z.object({
+  id: z.uuid(),
+  seq: z.number().int().positive(),
+  text: z.string().min(1).max(4000),
+  replies: TeamDiscussionRepliesSchema,
+  createdAt: z.string(),
+  taskSummary: TaskSummaryMetaSchema.optional(),
+})
+export const TeamDiscussionPageSchema = z.object({
+  turns: z.array(TeamDiscussionTurnSchema).max(20),
+  nextBeforeSeq: z.number().int().positive().nullable(),
+})
+export type TeamDiscussionList = z.infer<typeof TeamDiscussionListSchema>
+export type TeamDiscussionSend = z.infer<typeof TeamDiscussionSendSchema>
+export type TeamDiscussionCancel = z.infer<typeof TeamDiscussionCancelSchema>
+export type TeamDiscussionCancelResponse = z.infer<typeof TeamDiscussionCancelResponseSchema>
+
+export const DelegateTeamTaskInputSchema = TeamIdParamSchema.extend({
+  assignedBotId: BotIdSchema,
+  objective: z.string().trim().min(1).max(2000),
+  operationId: z.uuid(),
+}).strict()
 
 export type TeamMemberRoutingTuple = z.infer<typeof TeamMemberRoutingTupleSchema>
 

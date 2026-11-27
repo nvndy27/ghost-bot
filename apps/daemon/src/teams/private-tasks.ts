@@ -1,18 +1,35 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   CancelPrivateTaskInput,
   DelegateTeamTaskInput,
   ListPrivateTasksInput,
   PrivateTaskChatRecord,
+  TaskSummaryMeta,
   TeamMemberRoutingTuple,
 } from '@ghost-bot/shared-types/ipc'
 import type { DatabaseHandle } from '../db/client.ts'
-import { DaemonError } from '../errors.ts'
+import { DaemonError, redactSecrets } from '../errors.ts'
 import type { SessionRepository } from '../sessions/repository.ts'
 import type { TeamMemberRoutingService } from './member-routing.ts'
 import type { TeamsService } from './service.ts'
 
 const PRIVATE_TASK_META_PREFIX = 'teams.private-task-meta:'
+const TASK_SUMMARY_TURN_PREFIX = 'teams.task-summary-turn:'
+const TERMINAL_TASK_STATUSES = new Set<PrivateTaskChatRecord['status']>([
+  'completed',
+  'failed',
+  'cancelled',
+  'blocked',
+  'denied',
+  'uncertain',
+  'budget_exhausted',
+  'stopped_by_parent',
+])
+
+function deterministicUuid(seed: string): string {
+  const hex = createHash('sha256').update(seed).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
 
 interface StoredTaskMeta {
   teamId: string
@@ -160,7 +177,12 @@ export class PrivateTaskChatService {
       .run(`${PRIVATE_TASK_META_PREFIX}${started.run.id}`, JSON.stringify(meta), now)
 
     if (started.created) {
-      void this.teams.executeTeamRunToCompletion(started.run.id).catch(() => {})
+      void this.teams
+        .executeTeamRunToCompletion(started.run.id)
+        .catch(() => {})
+        .finally(() => {
+          this.publishTerminalSummaryIfNeeded(started.run.id)
+        })
     }
 
     return {
@@ -239,6 +261,10 @@ export class PrivateTaskChatService {
         daemonRunId = null
       }
 
+      if (TERMINAL_TASK_STATUSES.has(effectiveStatus)) {
+        this.publishTerminalSummaryIfNeeded(meta.teamRunId)
+      }
+
       results.push({
         taskId: meta.taskId,
         teamRunId: meta.teamRunId,
@@ -266,9 +292,171 @@ export class PrivateTaskChatService {
       throw new DaemonError('SCOPE_FORBIDDEN', 'Task does not belong to this group', { statusCode: 403 })
     }
     const res = await this.teams.cancelTeamRun(input.teamRunId)
+    this.publishTerminalSummaryIfNeeded(input.teamRunId)
     return {
       teamRunId: input.teamRunId,
       cancelled: res.run.status === 'cancelled' || res.run.status === 'uncertain',
     }
+  }
+
+  reconcileTerminalSummaries(): number {
+    const { tasks } = this.list({})
+    let published = 0
+    for (const task of tasks) {
+      if (TERMINAL_TASK_STATUSES.has(task.status)) {
+        if (this.publishTerminalSummaryIfNeeded(task.teamRunId)) {
+          published += 1
+        }
+      }
+    }
+    return published
+  }
+
+  publishTerminalSummaryIfNeeded(teamRunId: string): boolean {
+    const metaRow = this.db.sqlite
+      .prepare(`SELECT value_json FROM settings WHERE key = ?`)
+      .get(`${PRIVATE_TASK_META_PREFIX}${teamRunId}`) as { value_json: string } | undefined
+    if (!metaRow) return false
+
+    let meta: StoredTaskMeta
+    try {
+      meta = JSON.parse(metaRow.value_json) as StoredTaskMeta
+    } catch {
+      return false
+    }
+
+    const taskRow = this.db.sqlite
+      .prepare(
+        `SELECT tt.status, tt.error_message, t.archived_at AS team_archived_at
+         FROM team_tasks tt
+         JOIN team_runs tr ON tr.id = tt.team_run_id
+         JOIN teams t ON t.id = tr.team_id
+         WHERE tt.id = ? AND tt.team_run_id = ?`,
+      )
+      .get(meta.taskId, meta.teamRunId) as
+      | {
+          status: PrivateTaskChatRecord['status']
+          error_message: string | null
+          team_archived_at: string | null
+        }
+      | undefined
+
+    if (!taskRow || taskRow.team_archived_at !== null) return false
+    if (!TERMINAL_TASK_STATUSES.has(taskRow.status)) return false
+
+    // TASK-01: Deterministic operation_id per (teamId, teamRunId, taskId, terminalStatus)
+    const operationId = deterministicUuid(
+      `task-summary:${meta.teamId}:${meta.teamRunId}:${meta.taskId}:${taskRow.status}`,
+    )
+
+    const existing = this.db.sqlite
+      .prepare(`SELECT id FROM team_discussion_turns WHERE team_id = ? AND operation_id = ?`)
+      .get(meta.teamId, operationId) as { id: string } | undefined
+    if (existing) return false
+
+    const linkRow = this.db.sqlite
+      .prepare(
+        `SELECT session_id, daemon_run_id FROM team_execution_links
+         WHERE team_task_id = ? ORDER BY attempt DESC, created_at DESC LIMIT 1`,
+      )
+      .get(meta.taskId) as { session_id: string; daemon_run_id: string } | undefined
+
+    const sessionId = linkRow?.session_id ?? meta.sessionId ?? null
+    if (taskRow.status === 'completed' && sessionId) {
+      const stillRunning = this.db.sqlite
+        .prepare(
+          `SELECT 1 FROM runs
+           WHERE session_id = ? AND status IN ('queued', 'starting', 'running', 'awaiting_approval', 'cancelling')
+           LIMIT 1`,
+        )
+        .get(sessionId)
+      if (stillRunning) return false
+    }
+    const safeObjective = redactSecrets(meta.objective).slice(0, 300)
+    const safeBlocker = taskRow.error_message ? redactSecrets(taskRow.error_message).slice(0, 400) : null
+
+    // TASK-02 & TASK-03: Truthful status (never inferred success) + secret redaction + bounded output
+    let summaryBody = ''
+    if (taskRow.status === 'completed') {
+      let assistantText = ''
+      if (sessionId) {
+        const msgRow = (linkRow?.daemon_run_id
+          ? this.db.sqlite
+              .prepare(
+                `SELECT content_json FROM messages
+                 WHERE session_id = ? AND run_id = ? AND role = 'assistant'
+                 ORDER BY seq_order DESC LIMIT 1`,
+              )
+              .get(sessionId, linkRow.daemon_run_id)
+          : this.db.sqlite
+              .prepare(
+                `SELECT content_json FROM messages
+                 WHERE session_id = ? AND role = 'assistant'
+                 ORDER BY seq_order DESC LIMIT 1`,
+              )
+              .get(sessionId)) as { content_json: string } | undefined
+        if (msgRow) {
+          try {
+            const parsed = JSON.parse(msgRow.content_json) as { text?: string }
+            if (typeof parsed.text === 'string') {
+              assistantText = redactSecrets(parsed.text).trim().slice(0, 800)
+            }
+          } catch {
+            assistantText = ''
+          }
+        }
+      }
+      summaryBody = assistantText
+        ? `Task completed: ${assistantText}`
+        : `Task completed (no assistant text output recorded).`
+    } else if (taskRow.status === 'cancelled' || taskRow.status === 'stopped_by_parent') {
+      summaryBody = `Task ${taskRow.status}${safeBlocker ? `: ${safeBlocker}` : ' by user or parent cancellation.'}`
+    } else if (taskRow.status === 'uncertain') {
+      summaryBody = `Task outcome uncertain (interrupted or unconfirmed — not auto-replayed)${safeBlocker ? `: ${safeBlocker}` : '.'}`
+    } else {
+      summaryBody = `Task ${taskRow.status}${safeBlocker ? ` — blocker: ${safeBlocker}` : '.'}`
+    }
+
+    const boundedBody = redactSecrets(summaryBody).slice(0, 1200)
+    const prompt = `Task Summary: ${safeObjective}`
+    const replies = [
+      {
+        botId: meta.assignedBotId,
+        routing: meta.routing,
+        revision: randomUUID(),
+        text: boundedBody,
+        round: 1 as const,
+      },
+    ]
+
+    const turnId = randomUUID()
+    const now = new Date().toISOString()
+    const summaryMeta: TaskSummaryMeta = {
+      teamRunId: meta.teamRunId,
+      taskId: meta.taskId,
+      assignedBotId: meta.assignedBotId,
+      sessionId,
+      status: taskRow.status,
+      objective: safeObjective,
+      blocker: safeBlocker,
+    }
+
+    return this.db.transaction(() => {
+      const info = this.db.sqlite
+        .prepare(
+          `INSERT OR IGNORE INTO team_discussion_turns(id, team_id, operation_id, prompt, replies_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(turnId, meta.teamId, operationId, prompt, JSON.stringify(replies), now)
+      if (info.changes === 0) return false
+
+      this.db.sqlite
+        .prepare(
+          `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+        )
+        .run(`${TASK_SUMMARY_TURN_PREFIX}${turnId}`, JSON.stringify(summaryMeta), now)
+      return true
+    })
   }
 }
