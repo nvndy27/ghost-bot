@@ -67,6 +67,8 @@ CI, CodeQL, Scorecard, Dependabot and dependency-graph SBOM export are configure
 
 **Blocked** pending final artifacts after UI refinement and provisioned target hosts. Clean Fedora RPM dependency completeness and launcher, AppImage FUSE, Ubuntu desktop policies, and same-profile upgrade/restart remain open. Native and electron-builder RPM dependency declarations differ. Existing extracted artifacts do not close these gaps. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
 
+The new upgrade runner has not been exercised with two distinct release artifacts because only prior-evidence artifacts are present locally. Its full evidence remains **Blocked** until a candidate artifact exists. `--interactive-write-grant` also requires an operator to approve the native prompt for a temporary folder. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
+
 ## Main CI save-test timing correction
 
 **Tested** — Run `46045474681` observed a disabled Save button before persistence completed. PR #47 now waits for the acknowledged clean state. The focused scenario and daemon-paused reproduction pass with the correction. Hosted complete-suite verification remains pending for this updated head. Existing final-package acceptance gaps still apply.
