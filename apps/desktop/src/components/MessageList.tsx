@@ -214,7 +214,11 @@ export function MessageList({
               return <UserMessage key={msg.id} text={msg.text} />
             }
             return (
-              <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div key={msg.id} className="gb-assistant-message" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="gb-message-author">
+                  <BotAvatar config={bot.avatar} status={msg.streaming ? bot.avatarStatus : 'idle'} size={24} />
+                  <strong>{bot.name}</strong>
+                </div>
                 {msg.streaming ? (
                   <StreamingMessage text={msg.text} />
                 ) : (
