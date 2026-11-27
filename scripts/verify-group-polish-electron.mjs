@@ -245,6 +245,21 @@ try {
   await page.getByRole('button', { name: 'Approve once', exact: true }).click()
   await page.getByRole('button', { name: 'Back to discussion' }).click()
   await page.locator('[data-task-summary]').filter({ hasText: 'Mock approval fixture for completion' }).waitFor()
+  const privateRun = await page.evaluate(async ({ teamId, teamRunId }) => {
+    const { tasks } = await window.ghostBot.listPrivateTaskChats({ teamId })
+    return tasks.find((task) => task.teamRunId === teamRunId)
+  }, { teamId: target.id, teamRunId: approvalRunId })
+  assert.ok(privateRun?.sessionId && privateRun.daemonRunId)
+  const personalScope = { botId: privateRun.assignedBotId }
+  const personalOutput = await page.evaluate((scope) => window.ghostBot.listWorkspaceOutput(scope), personalScope)
+  assert.ok(personalOutput.runs.every((run) => run.id !== privateRun.daemonRunId))
+  assert.ok(personalOutput.entries.every((entry) => entry.runId !== privateRun.daemonRunId))
+  await assert.rejects(page.evaluate((scope) => window.ghostBot.listWorkspaceOutput(scope), {
+    ...personalScope, sessionId: privateRun.sessionId,
+  }), /outside personal Workspace Output/)
+  await assert.rejects(page.evaluate((scope) => window.ghostBot.cancelWorkspaceOutput(scope), {
+    ...personalScope, runId: privateRun.daemonRunId,
+  }), /Run not found for authorized bot/)
 
   await page.setViewportSize({ width: 900, height: 700 })
   await row(teams[3]).click()

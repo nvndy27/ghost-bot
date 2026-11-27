@@ -2,13 +2,15 @@
 
 ## Unified Alpha.1 and Alpha.2
 
-The integration candidate preserves main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`, Alpha.1 PR #44 at `c9d332d39d1df4a2429d52c7dbba94bb5444db34` (including PR #42 at `bdb6c75d37fcab1d38473cdd77f7f5d55d969acf`) and Workspace PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541`. Branding PR #38 stays separate.
+The integration candidate preserves main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`, Alpha.1 PR #44 at `c9d332d39d1df4a2429d52c7dbba94bb5444db34` (including PR #42 at `bdb6c75d37fcab1d38473cdd77f7f5d55d969acf`) and coordinated Workspace PR #45 successor `871190743d8a35735cfb895c0a4a85629a2fe228`, which contains the pinned icon refinement `c174875bcfa9fded3f08fbec09f9eacdba6ec541`. Branding PR #38 stays separate.
 
 The PR #42 regression fixtures delegate through the authorized boundary and hold dispatch. Concurrent contenders with one operation ID and different assignees preserve the winning task, session, dispatch and stored metadata. The unified candidate closes the personal Workspace panel and draft handoff in Private Task Chat, stops admitting new discussion and task requests during daemon shutdown, and persists appearance changes as ordered, field-specific updates. Existing migrations `0001–0014` and the Alpha.3 executable harness are preserved.
 
 Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Required hosted CI, Agent 2 acceptance and maintainer visual approval are pending. No inference or package acceptance ran on the unified candidate.
 
-All six Workspace scenarios passed in local offline Electron with Git and PDF sandbox enforcement. The Group Chat Electron run passed native avatar content validation and restart persistence, member routing and two-round discussion, single-action task approval, cancellation, summary navigation and Private Task Workspace isolation. The Group composer and five icon-only Workspace tabs were checked together at 900 px in dark and light. Personal Workspace tabs also passed in both themes at 220 px. Synthetic screenshots are stored locally for maintainer review.
+All six Workspace scenarios passed in local offline Electron with Git and PDF sandbox enforcement before the coordinated Output delta. The Group Chat Electron run passed native avatar content validation and restart persistence, member routing and two-round discussion, single-action task approval, cancellation, summary navigation and Private Task Workspace isolation. Two Personal Chat launches passed conversation switching during a mock run, provider and grant changes, sidebar and tab restoration, and read-only save denial. The Group composer and five icon-only Workspace tabs were checked together at 900 px in dark and light. Personal Workspace tabs also passed in both themes at 220 px. Synthetic screenshots are stored locally for maintainer review.
+
+After merging the Workspace successor, affected lint, daemon typecheck, desktop build and Output tests passed. Output passed 2/2, covering one service test and one Electron scenario. The Group Chat rerun verified that Personal Output cannot list, filter by session or cancel a real mock private delegation. PR #45's hosted checks passed on the successor.
 
 ## Alpha.1 integrity and Issue #41
 
@@ -18,9 +20,17 @@ All six Workspace scenarios passed in local offline Electron with Git and PDF sa
 
 **Tested** on accepted main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`. Team-scoped settings validate daemon catalog choices without mutating bots. Membership edits prune overrides and require a retained lead. Offline dispatch snapshots effective routing and uses durable scoped child sessions. Lint, affected typechecks/build, focused tests 4/4, and two-launch offline Electron acceptance passed. Zero live inference.
 
+## Alpha.3 hosted isolation and Output handoff
+
+Hosted PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541` reproduced the Computer Use Chrome SUID helper abort while passing Workspace. CI returns to the known-good Jammy runner with a checksum-pinned Bubblewrap 0.13.1 build and distinct namespace preflights. The runtime launches, containment tests and Chromium sandbox requirements stay in force.
+
+The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The exact hosted check remains required.
+
+Personal Workspace Output now excludes marked private-task sessions and legacy linked team sessions for listing and cancellation. Focused output module and Electron checks passed. The same targeted scenario passed in a rebuilt Fedora AppImage, including Linux sandbox checks and mock daemon restart. This evidence applies to the Workspace branch. See [cause, validation and unified handoff](extensions/alpha2g-workspace-convergence.md#alpha3-hosted-isolation-remediation).
+
 ## Alpha.2G Workspace convergence
 
-**Tested** on the provisional `integration/alpha2g-workspace` stack. Main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f` and PRs #33, #35, #36, #39, and #43 are preserved by ancestry. Fixed Output cancellation wiring and polling, protected output state across context switches, and updated the shell and discovery tests for the integrated surface. CI targets Ubuntu 24.04 with the required Bubblewrap and Poppler behavior. The six Alpha.3 Workspace scenarios now accept a real packaged executable and assert Linux renderer sandboxing, offline daemon startup and mock runtime availability. See [evidence and commands](extensions/alpha2g-workspace-convergence.md).
+**Tested** on the provisional `integration/alpha2g-workspace` stack. Main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f` and PRs #33, #35, #36, #39, and #43 are preserved by ancestry. Fixed Output cancellation wiring and polling, protected output state across context switches, and updated the shell and discovery tests for the integrated surface. The six Alpha.3 Workspace scenarios now accept a real packaged executable and assert Linux renderer sandboxing, offline daemon startup and mock runtime availability. See [evidence and commands](extensions/alpha2g-workspace-convergence.md).
 
 The Workspace header uses 18 px UI.1 icons and 32 px tab targets. All five tabs stay in one row at the 220 px minimum. Renderer appearance patching preserves the theme and widths when the active tab changes. The focused Electron shell suite passed 3/3. Captures show the real [dark](../design/reviews/alpha-2g/workspace-icons-dark-220px.png) and [light](../design/reviews/alpha-2g/workspace-icons-light-220px.png) panels at minimum width.
 

@@ -12,6 +12,10 @@ Review the integrity and UI stack as part of the unified candidate. Alpha.3 acce
 
 Review the Alpha.1B draft against accepted main. Keep the approved Alpha.1C discussion feature on a separate branch with mock-only, tool-free execution; preserve advanced Teams runs as separate functionality.
 
+## Alpha.3 combined acceptance
+
+Review daemon shutdown ownership, the explicit Private Task Chat context and personal Output isolation on the combined SHA. Confirm that hosted Ubuntu passes both isolation preflights and required tests. Use the existing Alpha.3 package harness on freshly built artifacts when package acceptance is authorized.
+
 ## Alpha.2G to Alpha.3 handoff
 
 Use the [executable package acceptance harness](extensions/alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance) for fresh Ubuntu desktop and installed Fedora artifacts. Preserve the current mutation gates and use the unified SHA for fresh package evidence.

@@ -51,6 +51,17 @@ const HIDDEN_EVENT_TYPES = new Set([
   'item.reasoning',
 ])
 
+// The child-session marker is written before private dispatch. Existing team
+// executions can also be identified by their persisted execution link.
+const PERSONAL_SESSION = `
+  NOT EXISTS (SELECT 1 FROM settings WHERE key = 'teams.child-session:' || sessions.id)
+  AND NOT EXISTS (SELECT 1 FROM team_execution_links WHERE session_id = sessions.id)
+`
+const PERSONAL_RUN = `EXISTS (
+  SELECT 1 FROM sessions WHERE sessions.id = runs.session_id
+    AND sessions.agent_id = runs.agent_id AND ${PERSONAL_SESSION}
+)`
+
 const BUILD_EXECUTABLES = new Set(['pnpm', 'npm', 'yarn', 'node', 'tsc', 'eslint', 'cargo', 'pytest', 'vitest'])
 
 function clipText(raw: string, maxLen = 3800): string {
@@ -200,18 +211,18 @@ export class WorkspaceOutputService {
 
     if (input.sessionId) {
       const sess = this.db.sqlite
-        .prepare('SELECT id, agent_id FROM sessions WHERE id = ?')
-        .get(input.sessionId) as { id: string; agent_id: string } | undefined
-      if (!sess || sess.agent_id !== botId) {
+        .prepare(`SELECT id FROM sessions WHERE id = ? AND agent_id = ? AND ${PERSONAL_SESSION}`)
+        .get(input.sessionId, botId)
+      if (!sess) {
         throw new DaemonError(
           'OUTPUT_SESSION_UNAUTHORIZED',
-          'Session does not belong to the authorized bot',
+          'Session is outside personal Workspace Output',
           { statusCode: 403 },
         )
       }
     }
 
-    const runConditions = ['agent_id = ?']
+    const runConditions = ['agent_id = ?', PERSONAL_RUN]
     const runParams: Array<string | number> = [botId]
     if (input.sessionId) {
       runConditions.push('session_id = ?')
@@ -401,9 +412,9 @@ export class WorkspaceOutputService {
 
     const botId = input.botId!
     const run = this.db.sqlite
-      .prepare('SELECT id, session_id, agent_id, status FROM runs WHERE id = ?')
-      .get(input.runId) as { id: string; session_id: string; agent_id: string; status: string } | undefined
-    if (!run || run.agent_id !== botId) {
+      .prepare(`SELECT session_id FROM runs WHERE id = ? AND agent_id = ? AND ${PERSONAL_RUN}`)
+      .get(input.runId, botId) as { session_id: string } | undefined
+    if (!run) {
       throw new DaemonError('OUTPUT_RUN_NOT_FOUND', 'Run not found for authorized bot', {
         statusCode: 404,
       })
