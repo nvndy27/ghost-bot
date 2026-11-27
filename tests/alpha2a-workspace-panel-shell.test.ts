@@ -133,8 +133,14 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const initialWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     const resizeHandle = page.getByRole('separator', { name: 'Resize right workspace panel' })
     await resizeHandle.focus()
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('ArrowLeft')
+    for (const steps of [1, 2]) {
+      await resizeHandle.press('ArrowLeft')
+      const expectedWidth = Math.min(420, initialWidth + 16 * steps)
+      await page.waitForFunction((width) => {
+        const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
+        return panel?.getBoundingClientRect().width === width
+      }, expectedWidth)
+    }
     const resizedWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     assert.ok(resizedWidth > initialWidth, `Expected right panel width to increase on ArrowLeft (${initialWidth} -> ${resizedWidth})`)
 
@@ -267,7 +273,8 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.getByTestId('workspace-files-unavailable').waitFor()
     assert.equal(await editor.count(), 0)
 
-    await page.getByRole('button', { name: /Workspace Test Team/ }).click()
+    await page.locator('[data-team-id] .gb-team-item')
+      .filter({ hasText: 'Workspace Test Team' }).click()
     await page.getByText('Group workspace requires an authorized task scope', { exact: false }).waitFor()
     await page.getByTestId('workspace-tab-overview').click()
     await page.getByLabel('Team activity panel').waitFor()
