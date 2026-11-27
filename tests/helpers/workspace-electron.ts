@@ -35,6 +35,7 @@ export async function launchWorkspaceElectron(dataDir: string) {
 
   try {
     const page = await app.firstWindow()
+    await page.locator('meta[http-equiv="Content-Security-Policy"]').waitFor({ state: 'attached' })
     const facts = await app.evaluate(({ app, BrowserWindow }) => {
       const web = BrowserWindow.getAllWindows()[0]?.webContents
       const preferences = web?.getLastWebPreferences()
