@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ComponentPropsWithRef, ReactNode } from 'react'
 
 export const ICON_SIZE = {
   xs: 14,
@@ -10,7 +10,7 @@ export const ICON_SIZE = {
 export const ICON_STROKE = 1.9
 
 export interface IconButtonProps
-  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  extends Omit<ComponentPropsWithRef<'button'>, 'children' | 'size'> {
   label: string
   children: ReactNode
   size?: 'sm' | 'md'

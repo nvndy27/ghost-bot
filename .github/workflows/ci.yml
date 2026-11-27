@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   offline:
+    # Computer Use needs a nested Chromium user namespace inside the rootless worker.
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
@@ -26,7 +27,19 @@ jobs:
       - name: Prepare isolated Linux test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap xvfb xauth dbus-x11 libsecret-tools weston libgtk-3-0 libnss3 libasound2 libgbm1
+          sudo apt-get install -y --no-install-recommends git poppler-utils xvfb xauth dbus-x11 libsecret-tools weston libgtk-3-0 libnss3 libasound2 libgbm1 curl xz-utils build-essential libcap-dev libselinux1-dev pkg-config meson ninja-build
+          # Jammy's distro bwrap lacks the Workspace restriction flags.
+          bwrap_build="$(mktemp -d)"
+          trap 'rm -rf "$bwrap_build"' EXIT
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz \
+            --output "$bwrap_build/bubblewrap.tar.xz"
+          (cd "$bwrap_build" && echo '0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d  bubblewrap.tar.xz' | sha256sum --check --strict)
+          tar -xJf "$bwrap_build/bubblewrap.tar.xz" -C "$bwrap_build"
+          meson setup "$bwrap_build/out" "$bwrap_build/bubblewrap-0.13.1" --buildtype=release -Dman=disabled
+          meson compile -C "$bwrap_build/out"
+          sudo install -o root -g root -m 0755 "$bwrap_build/out/bwrap" /usr/bin/bwrap
+          /usr/bin/bwrap --version
           # Workers use the read-only /usr mount and invoke /usr/bin/node.
           if [ "$(readlink -f "$(command -v node)")" != /usr/bin/node ]; then
             sudo install -m 0755 "$(command -v node)" /usr/bin/node
@@ -36,9 +49,19 @@ jobs:
           google-chrome --version
           weston --version
           # Fail rather than bypass the required OS isolation.
-          bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL \
+          /usr/bin/git --version
+          /usr/bin/pdfinfo -v
+          /usr/bin/pdftoppm -v
+          # Workspace subprocesses forbid nested user namespaces.
+          /usr/bin/bwrap --unshare-all --unshare-user --unshare-net --disable-userns --assert-userns-disabled \
+            --die-with-parent --new-session --cap-drop ALL \
             --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
             --symlink usr/bin /bin --proc /proc --dev /dev /usr/bin/node --version
+          # Computer Use keeps the outer namespaces and allows Chromium's own inner sandbox.
+          /usr/bin/bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL \
+            --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
+            --symlink usr/bin /bin --proc /proc --dev /dev \
+            /usr/bin/unshare --user --map-root-user --pid --net --fork /usr/bin/true
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -48,6 +71,9 @@ jobs:
       # Browser/daemon integration fixtures are resource-intensive; serialize test files
       # on hosted runners. Keep every test and production RPC deadline unchanged.
       - name: Root offline tests
+        env:
+          GHOST_BOT_REQUIRE_GIT_SANDBOX: '1'
+          GHOST_BOT_REQUIRE_PDF_SANDBOX: '1'
         timeout-minutes: 12
         run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m node --test --test-timeout=120000 --test-concurrency=1 --test-reporter=tap tests/*.test.ts
       - name: Workspace offline tests

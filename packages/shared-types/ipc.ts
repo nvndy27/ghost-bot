@@ -1,4 +1,19 @@
+import {
+  WorkspaceDiscoveryOperationSchema, WorkspacePreviewInputSchema, WorkspaceSearchInputSchema,
+  type WorkspacePreviewResult, type WorkspaceSearchResult,
+} from '@ghost-bot/shared-types/workspace-discovery'
+export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
+import type { WorkspaceBrowserBounds, WorkspaceBrowserCommand, WorkspaceBrowserState } from '@ghost-bot/shared-types/workspace-browser'
+import type {
+  WorkspaceOutputCancelInput,
+  WorkspaceOutputCancelResponse,
+  WorkspaceOutputQuery,
+  WorkspaceOutputResponse,
+} from '@ghost-bot/shared-types/workspace-output'
+export * from '@ghost-bot/shared-types/workspace-browser'
+import type { WorkspaceGitInspect, WorkspaceGitOperation, WorkspaceGitResponse } from '@ghost-bot/shared-types/workspace-git'
+export * from '@ghost-bot/shared-types/workspace-git'
 
 export const IPC_CHANNELS = {
   APP_INFO: 'ghost:app:info',
@@ -11,12 +26,28 @@ export const IPC_CHANNELS = {
   BOTS_DELETE: 'ghost:bots:delete',
   BOTS_SET_ACTIVE: 'ghost:bots:set-active',
   AVATAR_IMPORT_SVG: 'ghost:avatar:import-svg',
+  TEAM_DISCUSSION_LIST: 'ghost:teams:discussion:list',
+  TEAM_DISCUSSION_SEND: 'ghost:teams:discussion:send',
+  TEAM_DISCUSSION_CANCEL: 'ghost:teams:discussion:cancel',
+  TEAM_TASKS_DELEGATE: 'ghost:teams:tasks:delegate',
+  TEAM_TASKS_LIST_PRIVATE: 'ghost:teams:tasks:list-private',
+  TEAM_TASKS_CANCEL_PRIVATE: 'ghost:teams:tasks:cancel-private',
+  TEAM_MEMBER_ROUTING_GET: 'ghost:teams:member-routing:get',
+  TEAM_MEMBER_ROUTING_SET: 'ghost:teams:member-routing:set',
   WORKSPACE_PICK: 'ghost:workspace:pick',
   WORKSPACE_AUTHORIZE_READ: 'ghost:workspace:authorize-read',
   WORKSPACE_RESOLVE_CONTEXT: 'ghost:workspace:resolve-context',
   WORKSPACE_LIST_DIR: 'ghost:workspace:list-dir',
+  WORKSPACE_SEARCH: 'ghost:workspace:search',
+  WORKSPACE_PREVIEW: 'ghost:workspace:preview',
+  WORKSPACE_CANCEL_DISCOVERY: 'ghost:workspace:cancel-discovery',
   WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
   WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
+  WORKSPACE_BROWSER_COMMAND: 'ghost:workspace:browser-command',
+  WORKSPACE_BROWSER_BOUNDS: 'ghost:workspace:browser-bounds',
+  WORKSPACE_BROWSER_SCREENSHOT: 'ghost:workspace:browser-screenshot',
+  WORKSPACE_GIT_INSPECT: 'ghost:workspace:git-inspect',
+  WORKSPACE_GIT_CANCEL: 'ghost:workspace:git-cancel',
   SETTINGS_GET: 'ghost:settings:get',
   SETTINGS_UPDATE: 'ghost:settings:update',
   SETTINGS_RESET: 'ghost:settings:reset',
@@ -101,6 +132,7 @@ export const IPC_CHANNELS = {
   OPENROUTER_CREDENTIAL_SET: 'ghost:openrouter:credential:set',
   OPENROUTER_CREDENTIAL_DELETE: 'ghost:openrouter:credential:delete',
   OPENROUTER_AUTH_SET: 'ghost:openrouter:auth:set',
+  TEAM_AVATAR_PICK: 'ghost:teams:avatar-pick',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -336,6 +368,16 @@ export const AppearanceSettingsSchema = z.object({
   workspaceTab: WorkspaceTabIdSchema.default('overview'),
 })
 
+const AppearanceSettingsPatchSchema = z.object({
+  theme: AppearanceSettingsSchema.shape.theme.unwrap().optional(),
+  reducedMotion: AppearanceSettingsSchema.shape.reducedMotion.unwrap().optional(),
+  leftWidth: AppearanceSettingsSchema.shape.leftWidth.unwrap().optional(),
+  rightWidth: AppearanceSettingsSchema.shape.rightWidth.unwrap().optional(),
+  leftCollapsed: AppearanceSettingsSchema.shape.leftCollapsed.unwrap().optional(),
+  rightCollapsed: AppearanceSettingsSchema.shape.rightCollapsed.unwrap().optional(),
+  workspaceTab: WorkspaceTabIdSchema.optional(),
+})
+
 export const PersonalizationSettingsSchema = z.object({
   defaultInstructions: z.string().max(2000).default(''),
   responseStyle: z.enum(['concise', 'balanced', 'detailed']).default('balanced'),
@@ -410,7 +452,7 @@ export type AppSettings = z.infer<typeof AppSettingsSchema>
 export const AppSettingsPatchSchema = z
   .object({
     general: GeneralSettingsSchema.partial().optional(),
-    appearance: AppearanceSettingsSchema.partial().optional(),
+    appearance: AppearanceSettingsPatchSchema.optional(),
     personalization: PersonalizationSettingsSchema.partial().optional(),
     permissions: PermissionsSettingsSchema.partial().optional(),
     privacy: PrivacySettingsSchema.partial().optional(),
@@ -1388,6 +1430,18 @@ export const ListTeamsInputSchema = z
   })
   .strict()
 
+export const TeamAppearanceSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('auto') }).strict(),
+  z.object({ mode: z.literal('bot'), avatar: BotAvatarConfigSchema }).strict(),
+  z.object({
+    mode: z.literal('upload'),
+    dataUrl: z.string().max(107000).regex(/^data:image\/png;base64,[a-zA-Z0-9+/]+={0,2}$/),
+  }).strict(),
+])
+export type TeamAppearance = z.infer<typeof TeamAppearanceSchema>
+export const TeamAvatarPickResponseSchema = z.string().max(5600000)
+  .regex(/^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/]+={0,2}$/).nullable()
+
 export const CreateTeamIpcInputSchema = z
   .object({
     name: z.string().min(1).max(120),
@@ -1395,6 +1449,7 @@ export const CreateTeamIpcInputSchema = z
     leadBotId: BotIdSchema,
     memberBotIds: z.array(BotIdSchema).min(1).max(12),
     bounds: TeamBoundsInputSchema.optional(),
+    appearance: TeamAppearanceSchema.optional(),
   })
   .strict()
 
@@ -1406,6 +1461,7 @@ export const UpdateTeamIpcInputSchema = z
     leadBotId: BotIdSchema.optional(),
     memberBotIds: z.array(BotIdSchema).min(1).max(12).optional(),
     bounds: TeamBoundsInputSchema.optional(),
+    appearance: TeamAppearanceSchema.optional(),
   })
   .strict()
 
@@ -1417,6 +1473,160 @@ export const UpdateTeamMembersIpcInputSchema = z
   .strict()
 
 export const TeamIdParamSchema = z.object({ teamId: TeamIpcIdSchema }).strict()
+const RoutingValueSchema = z.string().trim().min(1).max(160)
+export const TeamMemberRoutingOverrideSchema = z.object({
+  runtimeId: RoutingValueSchema.optional(),
+  accountId: RoutingValueSchema.optional(),
+  modelId: RoutingValueSchema.optional(),
+  effort: RoutingValueSchema.optional(),
+}).strict()
+export const TeamMemberRoutingKeySchema = z.object({ teamId: TeamIpcIdSchema, botId: BotIdSchema }).strict()
+export const SetTeamMemberRoutingSchema = TeamMemberRoutingKeySchema.extend({
+  override: TeamMemberRoutingOverrideSchema.nullable(),
+})
+export const TeamMemberRoutingTupleSchema = z.object({
+  runtimeId: RoutingValueSchema,
+  accountId: RoutingValueSchema.nullable(),
+  modelId: RoutingValueSchema,
+  effort: RoutingValueSchema,
+})
+export const TeamMemberRoutingDtoSchema = z.object({
+  override: TeamMemberRoutingOverrideSchema.nullable(),
+  effective: TeamMemberRoutingTupleSchema,
+  revision: z.string(),
+  supported: z.boolean(),
+  catalogs: z.array(z.object({
+    runtimeId: RoutingValueSchema,
+    accountId: RoutingValueSchema,
+    models: z.array(RuntimeModelSummarySchema),
+  })),
+})
+export type TeamMemberRoutingOverride = z.infer<typeof TeamMemberRoutingOverrideSchema>
+export type TeamMemberRoutingKey = z.infer<typeof TeamMemberRoutingKeySchema>
+export type SetTeamMemberRouting = z.infer<typeof SetTeamMemberRoutingSchema>
+export type TeamMemberRoutingDto = z.infer<typeof TeamMemberRoutingDtoSchema>
+
+export const TeamDiscussionListSchema = TeamIdParamSchema.extend({
+  beforeSeq: z.number().int().positive().optional(),
+})
+export const TeamDiscussionSendSchema = TeamIdParamSchema.extend({
+  operationId: z.uuid(),
+  text: z.string().trim().min(1).max(4000),
+  rounds: z.number().int().min(1).max(2).optional(),
+})
+export const TeamDiscussionCancelSchema = TeamIdParamSchema.extend({
+  operationId: z.uuid().optional(),
+})
+export const TeamDiscussionCancelResponseSchema = z.object({
+  teamId: TeamIpcIdSchema,
+  cancelled: z.boolean(),
+})
+export const TeamDiscussionRepliesSchema = z.array(z.object({
+  botId: BotIdSchema,
+  routing: TeamMemberRoutingTupleSchema,
+  revision: z.string().max(256),
+  text: z.string().min(1).max(8192),
+  round: z.number().int().min(1).max(2).optional(),
+})).min(1).max(24)
+export const PrivateTaskStatusSchema = z.enum([
+  'queued',
+  'running',
+  'awaiting_approval',
+  'completed',
+  'failed',
+  'cancelled',
+  'blocked',
+  'denied',
+  'uncertain',
+  'budget_exhausted',
+  'stopped_by_parent',
+  'pending',
+  'cancelling',
+])
+
+export const TaskSummaryMetaSchema = z.object({
+  teamRunId: TeamIpcIdSchema,
+  taskId: z.string().min(1),
+  assignedBotId: BotIdSchema,
+  sessionId: SessionIdSchema.nullable(),
+  status: PrivateTaskStatusSchema,
+  objective: z.string().max(500),
+  blocker: z.string().max(500).nullable(),
+})
+export type TaskSummaryMeta = z.infer<typeof TaskSummaryMetaSchema>
+
+export const TeamDiscussionTurnSchema = z.object({
+  id: z.uuid(),
+  seq: z.number().int().positive(),
+  text: z.string().min(1).max(4000),
+  replies: TeamDiscussionRepliesSchema,
+  createdAt: z.string(),
+  taskSummary: TaskSummaryMetaSchema.optional(),
+})
+export const TeamDiscussionPageSchema = z.object({
+  turns: z.array(TeamDiscussionTurnSchema).max(20),
+  nextBeforeSeq: z.number().int().positive().nullable(),
+})
+export type TeamDiscussionList = z.infer<typeof TeamDiscussionListSchema>
+export type TeamDiscussionSend = z.infer<typeof TeamDiscussionSendSchema>
+export type TeamDiscussionCancel = z.infer<typeof TeamDiscussionCancelSchema>
+export type TeamDiscussionCancelResponse = z.infer<typeof TeamDiscussionCancelResponseSchema>
+
+export const DelegateTeamTaskInputSchema = TeamIdParamSchema.extend({
+  assignedBotId: BotIdSchema,
+  objective: z.string().trim().min(1).max(2000),
+  operationId: z.uuid(),
+}).strict()
+
+export type TeamMemberRoutingTuple = z.infer<typeof TeamMemberRoutingTupleSchema>
+
+export const PrivateTaskChatRecordSchema = z.object({
+  taskId: z.string().min(1),
+  teamRunId: TeamIpcIdSchema,
+  teamId: TeamIpcIdSchema,
+  teamName: z.string(),
+  assignedBotId: BotIdSchema,
+  objective: z.string(),
+  sessionId: SessionIdSchema.nullable(),
+  daemonRunId: RunIdSchema.nullable(),
+  status: PrivateTaskStatusSchema,
+  routing: TeamMemberRoutingTupleSchema.nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const ListPrivateTasksInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema.optional(),
+    botId: BotIdSchema.optional(),
+  })
+  .strict()
+
+export const ListPrivateTasksResponseSchema = z.object({
+  tasks: z.array(PrivateTaskChatRecordSchema),
+})
+
+export const CancelPrivateTaskInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    teamRunId: TeamIpcIdSchema,
+    taskId: z.string().min(1).max(128),
+  })
+  .strict()
+
+export const CancelPrivateTaskResponseSchema = z.object({
+  teamRunId: TeamIpcIdSchema,
+  cancelled: z.boolean(),
+})
+
+export type DelegateTeamTaskInput = z.infer<typeof DelegateTeamTaskInputSchema>
+export type PrivateTaskChatRecord = z.infer<typeof PrivateTaskChatRecordSchema>
+export type ListPrivateTasksInput = z.infer<typeof ListPrivateTasksInputSchema>
+export type CancelPrivateTaskInput = z.infer<typeof CancelPrivateTaskInputSchema>
+export type TeamDiscussionTurn = z.infer<typeof TeamDiscussionTurnSchema>
+export type TeamDiscussionPage = z.infer<typeof TeamDiscussionPageSchema>
+
 export const TeamRunIdParamSchema = z.object({ teamRunId: TeamIpcIdSchema }).strict()
 
 export const TeamPlanTaskInputSchema = z
@@ -1465,6 +1675,7 @@ export const ListTeamMessagesIpcInputSchema = z
   .strict()
 
 export const TeamRecordDtoSchema = z.object({
+  appearance: TeamAppearanceSchema.optional(),
   id: z.string(),
   name: z.string(),
   description: z.string(),
@@ -2155,10 +2366,86 @@ export const WorkspaceContextIpcResponseSchema = z.object({
   ownerId: z.string().min(1),
   ownerName: z.string(),
   canWrite: z.boolean(),
+  writeAuthorized: z.boolean().optional(),
   permissionMode: z.string(),
   authGeneration: z.string().nullable(),
   reason: z.string().nullable(),
 })
+
+export const WorkspaceWriteGrantSchema = z.object({
+  botId: BotIdSchema,
+  workspaceId: z.string().min(1).max(128),
+  authGeneration: z.string().min(1).max(64),
+})
+
+export const WorkspaceCreateEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    kind: z.enum(['file', 'directory']),
+    content: z.string().max(1024 * 1024).optional(),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceCreateEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  kind: z.enum(['file', 'directory']),
+  revision: z.string().nullable(),
+  sizeBytes: z.number().int().nonnegative().nullable(),
+})
+
+export const WorkspaceRenameEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    fromPath: z.string().min(1).max(512),
+    toPath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceRenameEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  fromPath: z.string(),
+  toPath: z.string(),
+  revision: z.string(),
+})
+
+export const WorkspaceDeleteFileIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceDeleteFileIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  quarantined: z.boolean(),
+})
+
+export type WorkspaceCreateEntryIpcInput = z.infer<typeof WorkspaceCreateEntryIpcInputSchema>
+export type WorkspaceCreateEntryIpcResponse = z.infer<typeof WorkspaceCreateEntryIpcResponseSchema>
+export type WorkspaceRenameEntryIpcInput = z.infer<typeof WorkspaceRenameEntryIpcInputSchema>
+export type WorkspaceRenameEntryIpcResponse = z.infer<typeof WorkspaceRenameEntryIpcResponseSchema>
+export type WorkspaceDeleteFileIpcInput = z.infer<typeof WorkspaceDeleteFileIpcInputSchema>
+export type WorkspaceDeleteFileIpcResponse = z.infer<typeof WorkspaceDeleteFileIpcResponseSchema>
 
 export type WorkspaceContextIpcResponse = z.infer<typeof WorkspaceContextIpcResponseSchema>
 
@@ -2263,6 +2550,9 @@ export interface GhostBotBridge {
   setActiveBot(id: string | null): Promise<{ activeBotId: string | null }>
   importAvatarSvg(rawSvg: string, label?: string): Promise<ImportAvatarSvgResponse>
   pickWorkspace(): Promise<WorkspacePickResponse>
+  searchWorkspaceFiles(input: z.input<typeof WorkspaceSearchInputSchema>): Promise<WorkspaceSearchResult>
+  previewWorkspaceFile(input: z.input<typeof WorkspacePreviewInputSchema>): Promise<WorkspacePreviewResult>
+  cancelWorkspaceDiscovery(input: z.input<typeof WorkspaceDiscoveryOperationSchema>): Promise<boolean>
   authorizeWorkspaceRead(botId: string): Promise<boolean>
   resolveWorkspaceContext(selector: WorkspaceSelectorIpcInput): Promise<WorkspaceContextIpcResponse>
   listWorkspaceDirectory(
@@ -2270,6 +2560,19 @@ export interface GhostBotBridge {
   ): Promise<WorkspaceListDirectoryIpcResponse>
   readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
   saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
+  authorizeWorkspaceWrite(botId: string): Promise<boolean>
+  revokeWorkspaceWrite(botId: string): Promise<boolean>
+  createWorkspaceEntry(params: WorkspaceCreateEntryIpcInput): Promise<WorkspaceCreateEntryIpcResponse>
+  renameWorkspaceEntry(params: WorkspaceRenameEntryIpcInput): Promise<WorkspaceRenameEntryIpcResponse>
+  deleteWorkspaceFile(params: WorkspaceDeleteFileIpcInput): Promise<WorkspaceDeleteFileIpcResponse>
+  workspaceBrowserCommand(input: WorkspaceBrowserCommand): Promise<WorkspaceBrowserState>
+  setWorkspaceBrowserBounds(bounds: WorkspaceBrowserBounds): Promise<void>
+  captureWorkspaceBrowser(tabId: string): Promise<string>
+  onWorkspaceBrowserState(listener: (state: WorkspaceBrowserState) => void): () => void
+  listWorkspaceOutput(input: WorkspaceOutputQuery): Promise<WorkspaceOutputResponse>
+  cancelWorkspaceOutput(input: WorkspaceOutputCancelInput): Promise<WorkspaceOutputCancelResponse>
+  inspectWorkspaceGit(params: WorkspaceGitInspect): Promise<WorkspaceGitResponse>
+  cancelWorkspaceGit(params: WorkspaceGitOperation): Promise<boolean>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
   resetSettings(): Promise<AppSettings>
@@ -2354,6 +2657,15 @@ export interface GhostBotBridge {
   setOpenRouterCredential(input: SetOpenRouterCredentialInput): Promise<OpenRouterStatusDto>
   deleteOpenRouterCredential(): Promise<OpenRouterStatusDto>
   setOpenRouterExecutionAuthorized(input: SetOpenRouterAuthInput): Promise<OpenRouterStatusDto>
+  listTeamDiscussion(input: TeamDiscussionList): Promise<TeamDiscussionPage>
+  sendTeamDiscussion(input: TeamDiscussionSend): Promise<TeamDiscussionTurn>
+  cancelTeamDiscussion(input: TeamDiscussionCancel): Promise<TeamDiscussionCancelResponse>
+  delegateTeamTask(input: DelegateTeamTaskInput): Promise<PrivateTaskChatRecord>
+  listPrivateTaskChats(input?: ListPrivateTasksInput): Promise<{ tasks: PrivateTaskChatRecord[] }>
+  cancelPrivateTaskChat(input: CancelPrivateTaskInput): Promise<{ teamRunId: string; cancelled: boolean }>
+  getTeamMemberRouting(input: TeamMemberRoutingKey): Promise<TeamMemberRoutingDto>
+  setTeamMemberRouting(input: SetTeamMemberRouting): Promise<TeamMemberRoutingDto>
+  pickTeamAvatar(): Promise<string | null>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>
@@ -3045,4 +3357,5 @@ export const ComputerUseLedgerEntryDtoSchema = z.object({
   createdAt: z.string(),
 })
 
+export * from '@ghost-bot/shared-types/workspace-output'
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

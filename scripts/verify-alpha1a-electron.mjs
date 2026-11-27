@@ -81,7 +81,7 @@ try {
       const { revision } = await page.evaluate((target) => window.ghostBot.readWorkspaceFile(target), previousGrant)
       await assert.rejects(page.evaluate(({ target, revision }) => window.ghostBot.saveWorkspaceFile({
         ...target, expectedRevision: revision, content: 'Must not be written',
-      }), { target: previousGrant, revision }), /saving is disabled/i)
+      }), { target: previousGrant, revision }), /explicit native write consent is required/i)
       assert.equal(await readFile(workspaceFile, 'utf8'), 'Shared baseline fixture\n')
     }
 
@@ -205,12 +205,20 @@ try {
 
     if (combined) {
       await page.keyboard.press('Escape')
-      await page.getByLabel('Conversation session').selectOption(initialSessId)
+      const selectConversation = async (sessionId) => {
+        await page.getByLabel('Conversation session').selectOption(sessionId)
+        await page.waitForFunction(async (expected) => {
+          const select = document.querySelector('select[aria-label="Conversation session"]')
+          return select?.value === expected &&
+            (await window.ghostBot.listSessions({ agentId: 'chief' })).activeSessionId === expected
+        }, sessionId)
+      }
+      await selectConversation(initialSessId)
       const composer = page.getByPlaceholder('Message Chief of Staff...')
       await composer.fill('early-cancel conversation switch fixture')
       await page.getByRole('button', { name: 'Send message' }).click()
       await page.getByRole('button', { name: 'Stop generation' }).waitFor()
-      await page.getByLabel('Conversation session').selectOption(secondSessId)
+      await selectConversation(secondSessId)
       await page.getByRole('button', { name: 'Send message' }).waitFor()
       await page.waitForFunction(async ({ first, second }) => {
         const bridge = window.ghostBot

@@ -6,6 +6,7 @@ export interface WorkspaceContextInfo {
   ownerId: string
   ownerName: string
   canWrite: boolean
+  writeAuthorized?: boolean
   permissionMode: string
   authGeneration: string | null
   reason: string | null
@@ -77,6 +78,34 @@ export interface WorkspaceFilesTransport {
       expectedRevision: string
     },
   ) => Promise<WorkspaceSaveFileResult>
+  authorizeWrite?: (botId: string) => Promise<boolean>
+  revokeWrite?: (botId: string) => Promise<boolean>
+  createEntry?: (
+    params: WorkspaceSelector & {
+      workspaceId: string
+      authGeneration: string
+      relativePath: string
+      kind: 'file' | 'directory'
+      content?: string
+    },
+  ) => Promise<{ workspaceId: string; relativePath: string; kind: 'file' | 'directory'; revision: string | null; sizeBytes: number | null }>
+  renameEntry?: (
+    params: WorkspaceSelector & {
+      workspaceId: string
+      authGeneration: string
+      fromPath: string
+      toPath: string
+      expectedRevision: string
+    },
+  ) => Promise<{ workspaceId: string; fromPath: string; toPath: string; revision: string }>
+  deleteFile?: (
+    params: WorkspaceSelector & {
+      workspaceId: string
+      authGeneration: string
+      relativePath: string
+      expectedRevision: string
+    },
+  ) => Promise<{ workspaceId: string; relativePath: string; quarantined: boolean }>
 }
 
 interface CoordinatedGhostBotWorkspaceBridge {
@@ -84,6 +113,11 @@ interface CoordinatedGhostBotWorkspaceBridge {
   listWorkspaceDirectory?: WorkspaceFilesTransport['listDirectory']
   readWorkspaceFile?: WorkspaceFilesTransport['readFile']
   saveWorkspaceFile?: WorkspaceFilesTransport['saveFile']
+  authorizeWorkspaceWrite?: (botId: string) => Promise<boolean>
+  revokeWorkspaceWrite?: (botId: string) => Promise<boolean>
+  createWorkspaceEntry?: WorkspaceFilesTransport['createEntry']
+  renameWorkspaceEntry?: WorkspaceFilesTransport['renameEntry']
+  deleteWorkspaceFile?: WorkspaceFilesTransport['deleteFile']
 }
 
 export function getDefaultWorkspaceFilesTransport(): WorkspaceFilesTransport | null {
@@ -103,5 +137,10 @@ export function getDefaultWorkspaceFilesTransport(): WorkspaceFilesTransport | n
     listDirectory: bridge.listWorkspaceDirectory.bind(bridge),
     readFile: bridge.readWorkspaceFile.bind(bridge),
     saveFile: bridge.saveWorkspaceFile.bind(bridge),
+    authorizeWrite: bridge.authorizeWorkspaceWrite?.bind(bridge),
+    revokeWrite: bridge.revokeWorkspaceWrite?.bind(bridge),
+    createEntry: bridge.createWorkspaceEntry?.bind(bridge),
+    renameEntry: bridge.renameWorkspaceEntry?.bind(bridge),
+    deleteFile: bridge.deleteWorkspaceFile?.bind(bridge),
   }
 }

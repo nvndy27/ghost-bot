@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { WorkspaceDirectoryEntryItem } from './workspaceFilesClient.ts'
 
 export interface DirectoryNodeState {
@@ -12,9 +13,11 @@ export interface WorkspaceFileTreeProps {
   directories: Record<string, DirectoryNodeState>
   expandedDirs: ReadonlySet<string>
   selectedFilePath: string | null
+  canWrite?: boolean
   onToggleDir: (relativePath: string) => void
   onSelectFile: (relativePath: string) => void
   onRefresh: () => void
+  onCreateEntry?: (kind: 'file' | 'directory', relativePath: string) => void
 }
 
 export function WorkspaceFileTree({
@@ -22,10 +25,14 @@ export function WorkspaceFileTree({
   directories,
   expandedDirs,
   selectedFilePath,
+  canWrite = false,
   onToggleDir,
   onSelectFile,
   onRefresh,
+  onCreateEntry,
 }: WorkspaceFileTreeProps) {
+  const [creatingKind, setCreatingKind] = useState<'file' | 'directory' | null>(null)
+  const [createPath, setCreatePath] = useState('')
   const rootState = directories[''] ?? {
     entries: [],
     loading: false,
@@ -130,17 +137,86 @@ export function WorkspaceFileTree({
         <span className="gb-section-label" style={{ margin: 0 }}>
           Files
         </span>
-        <button
-          type="button"
-          className="gb-workspace-icon-btn"
-          onClick={onRefresh}
-          aria-label="Refresh workspace files"
-          title={rootPath}
-          data-testid="workspace-files-refresh-btn"
-        >
-          Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {canWrite && onCreateEntry && (
+            <>
+              <button
+                type="button"
+                className="gb-workspace-icon-btn"
+                onClick={() => {
+                  setCreatingKind('file')
+                  setCreatePath('')
+                }}
+                data-testid="workspace-new-file-btn"
+              >
+                + File
+              </button>
+              <button
+                type="button"
+                className="gb-workspace-icon-btn"
+                onClick={() => {
+                  setCreatingKind('directory')
+                  setCreatePath('')
+                }}
+                data-testid="workspace-new-dir-btn"
+              >
+                + Dir
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="gb-workspace-icon-btn"
+            onClick={onRefresh}
+            aria-label="Refresh workspace files"
+            title={rootPath}
+            data-testid="workspace-files-refresh-btn"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
+      {creatingKind && onCreateEntry && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 4,
+            padding: '4px 6px',
+            borderBottom: '1px solid var(--gb-border)',
+          }}
+          data-testid="workspace-create-form"
+        >
+          <input
+            type="text"
+            value={createPath}
+            onChange={(e) => setCreatePath(e.target.value)}
+            placeholder={creatingKind === 'file' ? 'relative/file.txt' : 'relative/dir'}
+            aria-label={`New ${creatingKind} relative path`}
+            data-testid="workspace-create-input"
+            style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '2px 6px' }}
+          />
+          <button
+            type="button"
+            className="gb-workspace-icon-btn"
+            data-testid="workspace-create-confirm-btn"
+            onClick={() => {
+              const trimmed = createPath.trim()
+              if (trimmed) onCreateEntry(creatingKind, trimmed)
+              setCreatingKind(null)
+              setCreatePath('')
+            }}
+          >
+            Create
+          </button>
+          <button
+            type="button"
+            className="gb-workspace-icon-btn"
+            onClick={() => setCreatingKind(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       <div className="gb-tree-scroll" role="tree" aria-label="Authorized workspace files">
         {rootState.loading && rootState.entries.length === 0 ? (
           <div className="gb-muted" style={{ padding: '8px', fontSize: '12px' }}>

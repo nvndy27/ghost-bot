@@ -1,7 +1,8 @@
+import { TeamAvatarEditor } from './TeamAvatarEditor.tsx'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { CreateTeamIpcInput, TeamRecordDto, UpdateTeamIpcInput } from '@ghost-bot/shared-types/ipc'
-import { X } from 'lucide-react'
+import type { CreateTeamIpcInput, TeamAppearance, TeamRecordDto, UpdateTeamIpcInput } from '@ghost-bot/shared-types/ipc'
+import { ArrowDown, ArrowUp, X } from 'lucide-react'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
@@ -37,6 +38,8 @@ export function TeamEditorModal({
   onClose,
 }: TeamEditorModalProps) {
   const modalRef = useRef<HTMLDivElement | null>(null)
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [appearance, setAppearance] = useState<TeamAppearance>({ mode: 'auto' })
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [leadBotId, setLeadBotId] = useState('')
@@ -55,6 +58,8 @@ export function TeamEditorModal({
     if (!open) return
     setErrorMsg(null)
     setConfirmArchive(false)
+    setAvatarBusy(false)
+    setAppearance(initialTeam?.appearance ?? { mode: 'auto' })
     if (mode === 'edit' && initialTeam) {
       setName(initialTeam.name)
       setDescription(initialTeam.description ?? '')
@@ -93,6 +98,17 @@ export function TeamEditorModal({
     )
   }
 
+  const moveMember = (id: string, offset: number) => {
+    setMemberBotIds((previous) => {
+      const from = previous.indexOf(id)
+      const to = from + offset
+      if (from < 0 || to < 0 || to >= previous.length) return previous
+      const result = [...previous]
+      result.splice(to, 0, result.splice(from, 1)[0])
+      return result
+    })
+  }
+
   const handleLeadChange = (nextLeadId: string) => {
     setLeadBotId(nextLeadId)
     setMemberBotIds((prev) => (prev.includes(nextLeadId) ? prev : [nextLeadId, ...prev]))
@@ -100,6 +116,7 @@ export function TeamEditorModal({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+    if (avatarBusy) return
     const trimmedName = name.trim()
     if (!trimmedName) {
       setErrorMsg('Team name is required.')
@@ -136,6 +153,7 @@ export function TeamEditorModal({
           leadBotId,
           memberBotIds: normalizedMembers,
           bounds,
+          appearance,
         })
       } else if (initialTeam) {
         await onSaveEdit({
@@ -145,6 +163,7 @@ export function TeamEditorModal({
           leadBotId,
           memberBotIds: normalizedMembers,
           bounds,
+          appearance,
         })
       }
       onClose()
@@ -223,6 +242,9 @@ export function TeamEditorModal({
             />
           </label>
 
+          <TeamAvatarEditor appearance={appearance} bots={bots} memberIds={memberBotIds}
+            onChange={setAppearance} onBusyChange={setAvatarBusy} />
+
           <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
             <span>Description</span>
             <textarea
@@ -268,6 +290,7 @@ export function TeamEditorModal({
 
           <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
             <span>Team members ({memberBotIds.length} selected)</span>
+            <small>2–6 members recommended. Advanced groups support up to 12.</small>
             <div
               style={{
                 display: 'grid',
@@ -280,11 +303,12 @@ export function TeamEditorModal({
                 background: 'var(--gb-surface)',
               }}
             >
-              {bots.map((bot) => {
+              {[...memberBotIds.map((id) => bots.find((bot) => bot.id === id)).filter((bot) => bot !== undefined),
+                ...bots.filter((bot) => !memberBotIds.includes(bot.id))].map((bot) => {
                 const isLead = bot.id === leadBotId
                 const checked = isLead || memberBotIds.includes(bot.id)
                 return (
-                  <label
+                  <div
                     key={bot.id}
                     style={{
                       display: 'flex',
@@ -294,26 +318,29 @@ export function TeamEditorModal({
                       cursor: isLead ? 'default' : 'pointer',
                     }}
                   >
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <input
                         type="checkbox"
                         checked={checked}
                         disabled={isLead}
                         onChange={() => toggleMember(bot.id)}
                       />
-                      <span>{bot.name}</span>
-                    </span>
-                    <span className="gb-badge">{isLead ? 'Chief of Staff' : bot.permission}</span>
-                  </label>
+                      <span>{bot.name}{isLead ? ' · Lead' : ''}</span>
+                    </label>
+                    {checked && <span className="gb-icon-inline">
+                      <IconButton label={`Move ${bot.name} earlier in group`} disabled={memberBotIds.indexOf(bot.id) <= 0}
+                        onClick={() => moveMember(bot.id, -1)}><ArrowUp size={ICON_SIZE.xs} /></IconButton>
+                      <IconButton label={`Move ${bot.name} later in group`} disabled={memberBotIds.indexOf(bot.id) >= memberBotIds.length - 1}
+                        onClick={() => moveMember(bot.id, 1)}><ArrowDown size={ICON_SIZE.xs} /></IconButton>
+                    </span>}
+                  </div>
                 )
               })}
             </div>
           </div>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <div className="gb-section-label" style={{ margin: 0 }}>
-              Execution Bounds
-            </div>
+          <details className="gb-team-editor-advanced">
+            <summary>Advanced settings</summary>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
               <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                 <span className="gb-muted">Max depth (1-5)</span>
@@ -382,7 +409,7 @@ export function TeamEditorModal({
                 />
               </label>
             </div>
-          </div>
+          </details>
 
           <div
             style={{
@@ -432,7 +459,7 @@ export function TeamEditorModal({
               <button type="button" className="gb-btn-outline" onClick={onClose} disabled={submitting}>
                 Cancel
               </button>
-              <button type="submit" className="gb-btn-accent" disabled={submitting}>
+              <button type="submit" className="gb-btn-accent" disabled={submitting || avatarBusy}>
                 {submitting ? 'Saving...' : mode === 'create' ? 'Create Team' : 'Save Team'}
               </button>
             </div>

@@ -1,5 +1,59 @@
 # Progress log
 
+## Unified Alpha.1 and Alpha.2
+
+The integration candidate preserves main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`, Alpha.1 PR #44 at `c9d332d39d1df4a2429d52c7dbba94bb5444db34` (including PR #42 at `bdb6c75d37fcab1d38473cdd77f7f5d55d969acf`) and coordinated Workspace PR #45 successor `871190743d8a35735cfb895c0a4a85629a2fe228`, which contains the pinned icon refinement `c174875bcfa9fded3f08fbec09f9eacdba6ec541`. Branding PR #38 stays separate.
+
+The PR #42 regression fixtures delegate through the authorized boundary and hold dispatch. Concurrent contenders with one operation ID and different assignees preserve the winning task, session, dispatch and stored metadata. The unified candidate closes the personal Workspace panel and draft handoff in Private Task Chat, stops admitting new discussion and task requests during daemon shutdown, and persists appearance changes as ordered, field-specific updates. Existing migrations `0001–0014` and the Alpha.3 executable harness are preserved.
+
+Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Required hosted CI, Agent 2 acceptance and maintainer visual approval are pending. No inference or package acceptance ran on the unified candidate.
+
+All six Workspace scenarios passed in local offline Electron with Git and PDF sandbox enforcement before the coordinated Output delta. The Group Chat Electron run passed native avatar content validation and restart persistence, member routing and two-round discussion, single-action task approval, cancellation, summary navigation and Private Task Workspace isolation. Two Personal Chat launches passed conversation switching during a mock run, provider and grant changes, sidebar and tab restoration, and read-only save denial. The Group composer and five icon-only Workspace tabs were checked together at 900 px in dark and light. Personal Workspace tabs also passed in both themes at 220 px. Synthetic screenshots are stored locally for maintainer review.
+
+After merging the Workspace successor, affected lint, daemon typecheck, desktop build and Output tests passed. Output passed 2/2, covering one service test and one Electron scenario. The Group Chat rerun verified that Personal Output cannot list, filter by session or cancel a real mock private delegation. PR #45's hosted checks passed on the successor.
+
+## Alpha.1 integrity and Issue #41
+
+**Tested** — Original Private Task findings fixed on Draft PR #42. Successor adds a compact Group Chat, native validated avatar selection and crop, and persisted Auto, bot snapshot and upload modes. Focused daemon integrity tests passed 4/4. Lint, affected typechecks/build, and combined offline Electron acceptance passed. The visual refinement shares the Personal Chat composer and send button, adds searchable keyboard-accessible mention and rounds popovers, and compacts summary bubbles and Overview member rows. Desktop checks and the combined offline Electron scenario passed after refinement. Synthetic light/dark screenshots at 1440×900 and 900×700 are kept locally. Zero live inference.
+
+## Alpha.1B — Group membership and model routing
+
+**Tested** on accepted main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`. Team-scoped settings validate daemon catalog choices without mutating bots. Membership edits prune overrides and require a retained lead. Offline dispatch snapshots effective routing and uses durable scoped child sessions. Lint, affected typechecks/build, focused tests 4/4, and two-launch offline Electron acceptance passed. Zero live inference.
+
+## Alpha.3 hosted isolation and Output handoff
+
+Hosted PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541` reproduced the Computer Use Chrome SUID helper abort while passing Workspace. CI returns to the known-good Jammy runner with a checksum-pinned Bubblewrap 0.13.1 build and distinct namespace preflights. The runtime launches, containment tests and Chromium sandbox requirements stay in force.
+
+The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The exact hosted check remains required.
+
+Personal Workspace Output now excludes marked private-task sessions and legacy linked team sessions for listing and cancellation. Focused output module and Electron checks passed. The same targeted scenario passed in a rebuilt Fedora AppImage, including Linux sandbox checks and mock daemon restart. This evidence applies to the Workspace branch. See [cause, validation and unified handoff](extensions/alpha2g-workspace-convergence.md#alpha3-hosted-isolation-remediation).
+
+## Alpha.2G Workspace convergence
+
+**Tested** on the provisional `integration/alpha2g-workspace` stack. Main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f` and PRs #33, #35, #36, #39, and #43 are preserved by ancestry. Fixed Output cancellation wiring and polling, protected output state across context switches, and updated the shell and discovery tests for the integrated surface. The six Alpha.3 Workspace scenarios now accept a real packaged executable and assert Linux renderer sandboxing, offline daemon startup and mock runtime availability. See [evidence and commands](extensions/alpha2g-workspace-convergence.md).
+
+The Workspace header uses 18 px UI.1 icons and 32 px tab targets. All five tabs stay in one row at the 220 px minimum. Renderer appearance patching preserves the theme and widths when the active tab changes. The focused Electron shell suite passed 3/3. Captures show the real [dark](../design/reviews/alpha-2g/workspace-icons-dark-220px.png) and [light](../design/reviews/alpha-2g/workspace-icons-light-220px.png) panels at minimum width.
+
+Stage, unstage and revert remain **Blocked**. The Git lock probe confirmed cooperating index exclusion while the working tree and HEAD remained independently writable. PR #42 received a [targeted Changes requested review](https://github.com/nvndy27/ghost-bot/pull/42#issuecomment-7217776424) at `ca8e951636828c59739b3e172a22f3885612fe1f`. The unified checkpoint includes the subsequent restart and concurrent-delegation fixture correction.
+
+## Alpha.2D.2 Git mutations
+
+**Blocked** for stage, unstage and revert on the provisional PR #39 base `963dde64c02f6f4287221a705aa438081b194203`. Changes shows disabled mutation controls and the reason. Dedicated daemon admission rejects Git write authorization and dispatch regardless of read or Files write grants. Renderer IPC carries only inspection and cancellation. Refresh rereads the repository in the existing read-only sandbox. The UI reports acknowledged, inactive or unconfirmed inspection cancellation.
+
+Lint, all workspace typechecks and build passed. Linux sandbox-required regressions passed 17/17, including real mock-runtime Electron Files, Changes, discovery and Output with stubbed native dialog decisions. The Git scenario refreshed an external index and working-tree edit without modifying the index or unrelated files. Daemon IPC and discovery passed 12/12, including mutation denial before consent, after native read and Files write grants, and after write revocation. Denial preserved the external index, pending lock and working-tree bytes. These checks cover read-only inspection and denial. Mutation execution and recovery from a partially committed Git write remain unverified.
+
+PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. Agent 1 owns follow-up.
+
+## Alpha.2C.2 write hardening (PR #39)
+
+**Tested** on the provisional PR #39 base `dc449c8c834ea17107e404d5e1d72f0c2dd12509`. Save and empty-file/folder creation check the same native personal grant before staging, under the file lock, and at commit. Revocation and bot policy changes serialize with commit admission. Empty-file creation uses an exclusive open and keeps the returned descriptor through verification. Non-empty creation, rename, quarantine delete, Ask Approval writes and group writes are gated. Existing quarantine contents are preserved.
+
+Lint, all workspace typechecks and build, and 14/14 focused tests passed. The daemon IPC and workspace discovery suites passed 11/11, including separate checks for malformed and unauthorized save requests. Focused regressions cover grant revocation, expiry and reissuance, policy/root changes, parent replacement, destination collision, post-create substitution and growth, and existing save conflicts. Real Electron verified native consent, clean-file refresh, dirty-draft preservation and revocation using an offline mock runtime and stubbed native dialog decisions. Save keeps staged atomic replacement, bounded verification and an uncertain outcome if verification fails. Arbitrary external mutation can race POSIX path checks and rename.
+
+## Alpha.2C.1 shared discovery integration
+
+**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance is pending with Agent 2. Reconcile against accepted main before merge. Zero live inference.
+
 ## Shared baseline convergence
 
 **Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Agent 2 accepted the implementation at `78d0822` and requested targeted acceptance after bringing in current main. The reconciliation preserves both documentation histories and the newer main changes. See the [combined evidence](extensions/alpha-shared-convergence.md).
@@ -7,6 +61,26 @@
 ## Alpha.1A — Bot and Conversation Management
 
 **Tested** on post-UI.1 main. Continued from `290d956` and fixed legacy workspace path handling for provider edits, explicit bot navigation read state and conversation paging. Focused tests passed 3/3, database and Teams regressions 8/8, and the offline two-launch Electron scenario passed. Zero live inference. See [Alpha.1A scope and evidence](extensions/alpha1a-bot-conversation-management.md).
+
+## Alpha.2D.1 — Read-only Git Changes
+
+Implemented on an isolated feature branch from PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae`. The Changes tab uses the existing native personal workspace grant through validated Electron IPC. The daemon reinspects authorization before releasing results and scopes cancellation to the bot, root, generation and operation.
+
+Git reads a bounded daemon-owned snapshot inside Bubblewrap. The snapshot excludes sensitive paths, special files, repository-local configuration, helper metadata and object alternates. The snapshot mount is read-only and the subprocess has no network or host workspace mount. No file or Git mutation routes were added. Repo status, bounded file patches and HEAD history work for supported local root repositories. See [Git Changes scope](extensions/alpha2d1-git-changes.md).
+
+**Tested** — Focused suite 9/9 with the Git sandbox required. The isolated Git service exercised output limits, redirected metadata, sensitive paths, stale grants and cancellation. Real Electron rendered native-granted status, working-tree and untracked diffs and commit details, then verified grant revocation. Existing workspace shell and daemon security checks, lint, recursive typecheck and recursive build passed. No live inference.
+
+## Alpha.2C.1 — Workspace search and previews
+
+The maintainer authorized the read-only feature branch from `c91ebcba34a9308ce5e3645417f5afaacd56e472` (PR #19). Workspace-owned modules implement descriptor-relative name and text search, matching-line navigation, preview loading, Markdown text rendering, sanitized SVG and bounded static PNG/GIF data, isolated PDF rasterization, and a draft insertion callback. Search limits are 8 levels, 96 directory visits, 4,000 scanned entries, 600 files, 100 results, 64 KiB per text file and a 2.5-second cooperative deadline. An in-flight filesystem operation completes before the deadline or cancellation can be observed. Preview inputs are capped at 1 MiB, with a lower SVG limit and a raster pixel limit.
+
+Agent 1 owns shared DTOs, daemon grant checks and route registration, preload/main, and draft insertion. The workspace UI reports the integration as unavailable until those capabilities are wired. PDF rasterization runs through fixed system Poppler commands in Bubblewrap with separate network and PID namespaces, read-only system runtime files and fonts, an empty environment and no workspace or home bind. The process receives at most 1 MiB on stdin. Each job is limited to 20 source pages, one 1000-pixel page and 1 MiB output, a shared three-second wall deadline, and one concurrent job. The sandbox child also has CPU, address-space, file-size and descriptor limits. Missing runtime or isolation fails closed. Save, create, rename, delete and group filesystem access stay gated.
+
+| State | Evidence |
+|---|---|
+| Tested | Three isolated discovery tests passed. They cover filename and text results, matching lines, search bounds, cancellation, stale context, sensitive files, validated raster input and missing preview files. The continuation adds real sandboxed Poppler fixtures, operation grant and cancellation tests, and raster admission tests for animation, compressed metadata and oversized frames. |
+| Tested | Seven scoped Electron and daemon IPC baseline checks passed, including read-only file opening and the Alpha.2C.1 unavailable UI without shared wiring. Lint, recursive typecheck and recursive build passed. |
+| Blocked | Integrated search, preview, cancellation and composer acceptance require Agent 1's shared wiring and the refreshed convergence baseline. PDF is verified at the workspace module boundary on the recorded host, and end-to-end preview acceptance is pending. |
 
 ## Alpha.2A–B — Shared Workspace Integration
 

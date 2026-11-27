@@ -664,6 +664,26 @@ export class RuntimeRegistry {
     }
   }
 
+  getOfflineDiscussionRuntime(): AgentRuntime | null {
+    return this.getRuntimeMode() === 'mock' && !this.stopped ? this.mock : null
+  }
+
+  async getTeamRoutingCatalogs(): Promise<import('@ghost-bot/shared-types/ipc').TeamMemberRoutingDto['catalogs']> {
+    const snapshot = await this.getSnapshot(false)
+    if (snapshot.runtimeMode === 'mock') {
+      const models = [...snapshot.models,
+        { id: 'gpt-6.2-mock', label: 'GPT-6.2 (Mock)', efforts: ['low', 'medium', 'high'] },
+        { id: 'codex-mock', label: 'Codex (Mock)', efforts: ['low', 'medium', 'high'] },
+      ]
+      return ['mock-offline', 'mock'].map((runtimeId) => ({ runtimeId, accountId: 'mock-account', models }))
+    }
+    if (snapshot.status === 'available' && snapshot.authStatus === 'connected' &&
+        snapshot.authMethod === 'chatgpt' && this.lastAccountKey) {
+      return [{ runtimeId: 'codex', accountId: this.lastAccountKey, models: snapshot.models }]
+    }
+    return []
+  }
+
   async listProviders(): Promise<ProviderSummary[]> {
     const snap = await this.getSnapshot(false)
     if (snap.runtimeMode === 'mock') {

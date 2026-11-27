@@ -20,10 +20,36 @@ const bridge: GhostBotBridge = {
     ipcRenderer.invoke('ghost:workspace:resolve-context', selector),
   listWorkspaceDirectory: (params) =>
     ipcRenderer.invoke('ghost:workspace:list-dir', params),
+  searchWorkspaceFiles: (input) => ipcRenderer.invoke('ghost:workspace:search', input),
+  previewWorkspaceFile: (input) => ipcRenderer.invoke('ghost:workspace:preview', input),
+  cancelWorkspaceDiscovery: (input) => ipcRenderer.invoke('ghost:workspace:cancel-discovery', input),
   readWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:read-file', params),
+  workspaceBrowserCommand: (input) => ipcRenderer.invoke('ghost:workspace:browser-command', input),
+  setWorkspaceBrowserBounds: (bounds) => ipcRenderer.invoke('ghost:workspace:browser-bounds', bounds),
+  captureWorkspaceBrowser: (id) => ipcRenderer.invoke('ghost:workspace:browser-screenshot', id),
+  onWorkspaceBrowserState: (listener) => {
+    const channel = 'ghost:workspace:browser-state'
+    const receive = (_event: unknown, value: Parameters<typeof listener>[0]) => listener(value)
+    ipcRenderer.on(channel, receive)
+    return () => ipcRenderer.removeListener(channel, receive)
+  },
+  inspectWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-inspect', params),
+  cancelWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-cancel', params),
+  listWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-list', input),
+  cancelWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-cancel', input),
   saveWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:save-file', params),
+  authorizeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:authorize-write', { botId }),
+  revokeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:revoke-write', { botId }),
+  createWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:create-entry', params),
+  renameWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:rename-entry', params),
+  deleteWorkspaceFile: (params) =>
+    ipcRenderer.invoke('ghost:workspace:delete-file', params),
   getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),
   updateSettings: (patch) => ipcRenderer.invoke('ghost:settings:update', patch),
   resetSettings: () => ipcRenderer.invoke('ghost:settings:reset', {}),
@@ -120,6 +146,15 @@ const bridge: GhostBotBridge = {
   setOpenRouterCredential: (input) => ipcRenderer.invoke('ghost:openrouter:credential:set', input),
   deleteOpenRouterCredential: () => ipcRenderer.invoke('ghost:openrouter:credential:delete'),
   setOpenRouterExecutionAuthorized: (input) => ipcRenderer.invoke('ghost:openrouter:auth:set', input),
+  listTeamDiscussion: (input) => ipcRenderer.invoke('ghost:teams:discussion:list', input),
+  sendTeamDiscussion: (input) => ipcRenderer.invoke('ghost:teams:discussion:send', input),
+  cancelTeamDiscussion: (input) => ipcRenderer.invoke('ghost:teams:discussion:cancel', input),
+  delegateTeamTask: (input) => ipcRenderer.invoke('ghost:teams:tasks:delegate', input),
+  listPrivateTaskChats: (input) => ipcRenderer.invoke('ghost:teams:tasks:list-private', input ?? {}),
+  cancelPrivateTaskChat: (input) => ipcRenderer.invoke('ghost:teams:tasks:cancel-private', input),
+  getTeamMemberRouting: (input) => ipcRenderer.invoke('ghost:teams:member-routing:get', input),
+  setTeamMemberRouting: (input) => ipcRenderer.invoke('ghost:teams:member-routing:set', input),
+  pickTeamAvatar: () => ipcRenderer.invoke('ghost:teams:avatar-pick'),
   listTeams: (input) => ipcRenderer.invoke('ghost:teams:list', input ?? {}),
   createTeam: (input) => ipcRenderer.invoke('ghost:teams:create', input),
   updateTeam: (input) => ipcRenderer.invoke('ghost:teams:update', input),

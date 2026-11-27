@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +18,9 @@ import {
   DaemonHealthResponseSchema,
   EmptyParamsSchema,
   ProviderSummarySchema,
+  WorkspaceContextIpcResponseSchema,
+  WorkspaceSearchResultSchema,
+  WorkspacePreviewResultSchema,
 } from '../packages/shared-types/ipc.ts'
 
 function requestSocket(
@@ -23,6 +28,7 @@ function requestSocket(
   path: string,
   token?: string,
   payload?: unknown,
+  method = payload === undefined ? 'GET' : 'POST',
 ): Promise<{ status: number; body: unknown }> {
   const encoded = payload === undefined ? undefined : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
@@ -30,7 +36,7 @@ function requestSocket(
       {
         socketPath,
         path,
-        method: encoded === undefined ? 'GET' : 'POST',
+        method,
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(encoded === undefined ? {} : {
@@ -88,13 +94,118 @@ test('daemon rejects weak authToken and unauthenticated requests', async () => {
     assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', undefined, grant)).status, 401)
     assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', token, grant)).status, 403)
     assert.equal((await requestSocket(socketPath, '/workspace/context', token, { ...grant, canWrite: true })).status, 400)
-    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {})).status, 403)
+    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {})).status, 400)
+    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {
+      botId: 'bot-fixture', workspaceId: 'fixture', authGeneration: 'unknown',
+      relativePath: 'notes.txt', content: 'draft', expectedRevision: 'fixture',
+    })).status, 403)
 
     const notFound = await requestSocket(socketPath, '/unknown', token)
     assert.equal(notFound.status, 404)
   } finally {
     await daemon.stop()
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('workspace discovery routes require and revalidate the native personal grant', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ghost-discovery-ipc-'))
+  const socket = join(root, 'daemon.sock')
+  const token = randomUUID()
+  const daemon = new GhostBotDaemon({ authToken: token, socketPath: socket, dataDir: join(root, 'data'), runtimeMode: 'mock' })
+  try {
+    await daemon.start()
+    await writeFile(join(root, 'notes.md'), '# Searchable fixture')
+    const request = (route: string, payload: unknown, method = 'POST') => requestSocket(socket, route, token, payload, method)
+    assert.equal((await request('/bots/chief', { workspacePath: root }, 'PATCH')).status, 200)
+    const contextReply = await request('/workspace/context', { botId: 'chief' })
+    const context = WorkspaceContextIpcResponseSchema.parse(contextReply.body)
+    assert.ok(context.workspaceId)
+    const scope = { botId: 'chief', workspaceId: context.workspaceId }
+    const beforeConsent = { ...scope, authGeneration: 'unknown', operationId: randomUUID() }
+    assert.equal((await request('/workspace/search', { ...beforeConsent, mode: 'content', query: 'Searchable' })).status, 403)
+    assert.equal((await request('/workspace/authorize-read', { ...scope, selectedRoot: root })).status, 200)
+    const authorized = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', { botId: 'chief' })).body)
+    assert.ok(authorized.authGeneration)
+    const input = { ...scope, authGeneration: authorized.authGeneration, operationId: randomUUID() }
+    const search = await request('/workspace/search', { ...input, mode: 'content', query: 'Searchable' })
+    assert.equal(search.status, 200)
+    assert.equal(WorkspaceSearchResultSchema.parse(search.body).results[0]?.relativePath, 'notes.md')
+    const preview = await request('/workspace/preview', { ...input, relativePath: 'notes.md' })
+    assert.equal(preview.status, 200)
+    assert.equal(WorkspacePreviewResultSchema.parse(preview.body).preview.kind, 'markdown')
+    assert.equal((await request('/workspace/cancel-discovery', input)).body, false)
+    assert.equal((await request('/workspace/search', { ...input, teamId: 'team-fixture', mode: 'content', query: 'Searchable' })).status, 400)
+    assert.equal((await request('/bots/chief', { permission: 'read-only' }, 'PATCH')).status, 200)
+    assert.equal((await request('/workspace/cancel-discovery', input)).status, 403)
+    assert.equal((await request('/workspace/preview', { ...input, relativePath: 'notes.md' })).status, 403)
+  } finally {
+    await daemon.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Git mutation admission is gated independently of native Files grants and preserves external state', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'ghost-git-mutation-gate-'))
+  const root = join(fixture, 'repository')
+  const socket = join(fixture, 'daemon.sock')
+  const token = randomUUID()
+  const daemon = new GhostBotDaemon({ authToken: token, socketPath: socket, dataDir: join(fixture, 'data'), runtimeMode: 'mock' })
+  try {
+    await mkdir(root)
+    const git = (...args: string[]) => execFileSync('/usr/bin/git', args, {
+      cwd: root, env: { PATH: '/usr/bin', HOME: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+      stdio: 'ignore',
+    })
+    git('init')
+    await writeFile(join(root, 'selected.txt'), 'external staged content')
+    await writeFile(join(root, 'unrelated.txt'), 'unrelated bytes')
+    git('add', '--', 'selected.txt')
+    await writeFile(join(root, 'selected.txt'), 'external draft')
+    // Represent an independent Git process holding its own lock during an interrupted update.
+    const indexPath = join(root, '.git', 'index')
+    const indexLockPath = join(root, '.git', 'index.lock')
+    const index = await readFile(indexPath)
+    await writeFile(indexLockPath, 'external pending index', { flag: 'wx' })
+    const request = (path: string, payload: unknown, method = 'POST') => requestSocket(socket, path, token, payload, method)
+    await daemon.start()
+    assert.equal((await request('/bots/chief', { workspacePath: root, permission: 'workspace' }, 'PATCH')).status, 200)
+    const selector = { botId: 'chief' }
+    const initial = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', selector)).body)
+    const workspaceId = initial.workspaceId
+    assert.ok(workspaceId)
+
+    const denied = async (scope: { botId: string; workspaceId: string; authGeneration: string }) => {
+      for (const action of ['stage', 'unstage', 'revert']) {
+        const payload = { ...scope, action, paths: ['selected.txt'], operationId: randomUUID() }
+        for (const route of ['/workspace/git/authorize-mutation', '/workspace/git/mutate']) {
+          const result = await request(route, payload)
+          assert.equal(result.status, 501)
+          assert.equal((result.body as { code?: string }).code, 'GIT_MUTATIONS_GATED')
+        }
+      }
+    }
+    const pending = { ...selector, workspaceId, authGeneration: 'ungranted' }
+    assert.equal((await requestSocket(socket, '/workspace/git/mutate', undefined, pending)).status, 401)
+    await denied(pending)
+
+    assert.equal((await request('/workspace/authorize-read', { ...selector, workspaceId, selectedRoot: root })).status, 200)
+    const read = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', selector)).body)
+    assert.ok(read.authGeneration)
+    const scope = { ...selector, workspaceId, authGeneration: read.authGeneration }
+    await denied(scope)
+    assert.equal((await request('/workspace/authorize-write', scope)).status, 200)
+    await denied(scope)
+    assert.equal((await request('/workspace/revoke-write', selector)).status, 200)
+    await denied(scope)
+
+    assert.deepEqual(await readFile(indexPath), index)
+    assert.equal(await readFile(indexLockPath, 'utf8'), 'external pending index')
+    assert.equal(await readFile(join(root, 'selected.txt'), 'utf8'), 'external draft')
+    assert.equal(await readFile(join(root, 'unrelated.txt'), 'utf8'), 'unrelated bytes')
+  } finally {
+    await daemon.stop()
+    await rm(fixture, { recursive: true, force: true })
   }
 })
 

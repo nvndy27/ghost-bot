@@ -43,7 +43,6 @@ export function TeamRightPanel({
   onTabChange,
 }: TeamRightPanelProps) {
   const botById = new Map(bots.map((b) => [b.id, b]))
-  const leadBot = botById.get(team.leadBotId)
 
   const counts = {
     active: tasks.filter((t) => t.status === 'running' || t.status === 'awaiting_approval').length,
@@ -78,22 +77,7 @@ export function TeamRightPanel({
         </div>
       </div>
 
-      <div className="gb-card" style={{ display: 'grid', gap: 8 }}>
-        <div className="gb-section-label" style={{ margin: 0 }}>
-          Chief of Staff
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {leadBot && <BotAvatar config={leadBot.avatar} status="idle" size={26} />}
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{leadBot?.name ?? team.leadBotId}</div>
-            <div className="gb-muted" style={{ fontSize: 12 }}>
-              {leadBot ? `${leadBot.permission} · ${isMockMode ? 'Simulated (Mock)' : 'Live gated'}` : 'Missing bot'}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="gb-card" style={{ display: 'grid', gap: 8 }}>
+      <div className="gb-team-overview-section" style={{ display: 'grid', gap: 8 }}>
         <div className="gb-section-label" style={{ margin: 0 }}>
           Members ({team.memberBotIds.length})
         </div>
@@ -101,25 +85,22 @@ export function TeamRightPanel({
           {team.memberBotIds.map((memberId) => {
             const bot = botById.get(memberId)
             const isLead = memberId === team.leadBotId
+            const name = `${bot?.name ?? memberId}${isLead ? ' · Lead' : ''}`
+            const metadata = bot ? `${bot.modelId} default · ${bot.permission}` : 'Unavailable'
             return (
-              <div
-                key={memberId}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, fontSize: 12 }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  {bot && <BotAvatar config={bot.avatar} status="idle" size={20} />}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {bot?.name ?? memberId}
-                  </span>
-                </span>
-                <span className="gb-badge">{isLead ? 'Lead' : bot?.permission ?? 'worker'}</span>
+              <div key={memberId} className="gb-overview-member">
+                {bot && <BotAvatar config={bot.avatar} status="idle" size={22} />}
+                <div className="gb-overview-member-label">
+                  <span title={name}>{name}</span>
+                  <small className="gb-muted" title={metadata}>{metadata}</small>
+                </div>
               </div>
             )
           })}
         </div>
       </div>
 
-      <div className="gb-card" style={{ display: 'grid', gap: 6, fontSize: 12 }}>
+      <div className="gb-team-overview-section" style={{ display: 'grid', gap: 6, fontSize: 12 }}>
         <div className="gb-section-label" style={{ margin: 0 }}>
           Task Progress & Concurrency
         </div>
@@ -149,10 +130,8 @@ export function TeamRightPanel({
         </div>
       </div>
 
-      <div className="gb-card" style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-        <div className="gb-section-label" style={{ margin: 0 }}>
-          Budget vs Actual Usage
-        </div>
+      <details className="gb-team-overview-section">
+        <summary>Budget and usage details</summary>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="gb-muted">Estimated token cap</span>
           <span>{maxTokens !== null ? maxTokens.toLocaleString() : '—'}</span>
@@ -176,11 +155,11 @@ export function TeamRightPanel({
         <div className="gb-muted" style={{ fontSize: 11 }}>
           Memory sharing: {team.memorySharingPolicy}
         </div>
-      </div>
+      </details>
 
       {(quarantineReason || cancellationState || counts.uncertain > 0) && (
         <div
-          className="gb-card"
+          className="gb-team-overview-section"
           style={{
             display: 'grid',
             gap: 4,

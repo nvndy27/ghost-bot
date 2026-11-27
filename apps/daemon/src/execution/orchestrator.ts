@@ -15,7 +15,7 @@ import type { McpService } from '../mcp/service.ts'
 import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
 import { RuntimePolicyBroker, type PolicyAuthorizationInput } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
-import { serializeMessageContent } from '../sessions/repository.ts'
+import { serializeMessageContent, TEAM_SESSION_SETTING_PREFIX } from '../sessions/repository.ts'
 import type { SettingsRepository } from '../settings/repository.ts'
 import {
   assembleCombinedExecutionContext,
@@ -167,6 +167,20 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
     }
     signal.addEventListener('abort', onAbort, { once: true })
   })
+}
+
+export interface OfflineTeamDispatch {
+  identity: string
+  teamId: string
+  teamRunId: string | null
+  botId: string
+  accountId: string
+  runtimeId: 'mock-offline' | 'mock'
+  modelId: string
+  effort: string
+  revision: string
+  revalidate(): void
+  onCreateRun?(runId: string): void
 }
 
 export interface RunOrchestratorOptions {
@@ -559,7 +573,15 @@ export class RunOrchestrator {
     return this.eventStore.listEventsAfter(runId, afterSeq, limit)
   }
 
-  async startRun(input: StartRunInput): Promise<StartRunResult> {
+  private assertTeamSession(sessionId: string, team?: OfflineTeamDispatch): void {
+    const binding = this.dbHandle.sqlite.prepare('SELECT value_json FROM settings WHERE key = ?')
+      .get(TEAM_SESSION_SETTING_PREFIX + sessionId) as { value_json: string } | undefined
+    if (team ? binding?.value_json !== JSON.stringify(team.identity) : binding !== undefined) {
+      throw new DaemonError('SESSION_SCOPE_MISMATCH', 'Conversation belongs to a different execution scope', { statusCode: 403 })
+    }
+  }
+
+  async startRun(input: StartRunInput, team?: OfflineTeamDispatch): Promise<StartRunResult> {
     if (this.stopping) {
       throw new DaemonError('DAEMON_STOPPING', 'Daemon is shutting down', {
         statusCode: 503,
@@ -567,6 +589,10 @@ export class RunOrchestrator {
       })
     }
 
+    this.assertTeamSession(input.sessionId, team)
+    if (team && this.runtimeRegistry?.getRuntimeMode() !== 'mock') {
+      throw new DaemonError('LIVE_TEAMS_GATED', 'Live Teams execution is disabled', { statusCode: 403 })
+    }
     const trimmedText = input.text.trim()
     if (!trimmedText) {
       throw new DaemonError('INVALID_INPUT', 'Message text cannot be empty', {
@@ -610,6 +636,10 @@ export class RunOrchestrator {
         statusCode: 404,
       })
     }
+    if (team && (preSession.agent_id !== team.botId || preSession.runtime_id !== team.runtimeId ||
+        preSession.account_id !== team.accountId)) {
+      throw new DaemonError('SESSION_SCOPE_MISMATCH', 'Conversation is incompatible with worker routing', { statusCode: 409 })
+    }
     if (preSession.archived_at !== null) {
       throw new DaemonError('SESSION_ARCHIVED', 'Cannot start a run in an archived session', {
         statusCode: 409,
@@ -650,9 +680,9 @@ export class RunOrchestrator {
       )
     }
 
-    const isMockRuntime = preBot.runtime_id === 'mock' || preBot.runtime_id === 'mock-offline'
-    const isCodexRuntime = preBot.runtime_id === 'codex'
-    const isUnifiedProviderRuntime = UNIFIED_PROVIDER_RUNTIMES.has(preBot.runtime_id)
+    const isMockRuntime = Boolean(team) || preBot.runtime_id === 'mock' || preBot.runtime_id === 'mock-offline'
+    const isCodexRuntime = !team && preBot.runtime_id === 'codex'
+    const isUnifiedProviderRuntime = !team && UNIFIED_PROVIDER_RUNTIMES.has(preBot.runtime_id)
 
     let codexPreflight: {
       adapter: CodexExecutionClient
@@ -919,6 +949,8 @@ export class RunOrchestrator {
     const now = new Date().toISOString()
 
     const txResult = this.dbHandle.transaction(() => {
+      this.assertTeamSession(input.sessionId, team)
+      team?.revalidate()
       const session = this.dbHandle.sqlite
         .prepare('SELECT id, agent_id, archived_at FROM sessions WHERE id = ?')
         .get(input.sessionId) as { id: string; agent_id: string; archived_at: string | null } | undefined
@@ -932,6 +964,14 @@ export class RunOrchestrator {
         throw new DaemonError('SESSION_ARCHIVED', 'Cannot start a run in an archived session', {
           statusCode: 409,
         })
+      }
+
+      if (team && this.dbHandle.sqlite.prepare(`
+        SELECT 1 FROM runs
+        WHERE agent_id = ? AND idempotency_key = ? AND session_id <> ?
+          AND json_type(config_snapshot_json, '$.teamRouting') = 'object'
+      `).get(team.botId, idempotencyKey, session.id)) {
+        throw new DaemonError('IDEMPOTENCY_CONFLICT', 'This worker attempt already belongs to another conversation', { statusCode: 409 })
       }
 
       const existingRun = this.dbHandle.sqlite
@@ -953,9 +993,9 @@ export class RunOrchestrator {
 
         if (
           botRow &&
-          (existingRun.runtime_id !== botRow.runtime_id ||
-            existingRun.model_id !== botRow.model_id ||
-            existingRun.effort !== botRow.effort ||
+          (existingRun.runtime_id !== (team?.runtimeId ?? botRow.runtime_id) ||
+            existingRun.model_id !== (team?.modelId ?? botRow.model_id) ||
+            existingRun.effort !== (team?.effort ?? botRow.effort) ||
             existingRun.permission_mode !== botRow.permission_mode)
         ) {
           throw new DaemonError(
@@ -1012,7 +1052,7 @@ export class RunOrchestrator {
         )
       }
 
-      const bot = this.dbHandle.sqlite
+      const globalBot = this.dbHandle.sqlite
         .prepare(
           `SELECT id, name, instructions, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
            FROM agents
@@ -1032,7 +1072,7 @@ export class RunOrchestrator {
           }
         | undefined
 
-      if (!bot || bot.archived_at !== null) {
+      if (!globalBot || globalBot.archived_at !== null) {
         throw new DaemonError('BOT_NOT_FOUND', `Bot "${session.agent_id}" was not found or is archived`, {
           statusCode: 404,
         })
@@ -1040,12 +1080,12 @@ export class RunOrchestrator {
 
       if (
         session.agent_id !== preSession.agent_id ||
-        bot.runtime_id !== preBot.runtime_id ||
-        bot.model_id !== preBot.model_id ||
-        bot.effort !== preBot.effort ||
-        bot.permission_mode !== preBot.permission_mode ||
-        bot.workspace_path !== preBot.workspace_path ||
-        bot.instructions !== preBot.instructions
+        globalBot.runtime_id !== preBot.runtime_id ||
+        globalBot.model_id !== preBot.model_id ||
+        globalBot.effort !== preBot.effort ||
+        globalBot.permission_mode !== preBot.permission_mode ||
+        globalBot.workspace_path !== preBot.workspace_path ||
+        globalBot.instructions !== preBot.instructions
       ) {
         throw new DaemonError(
           'EXECUTION_CONFIG_CHANGED',
@@ -1054,6 +1094,12 @@ export class RunOrchestrator {
         )
       }
 
+      const bot = team ? {
+        ...globalBot,
+        runtime_id: team.runtimeId,
+        model_id: team.modelId,
+        effort: team.effort,
+      } : globalBot
       if (bot.permission_mode === 'full-access') {
         throw new DaemonError(
           'PERMISSION_MODE_DISABLED',
@@ -1100,6 +1146,10 @@ export class RunOrchestrator {
           bot.workspace_path,
         codexVersion: codexPreflight?.codexVersion ?? null,
         isMock: isMockRuntime,
+        ...(team ? { teamRouting: {
+          teamId: team.teamId, teamRunId: team.teamRunId, botId: team.botId,
+          accountId: team.accountId, revision: team.revision,
+        } } : {}),
       }
       const configSnapshotJson = JSON.stringify(configSnapshot)
 
@@ -1167,6 +1217,8 @@ export class RunOrchestrator {
         },
         timestamp: now,
       })
+
+      team?.onCreateRun?.(runId)
 
       const insertedRow = this.dbHandle.sqlite
         .prepare(
@@ -1632,6 +1684,20 @@ export class RunOrchestrator {
 
       if (!runRow) {
         throw new DaemonError('RUN_NOT_FOUND', `Run "${runId}" was not found`, { statusCode: 404 })
+      }
+
+      if (decision === 'approved') {
+        const scope = this.dbHandle.sqlite.prepare(`
+          SELECT runs.agent_id AS agent_id, json_extract(runs.config_snapshot_json, '$.teamRouting.teamId') AS team_id,
+            teams.archived_at AS team_archived, teams.id AS active_team, agents.archived_at AS bot_archived,
+            EXISTS(SELECT 1 FROM team_members WHERE team_id = teams.id AND agent_id = runs.agent_id) AS member
+          FROM runs JOIN agents ON agents.id = runs.agent_id
+          LEFT JOIN teams ON teams.id = json_extract(runs.config_snapshot_json, '$.teamRouting.teamId')
+          WHERE runs.id = ?
+        `).get(runId) as { team_id: string | null; active_team: string | null; team_archived: string | null; bot_archived: string | null; member: number } | undefined
+        if (scope?.team_id && (!scope.active_team || scope.team_archived || scope.bot_archived || !scope.member)) {
+          throw new DaemonError('TEAM_MEMBER_UNAVAILABLE', 'The worker no longer has an active team membership', { statusCode: 403 })
+        }
       }
 
       if (!appRow) {

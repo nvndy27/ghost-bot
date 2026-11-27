@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
-import { ArrowUp, BrainCircuit, Paperclip, ShieldCheck, Square } from 'lucide-react'
+import { BrainCircuit, Paperclip, ShieldCheck } from 'lucide-react'
+import { useComposerTextareaHeight } from '../hooks/useComposerTextareaHeight.ts'
+import { ComposerSendButton } from './ComposerSendButton.tsx'
 import { MOCK_MODELS } from '../data/mockWorkspace.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
@@ -34,14 +35,7 @@ export function ChatComposer({
   onSend,
   onStop,
 }: ChatComposerProps) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 180)}px`
-  }, [draft])
+  const textareaRef = useComposerTextareaHeight(draft)
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Ignore Enter during IME composition (e.g. Vietnamese Telex/VNI, Japanese, Chinese).
@@ -86,7 +80,7 @@ export function ChatComposer({
       >
         <textarea
           ref={textareaRef}
-          rows={2}
+          rows={1}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -178,27 +172,9 @@ export function ChatComposer({
                   ? `Codex (${bot.permission})`
                   : 'Codex unavailable'}
             </small>
-            {isStreaming ? (
-              <button
-                type="button"
-                className="gb-send-btn gb-stop-btn"
-                onClick={onStop}
-                title="Stop generation"
-                aria-label="Stop generation"
-              >
-                <Square size={13} strokeWidth={2} fill="currentColor" aria-hidden="true" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                className={`gb-send-btn${canSend ? ' ready' : ''}`}
-                disabled={!canSend}
-                title={canSend ? 'Send message' : 'Unavailable for current mode/runtime'}
-                aria-label="Send message"
-              >
-                <ArrowUp size={ICON_SIZE.md} strokeWidth={2.1} aria-hidden="true" />
-              </button>
-            )}
+            <ComposerSendButton canSend={canSend} stopping={isStreaming} onStop={onStop}
+              sendLabel="Send message" stopLabel="Stop generation"
+              disabledTitle="Unavailable for current mode/runtime" />
           </div>
         </div>
       </form>

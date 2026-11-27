@@ -63,7 +63,7 @@ try {
     'Version: 0.1.0',
     'Release: 1',
     'Summary: Ghost Bot local-first multi-agent desktop workspace',
-    'License: Proprietary',
+    'License: MIT OR Apache-2.0',
     'BuildArch: x86_64',
     'Requires: gtk3, nss, alsa-lib, libXScrnSaver, libXtst',
     '',

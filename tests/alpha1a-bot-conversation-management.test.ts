@@ -97,14 +97,14 @@ test('Alpha.1A sidebar organization and unread state persist across daemon resta
   try {
     await daemon1.start()
 
-    // Migrations 0001-0013 remain frozen
+    // The unified baseline includes the group discussion migration.
     const dbCheck = await openGhostBotDatabase(dataDir)
     try {
       const migRow = dbCheck.sqlite
         .prepare('SELECT COUNT(*) AS cnt, MAX(version) AS maxVer FROM schema_migrations')
         .get() as { cnt: number; maxVer: number }
-      assert.equal(migRow.cnt, 13)
-      assert.equal(migRow.maxVer, 13)
+      assert.equal(migRow.cnt, 14)
+      assert.equal(migRow.maxVer, 14)
     } finally {
       dbCheck.close()
     }

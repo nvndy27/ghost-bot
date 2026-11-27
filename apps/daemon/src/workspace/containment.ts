@@ -3,6 +3,7 @@ import type { Stats } from 'node:fs'
 import {
   constants as fsConstants,
   lstat,
+  mkdir,
   open,
   opendir,
   rename,
@@ -30,7 +31,7 @@ const SENSITIVE_EXACT_NAMES = new Set([
   'service-account.json',
 ])
 
-const SENSITIVE_DIR_NAMES = new Set(['.git', '.ssh', '.gnupg', '.aws'])
+const SENSITIVE_DIR_NAMES = new Set(['.git', '.ssh', '.gnupg', '.aws', '.ghost-bot-trash'])
 
 const SENSITIVE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.kdbx'])
 
@@ -68,7 +69,40 @@ const BINARY_EXTENSIONS = new Set([
 
 export interface SaveHookOptions {
   onBeforeCommit?: () => Promise<void> | void
+  onAfterCommit?: () => Promise<void> | void
   injectWriteError?: () => void
+}
+
+interface MutationHooks extends SaveHookOptions {
+  commit?: <T>(validate: () => Promise<void>, operation: () => Promise<T>) => Promise<T>
+}
+
+async function commitMutation<T>(
+  hooks: MutationHooks | undefined,
+  validate: () => Promise<void>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (hooks?.commit) return hooks.commit(validate, operation)
+  await validate()
+  return operation()
+}
+
+async function assertCurrentParent(
+  root: string,
+  dev: number,
+  ino: number,
+  segments: string[],
+  pinned: FileHandle,
+): Promise<void> {
+  const current = await walkContainedDirectoryFd(root, dev, ino, segments)
+  try {
+    const [expected, found] = await Promise.all([pinned.stat(), current.stat()])
+    if (expected.dev !== found.dev || expected.ino !== found.ino) {
+      throw new DaemonError('FILE_CONFLICT', 'Parent directory changed before commit', { statusCode: 409 })
+    }
+  } finally {
+    await current.close()
+  }
 }
 
 export async function assertDescriptorContainmentSupported(): Promise<void> {
@@ -405,6 +439,7 @@ export async function listContainedDirectory(
   rootDev: number,
   rootIno: number,
   relativePath: string,
+  limits?: { maxScan: number; shouldStop: () => boolean },
 ): Promise<{
   entries: WorkspaceDirectoryEntry[]
   truncated: boolean
@@ -422,11 +457,14 @@ export async function listContainedDirectory(
 
     try {
       for await (const entry of dir) {
-        totalScanned += 1
-        if (totalScanned > WORKSPACE_LIMITS.maxDirectoryScan) {
+        if (
+          totalScanned >= Math.min(WORKSPACE_LIMITS.maxDirectoryScan, limits?.maxScan ?? Infinity) ||
+          limits?.shouldStop()
+        ) {
           truncated = true
           break
         }
+        totalScanned += 1
         if (entry.isSymbolicLink()) continue
         if (!entry.isDirectory() && !entry.isFile()) continue
         if (isSensitiveSegment(entry.name)) continue
@@ -489,20 +527,28 @@ export async function readContainedTextFile(
   rootDev: number,
   rootIno: number,
   relativePath: string,
-): Promise<{
-  content: string
-  revision: string
-  sizeBytes: number
-  name: string
-  normalizedRelativePath: string
-}> {
-  const segments = normalizeWorkspaceRelativePath(relativePath, false)
-  const fileName = segments[segments.length - 1]
+  maxBytes: number = WORKSPACE_LIMITS.maxFileBytes,
+) {
+  const fileName = normalizeWorkspaceRelativePath(relativePath, false).at(-1)!
   if (isBlockedBinaryExtension(fileName)) {
     throw new DaemonError('UNSUPPORTED_BINARY_FILE', `File '${fileName}' is a binary type`, {
       statusCode: 415,
     })
   }
+
+  const { bytes, ...file } = await readContainedFileBytes(canonicalRoot, rootDev, rootIno, relativePath, maxBytes)
+  return { ...file, content: assertValidUtf8Text(bytes, file.normalizedRelativePath) }
+}
+
+export async function readContainedFileBytes(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  relativePath: string,
+  maxBytes: number,
+) {
+  const segments = normalizeWorkspaceRelativePath(relativePath, false)
+  const fileName = segments[segments.length - 1]
 
   const parentSegments = segments.slice(0, -1)
   const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parentSegments)
@@ -536,20 +582,19 @@ export async function readContainedTextFile(
         statusCode: 403,
       })
     }
-    if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
+    if (st.size > maxBytes) {
       throw new DaemonError(
         'FILE_TOO_LARGE',
-        `File exceeds maximum readable size (${WORKSPACE_LIMITS.maxFileBytes} bytes)`,
+        `File exceeds maximum readable size (${maxBytes} bytes)`,
         { statusCode: 413 },
       )
     }
 
     const exactBuf = await readExactFromHandle(fileHandle, st.size)
-    const content = assertValidUtf8Text(exactBuf, segments.join('/'))
     const revision = computeRevisionToken(st, exactBuf)
 
     return {
-      content,
+      bytes: exactBuf,
       revision,
       sizeBytes: exactBuf.length,
       name: fileName,
@@ -570,7 +615,7 @@ export async function saveContainedTextFile(
   relativePath: string,
   newContent: string,
   expectedRevision: string,
-  hooks?: SaveHookOptions,
+  hooks?: MutationHooks,
 ): Promise<{
   revision: string
   sizeBytes: number
@@ -692,75 +737,78 @@ export async function saveContainedTextFile(
       await hooks.onBeforeCommit()
     }
 
-    // Revalidate target identity (dev, ino) and expectedRevision immediately before atomic rename.
-    const preCommitHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock).catch(
-      (err) => {
-        const code = (err as NodeJS.ErrnoException)?.code
-        throw new DaemonError(
-          code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'FILE_CONFLICT',
-          'Target file could not be revalidated before commit',
-          { statusCode: code === 'ELOOP' ? 403 : 409 },
-        )
-      },
-    )
-    try {
-      const preCommitStat = await preCommitHandle.stat()
-      assertRegularFileStats(preCommitStat, fileName)
-      if (preCommitStat.dev !== origDev || preCommitStat.ino !== origIno) {
-        throw new DaemonError(
-          'FILE_CONFLICT',
-          'Target file identity changed on disk during save staging',
-          { statusCode: 409 },
-        )
+    const stage = tmpHandle
+    const stageName = tmpName
+    await stage.chmod(origMode)
+    await stage.sync()
+    await commitMutation(hooks, async () => {
+      // Revalidate target identity (dev, ino) and expectedRevision immediately before atomic rename.
+      const preCommitHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock).catch(
+        (err) => {
+          const code = (err as NodeJS.ErrnoException)?.code
+          throw new DaemonError(
+            code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'FILE_CONFLICT',
+            'Target file could not be revalidated before commit',
+            { statusCode: code === 'ELOOP' ? 403 : 409 },
+          )
+        },
+      )
+      try {
+        const preCommitStat = await preCommitHandle.stat()
+        assertRegularFileStats(preCommitStat, fileName)
+        if (preCommitStat.dev !== origDev || preCommitStat.ino !== origIno) {
+          throw new DaemonError(
+            'FILE_CONFLICT',
+            'Target file identity changed on disk during save staging',
+            { statusCode: 409 },
+          )
+        }
+        if (preCommitStat.size > WORKSPACE_LIMITS.maxFileBytes) {
+          throw new DaemonError('FILE_TOO_LARGE', 'Target file grew beyond editable limit during staging', {
+            statusCode: 413,
+          })
+        }
+        const preCommitBytes = await readExactFromHandle(preCommitHandle, preCommitStat.size)
+        const preCommitRevision = computeRevisionToken(preCommitStat, preCommitBytes)
+        if (preCommitRevision !== expectedRevision) {
+          throw new DaemonError(
+            'FILE_CONFLICT',
+            'File was modified on disk while staging save. Reload before saving.',
+            { statusCode: 409 },
+          )
+        }
+      } finally {
+        await preCommitHandle.close().catch(() => {})
       }
-      if (preCommitStat.size > WORKSPACE_LIMITS.maxFileBytes) {
-        throw new DaemonError('FILE_TOO_LARGE', 'Target file grew beyond editable limit during staging', {
-          statusCode: 413,
+
+      // A pinned descriptor identifies our staged inode even if the directory entry is replaced.
+      const stagedStat = await stage.stat()
+      assertRegularFileStats(stagedStat, stageName)
+      const stagedBytes = await readExactFromHandle(stage, nextBytes.length)
+      const stagedEntry = await lstat(tmpChildPath).catch(() => null)
+      if (
+        !stagedEntry?.isFile() ||
+        stagedEntry.nlink !== 1 ||
+        stagedEntry.dev !== rootDev ||
+        stagedEntry.ino !== stagedStat.ino ||
+        stagedEntry.size !== nextBytes.length ||
+        stagedEntry.ctimeMs !== stagedStat.ctimeMs ||
+        stagedEntry.mtimeMs !== stagedStat.mtimeMs ||
+        (stagedEntry.mode & 0o777) !== origMode ||
+        Buffer.compare(stagedBytes, nextBytes) !== 0
+      ) {
+        throw new DaemonError('STAGED_FILE_INVALID', 'Staged temporary file changed before commit', {
+          statusCode: 409,
         })
       }
-      const preCommitBytes = await readExactFromHandle(preCommitHandle, preCommitStat.size)
-      const preCommitRevision = computeRevisionToken(preCommitStat, preCommitBytes)
-      if (preCommitRevision !== expectedRevision) {
-        throw new DaemonError(
-          'FILE_CONFLICT',
-          'File was modified on disk while staging save. Reload before saving.',
-          { statusCode: 409 },
-        )
-      }
-    } finally {
-      await preCommitHandle.close().catch(() => {})
-    }
 
-    // A pinned descriptor identifies our staged inode even if the directory entry is replaced.
-    await tmpHandle.chmod(origMode)
-    await tmpHandle.sync()
-    const stagedStat = await tmpHandle.stat()
-    assertRegularFileStats(stagedStat, tmpName)
-    const stagedBytes = await readExactFromHandle(tmpHandle, nextBytes.length)
-    const stagedEntry = await lstat(tmpChildPath).catch(() => null)
-    if (
-      !stagedEntry?.isFile() ||
-      stagedEntry.nlink !== 1 ||
-      stagedEntry.dev !== rootDev ||
-      stagedEntry.ino !== stagedStat.ino ||
-      stagedEntry.size !== nextBytes.length ||
-      stagedEntry.ctimeMs !== stagedStat.ctimeMs ||
-      stagedEntry.mtimeMs !== stagedStat.mtimeMs ||
-      (stagedEntry.mode & 0o777) !== origMode ||
-      Buffer.compare(stagedBytes, nextBytes) !== 0
-    ) {
-      throw new DaemonError('STAGED_FILE_INVALID', 'Staged temporary file changed before commit', {
-        statusCode: 409,
-      })
-    }
-    const stagedIno = stagedStat.ino
-
-    // Atomic replacement inside the pinned directory descriptor; never truncates the live file first.
-    await rename(tmpChildPath, targetChildPath)
+      await assertCurrentParent(canonicalRoot, rootDev, rootIno, parentSegments, dirHandle)
+    }, () => rename(tmpChildPath, targetChildPath))
     tmpName = null
-    await dirHandle.sync().catch(() => {})
 
     try {
+      await dirHandle.sync()
+      await assertCurrentParent(canonicalRoot, rootDev, rootIno, parentSegments, dirHandle)
       const verifyHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
       try {
         const updatedStat = await verifyHandle.stat()
@@ -771,7 +819,7 @@ export async function saveContainedTextFile(
           })
         }
         const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
-        if (updatedStat.ino !== stagedIno || Buffer.compare(verifyBytes, nextBytes) !== 0) {
+        if (updatedStat.dev !== stagedIdentity.dev || updatedStat.ino !== stagedIdentity.ino || Buffer.compare(verifyBytes, nextBytes) !== 0) {
           throw new DaemonError(
             'SAVE_OUTCOME_UNCERTAIN',
             'Post-commit file identity or content did not match staged write',
@@ -810,5 +858,86 @@ export async function saveContainedTextFile(
       await tmpHandle.close().catch(() => {})
     }
     await dirHandle.close().catch(() => {})
+  }
+}
+
+export async function createContainedEntry(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  relativePath: string,
+  kind: 'file' | 'directory',
+  content = '',
+  hooks?: MutationHooks,
+): Promise<{
+  normalizedRelativePath: string
+  kind: 'file' | 'directory'
+  revision: string | null
+  sizeBytes: number | null
+}> {
+  const segments = normalizeWorkspaceRelativePath(relativePath, false)
+  const entryName = segments.at(-1)!
+  if (kind === 'file' && isBlockedBinaryExtension(entryName)) {
+    throw new DaemonError('UNSUPPORTED_BINARY_FILE', `File '${entryName}' is a binary type`, {
+      statusCode: 415,
+    })
+  }
+  if (content !== '') {
+    throw new DaemonError('WORKSPACE_CREATE_CONTENT_GATED', 'Only empty file creation is available.', {
+      statusCode: 501,
+    })
+  }
+
+  const parents = segments.slice(0, -1)
+  const directory = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parents)
+  const destination = procFdChildPath(directory.fd, entryName)
+  const normalizedRelativePath = segments.join('/')
+  let file: FileHandle | undefined
+  try {
+    await hooks?.onBeforeCommit?.()
+    const validate = () => assertCurrentParent(canonicalRoot, rootDev, rootIno, parents, directory)
+    try {
+      // O_EXCL publishes an empty file and returns its descriptor in the same syscall.
+      if (kind === 'file') {
+        file = await commitMutation(hooks, validate, () => open(
+          destination,
+          fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+          0o644,
+        ))
+      } else {
+        await commitMutation(hooks, validate, () => mkdir(destination, 0o755))
+      }
+    } catch (error) {
+      if (error instanceof DaemonError) throw error
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new DaemonError('FILE_EXISTS', `Entry '${entryName}' already exists`, { statusCode: 409 })
+      }
+      throw new DaemonError('CREATE_FAILED', 'Could not create the workspace entry', { statusCode: 500 })
+    }
+
+    try {
+      await hooks?.onAfterCommit?.()
+      await directory.sync()
+      await assertCurrentParent(canonicalRoot, rootDev, rootIno, parents, directory)
+      const entry = await lstat(destination)
+      if (file) {
+        const created = await file.stat()
+        assertRegularFileStats(created, entryName)
+        if (!entry.isFile() || entry.dev !== rootDev || entry.ino !== created.ino ||
+            created.size !== 0 || entry.size !== 0 || created.ctimeMs !== entry.ctimeMs) {
+          throw new Error('Created file changed')
+        }
+        return { normalizedRelativePath, kind, revision: computeRevisionToken(created, Buffer.alloc(0)), sizeBytes: 0 }
+      }
+      if (!entry.isDirectory() || entry.dev !== rootDev) throw new Error('Created directory changed')
+      return { normalizedRelativePath, kind, revision: null, sizeBytes: null }
+    } catch {
+      throw new DaemonError('CREATE_OUTCOME_UNCERTAIN', 'Creation completed and the resulting entry could not be verified. Refresh Files.', {
+        statusCode: 500,
+      })
+    }
+  } finally {
+    await file?.close().catch(() => {})
+    await directory.close().catch(() => {})
   }
 }
