@@ -144,3 +144,7 @@ Phase 1 (1A–1D) Desktop Foundation is **Verified** and ready for acceptance re
 4. Implement native OpenClaw Gateway WebSocket adapter and optional local Ollama adapter after live verification.
 
 Start with [progress](PROGRESS.md), [protocol](PROTOCOL.md), and [provider matrix](PROVIDER_MATRIX.md).
+
+## Alpha.3A release handoff
+
+Review the focused CSP harness change. After UI refinement, build the approved final SHA once and execute [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md) on provisioned Fedora and Ubuntu desktops. Record hashes and exact source SHA for every result. Preserve all migrations and current capability gates.
