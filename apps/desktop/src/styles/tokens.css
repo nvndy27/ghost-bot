@@ -2,20 +2,38 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
   --gb-canvas: #181818;
-  --gb-sidebar: #303030;
+  --gb-sidebar: #202020;
   --gb-panel: #181818;
-  --gb-surface: #262626;
-  --gb-border: #393939;
-  --gb-text: #e8e8e8;
-  --gb-muted: #b6b6b6;
-  --gb-accent: #79978a;
-  --gb-success: #20bd78;
-  --gb-danger: #d96b6b;
+  --gb-surface: #252525;
+  --gb-border: #343434;
+  --gb-text: #ebebeb;
+  --gb-muted: #a2a2a2;
+  --gb-accent: #8cb69d;
+  --gb-success: #8cb69d;
+  --gb-danger: #dd9191;
+  --gb-subtle: #818181;
+  --gb-focus: #91add9;
+  --gb-warning: #d8ab76;
   --gb-radius-sm: 6px;
   --gb-radius-md: 10px;
   --gb-radius-lg: 14px;
   --gb-font: system-ui, -apple-system, sans-serif;
   --gb-font-size: 14px;
+  --gb-font-small: 12px;
+  --gb-font-tiny: 11px;
+  --gb-space-1: 4px;
+  --gb-space-2: 8px;
+  --gb-space-3: 12px;
+  --gb-space-4: 16px;
+  --gb-space-5: 24px;
+  --gb-header-height: 58px;
+  --gb-sidebar-width: 224px;
+  --gb-sidebar-compact: 56px;
+  --gb-sidebar-row-height: 46px;
+  --gb-chat-width: 750px;
+  --gb-composer-control: 34px;
+  --gb-textarea-min: 48px;
+  --gb-textarea-max: 160px;
   --gb-icon-xs: 14px;
   --gb-icon-sm: 16px;
   --gb-icon-md: 18px;
@@ -23,24 +41,27 @@
   --gb-icon-btn-size: 32px;
   --gb-icon-btn-size-md: 36px;
   --gb-icon-btn-radius: 7px;
-  --gb-surface-hover: rgba(255, 255, 255, 0.06);
-  --gb-surface-active: rgba(255, 255, 255, 0.11);
+  --gb-surface-hover: #303030;
+  --gb-surface-active: #303030;
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --gb-canvas: #faf9f6;
-  --gb-sidebar: #edede9;
-  --gb-panel: #faf9f6;
-  --gb-surface: #e7e7e3;
-  --gb-border: #d6d6d1;
-  --gb-text: #252525;
+  --gb-canvas: #fdfdfc;
+  --gb-sidebar: #f1f1ef;
+  --gb-panel: #fdfdfc;
+  --gb-surface: #ebebe9;
+  --gb-border: #d9d9d6;
+  --gb-text: #242424;
   --gb-muted: #646464;
-  --gb-accent: #487966;
-  --gb-success: #168a56;
-  --gb-danger: #b84242;
-  --gb-surface-hover: rgba(0, 0, 0, 0.05);
-  --gb-surface-active: rgba(0, 0, 0, 0.09);
+  --gb-accent: #417b5b;
+  --gb-success: #417b5b;
+  --gb-danger: #a94a4a;
+  --gb-subtle: #777777;
+  --gb-focus: #456dab;
+  --gb-warning: #9c631f;
+  --gb-surface-hover: #e1e1df;
+  --gb-surface-active: #e1e1df;
 }
 
 * {
@@ -83,7 +104,7 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.48;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -92,7 +113,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--gb-accent);
+  outline: 2px solid var(--gb-focus);
   outline-offset: 2px;
 }
 
