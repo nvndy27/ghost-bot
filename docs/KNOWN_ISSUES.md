@@ -1,5 +1,13 @@
 ## Licensing and public source distribution
 
+## Alpha.4A integration limits
+
+- The existing runtime snapshot contains one runtime usage projection and no enumerable account identity catalog. The compact Usage popover explicitly reports other-account usage unavailable.
+- Workspace V03.2 implementation belongs to Agent 2. Alpha.4A screenshots retain the prior Workspace layout until convergence, including its old Overview usage section. No Workspace-specific API was replaced.
+- Existing persisted sidebar/Workspace widths remain valid, so legacy profiles can differ from the prototype defaults. The 65-percent Workspace resize bound requires coordinated work with Agent 2.
+- The V03.2 visual handoff is approved. Production visual acceptance and convergence remain pending.
+
+
 ## Accepted release baseline — 2026-11-28
 
 PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).

@@ -59,6 +59,11 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Gate: lint, typecheck, build, regression and real Electron E2E evidence, secrets/permissions review, data preservation, independent acceptance; install/launch/update/restart checks on Fedora GNOME and Ubuntu where available, Windows only when actually supported/tested (not a required first-alpha release platform). Verify packages and document supported platforms and known limitations. Prepare simple installation/usage instructions; no public repository visibility or license change as part of this roadmap decision.
 - **Release boundary:** v0.1 Personal & Friends Alpha is ready only when Alpha.0–3 pass for the documented supported scope. No Terminal Workspace, full interactive PTY, advanced AI browser automation, Companion, billing or remote/cloud services are required. Use existing versioning convention; alpha tags/numbering to be coordinated at release.
 
+### Alpha.4 — Approved V03.2 UI implementation
+
+- **In Progress** — The maintainer approved V03.2 design and assigned shared shell/Chat/Settings/Usage to Alpha.4A and Workspace UI to Agent 2 Alpha.4B. See [shared UI contract](extensions/alpha4-shared-ui-contract.md). Implementation proceeds on provisional Alpha.3C while required review and CI gate merging.
+- Production visual acceptance, two-agent reconciliation, final candidate freeze and the final Agent 2 package build/verification remain open.
+
 ### Post-alpha roadmap (deferred, not current assignments)
 - **Not Started** — v0.2 Dual-Mode Workspace: Chat / Terminal switch in upper-left of both layouts; Orca-style project/worktree sidebar, interactive user PTY, CLI registry (including supported agy/Codex/Claude flows), tabs and nested splits, reconnect, usage from official sources. Reuse Alpha.2 workspace tools; retain existing scoped sandbox separately.
 - **Not Started** — v0.3 Advanced collaboration: Ghost Council, Bridge, Verify and shared project memory, evidence-driven cross-provider handoff and verification.

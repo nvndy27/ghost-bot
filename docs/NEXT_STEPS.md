@@ -1,5 +1,10 @@
 # Next steps
 
+## Alpha.4 integration handoff
+
+Alpha.3C PR #49 remains provisional until maintainer merge approval. Agent 2 accepted exact head `5a8c69d`, and required hosted CI passed. Alpha.4A PR #50 proceeds independently from that checkpoint. Agent 2 consumes the shared V03.2 contract and owns Workspace-specific UI. Reconcile the two feature histories before integrated visual acceptance. Final packages follow UI approval and candidate freeze.
+
+
 ## Alpha.3C unified checkpoint
 
 **Implemented** — Provisional convergence of Alpha.3A PR #47 at `f6716739e5ba9897c9a77e4fd3d0a2096a436202` and Alpha.3B PR #48 at `140b591dfe79dec3760365ea36c965e608f2cc24` on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. Both histories, the CSP attachment and acknowledged-save timing corrections, and all nine provider plans are preserved. Reconciliation changes documentation only. Existing tests are reused. Required CI and Agent 2 focused acceptance gate merging.
