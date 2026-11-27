@@ -70,6 +70,7 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
     const dispatched = await page.evaluate((sessionId) => window.ghostBot!.listMessages({ sessionId }), origin)
     assert.equal(dispatched.messages.length, 0)
 
+    await page.getByTestId('workspace-explorer-toggle').click()
     await page.getByTestId('workspace-tree-entry-page.pdf').click()
     const preview = page.getByRole('region', { name: 'File preview' })
     await preview.getByRole('img', { name: 'page.pdf, page 1' }).waitFor()

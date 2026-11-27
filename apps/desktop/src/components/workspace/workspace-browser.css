@@ -1,7 +1,8 @@
 .gb-browser-tab {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  padding: 8px;
   min-height: 0;
   flex: 1;
 }
@@ -29,7 +30,7 @@
 
 .gb-browser-tab-pill.active {
   background: var(--gb-panel);
-  border-color: var(--gb-accent);
+  border-color: var(--gb-border);
   color: var(--gb-text);
   font-weight: 600;
 }
@@ -113,3 +114,7 @@
   border-radius: 4px;
   border: 1px solid var(--gb-border);
 }
+
+.gb-browser-toolbar > .gb-icon-btn { flex-shrink: 0; }
+.gb-browser-toolbar { container-type: inline-size; }
+.gb-browser-url-form { flex-basis: 100%; order: -1; }

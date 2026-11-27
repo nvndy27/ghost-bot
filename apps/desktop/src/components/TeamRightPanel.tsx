@@ -64,7 +64,7 @@ export function TeamRightPanel({
   const cancellationState = diagnostics ? asString(diagnostics.cancellationState, '') : ''
 
   const overview = (
-    <section aria-label="Team activity panel">
+    <section className="gb-workspace-overview" aria-label="Team activity panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="gb-section-label gb-icon-inline" style={{ margin: 0 }}>
           <Activity size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -108,18 +108,12 @@ export function TeamRightPanel({
           <span className="gb-muted">Run status</span>
           <strong>{runStatus}</strong>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span className="gb-muted">Active / Queued</span>
-          <span>
-            {counts.active} / {counts.queued}
-          </span>
+        <div className="gb-overview-metrics">
+          <div><strong>{counts.active}</strong><span>Active</span></div>
+          <div><strong>{counts.queued}</strong><span>Queued</span></div>
+          <div><strong>{counts.completed}</strong><span>Done</span></div>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span className="gb-muted">Completed / Blocked</span>
-          <span>
-            {counts.completed} / {counts.blocked}
-          </span>
-        </div>
+        <div className="gb-muted">Blocked {counts.blocked}</div>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <span className="gb-muted">Uncertain</span>
           <span>{counts.uncertain}</span>

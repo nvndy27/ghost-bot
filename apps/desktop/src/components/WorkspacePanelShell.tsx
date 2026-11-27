@@ -1,4 +1,4 @@
-import { Files, GitBranch, Globe, LayoutDashboard, Maximize2, Minimize2, PanelRight, Terminal } from 'lucide-react'
+import { Files, GitBranch, Globe, LayoutDashboard, Maximize2, Minimize2, Monitor, PanelRight, Terminal } from 'lucide-react'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { WorkspaceGitChanges } from './workspace/WorkspaceGitChanges.tsx'
@@ -33,6 +33,7 @@ export interface WorkspacePanelShellProps {
   isMockMode: boolean
   activeTab?: WorkspaceTabId
   onTabChange?: (tab: WorkspaceTabId) => void
+  onOpenComputerUse?: () => void
   onCollapse: () => void
   overviewContent: ReactNode
   filesTransport?: WorkspaceFilesTransport | null
@@ -50,6 +51,7 @@ export function WorkspacePanelShell({
   activeTab: controlledTab,
   onTabChange,
   onCollapse,
+  onOpenComputerUse,
   overviewContent,
   filesTransport,
   onAddSelectionToDraft,
@@ -99,7 +101,7 @@ export function WorkspacePanelShell({
   }
 
   const MaximizeIcon = maximized ? Minimize2 : Maximize2
-  const title = contextKind === 'team' ? 'Team workspace' : 'Bot workspace'
+  const title = 'Workspace'
   const activeTabDef = WORKSPACE_TABS.find((t) => t.id === activeTab) ?? WORKSPACE_TABS[0]
 
   const handleShellKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -125,6 +127,10 @@ export function WorkspacePanelShell({
           <strong className="gb-workspace-title">{title}</strong>
         </div>
         <div className="gb-workspace-actions">
+          <IconButton label="Open Live Viewer" onClick={onOpenComputerUse}
+            disabled={!onOpenComputerUse}>
+            <Monitor size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
           <button
             ref={maximizeBtnRef}
             type="button"
@@ -181,6 +187,7 @@ export function WorkspacePanelShell({
             </button>
           )
         })}
+        <span className="gb-workspace-tab-label" aria-hidden="true">{activeTabDef.shortLabel}</span>
       </div>
 
       {activeTabDef.id !== 'files' && (
