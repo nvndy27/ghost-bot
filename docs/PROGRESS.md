@@ -2,7 +2,7 @@
 
 ## Shared baseline convergence
 
-**Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Independent combined review awaits sign-off. See the [combined evidence](extensions/alpha-shared-convergence.md).
+**Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Agent 2 accepted the implementation at `78d0822` and requested targeted acceptance after bringing in current main. The reconciliation preserves both documentation histories and the newer main changes. See the [combined evidence](extensions/alpha-shared-convergence.md).
 
 ## Alpha.1A — Bot and Conversation Management
 
@@ -21,6 +21,14 @@ The integration candidate joins the accepted UI.1 baseline `3ce8c3f6f7dcc9254610
 | Tested | Workspace lint, shared-types and desktop typecheck, daemon and desktop builds passed. The focused daemon IPC, workspace service and Electron test run passed 13/13. The service tests exercised stale revisions and authorization changes during isolated saves. Zero live model inference. |
 | Blocked | File writes remain disabled at the daemon route. Staged-descriptor, directory-entry and byte checks narrow the pre-rename race. An external writer can still alter the target revision or staged directory entry before rename. Ask Approval and group/task write authority also need an approved binding. |
 | Implemented | The integration adds no migration or dependency. Alpha.1A continued in its separate worktree and is tracked independently in PR #20. |
+
+## Open-source readiness — dual license and CI
+
+Owner approved MIT OR Apache-2.0 and repository health automation. Added MIT text, dual-license metadata and contributor terms, CI, CodeQL, Dependabot, OpenSSF Scorecard, SPDX dependency-graph SBOM export and community templates. First workflow results pending; no certification or test pass is claimed. Existing milestones unchanged.
+
+## Repository licensing — Apache-2.0 (2026-11-27)
+
+Owner selected Apache License 2.0 for original Ghost Bot code and documentation. This change adds the standard license text from GitHub's Choose a License template, a scoped NOTICE, license metadata, contribution/security reporting guidance and public-repository README corrections. No runtime code, dependencies, migrations or feature gates changed. Documentation/metadata change only; application tests and live inference not run. Third-party dependency and reference-asset rights review and secret/history review remain open; public repository visibility is not a release-acceptance result.
 
 ## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
 

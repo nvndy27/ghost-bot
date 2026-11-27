@@ -1,0 +1,24 @@
+name: Dependency graph SBOM
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  export:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Export current default-branch dependency graph (SPDX)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/dependency-graph/sbom" --jq '.sbom' > ghost-bot.spdx.json
+          jq -e '.spdxVersion and (.packages | type == "array") and (.packages | length > 0)' ghost-bot.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ghost-bot-dependency-graph-sbom
+          path: ghost-bot.spdx.json
+          if-no-files-found: error
+          retention-days: 14

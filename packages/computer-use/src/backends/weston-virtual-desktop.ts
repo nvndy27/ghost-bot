@@ -13,6 +13,19 @@ import type {
 
 const execFileAsync = promisify(execFile)
 
+async function detectHeadlessBackend(): Promise<string> {
+  const { stdout, stderr } = await execFileAsync('weston', ['--version'], { timeout: 3000 })
+  const major = Number(/\bweston\s+(\d+)\./i.exec(stdout + '\n' + stderr)?.[1])
+  const moduleExists = Number.isSafeInteger(major) && major > 0 &&
+    ['/usr/lib64', '/usr/lib', '/usr/lib/x86_64-linux-gnu', '/usr/lib/aarch64-linux-gnu'].some(
+      (dir) => fs.existsSync(path.join(dir, `libweston-${major}`, 'headless-backend.so')),
+    )
+  if (!moduleExists) {
+    throw new ComputerUseError('BACKEND_FAILED', 'Weston headless backend is unavailable')
+  }
+  return major >= 15 ? 'headless' : 'headless-backend.so'
+}
+
 interface InternalWestonSession {
   session: VirtualDesktopSession
   process: ChildProcess
@@ -29,8 +42,8 @@ export class WestonHeadlessVirtualDesktop implements VirtualDesktopBackend {
 
   async probeCapabilities(): Promise<VirtualDesktopCapabilities> {
     try {
-      await execFileAsync('weston', ['--version'], { timeout: 3000 })
-      const headlessModuleExists = fs.existsSync('/usr/lib64/libweston-15/headless-backend.so')
+      await detectHeadlessBackend()
+      const headlessModuleExists = true
       return {
         backendKind: 'weston-headless',
         compositorAvailable: headlessModuleExists,
@@ -62,6 +75,7 @@ export class WestonHeadlessVirtualDesktop implements VirtualDesktopBackend {
     width?: number
     height?: number
   }): Promise<VirtualDesktopSession> {
+    const backend = await detectHeadlessBackend()
     const width = Math.min(Math.max(320, input.width ?? 1280), 3840)
     const height = Math.min(Math.max(240, input.height ?? 720), 2160)
     const sessionId = `cu_vd_${randomUUID()}`
@@ -71,7 +85,7 @@ export class WestonHeadlessVirtualDesktop implements VirtualDesktopBackend {
 
     const child = spawn(
       'weston',
-      ['--backend=headless', `--socket=${waylandSocket}`, `--width=${width}`, `--height=${height}`],
+      [`--backend=${backend}`, `--socket=${waylandSocket}`, `--width=${width}`, `--height=${height}`],
       {
         env: { PATH: process.env.PATH ?? '/usr/bin:/bin', XDG_RUNTIME_DIR: runtimeDir },
         stdio: 'ignore',

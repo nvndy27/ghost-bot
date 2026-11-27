@@ -1,10 +1,42 @@
-# Ghost Bot
+<p align="center">
+  <img src="apps/desktop/build/icon.svg" alt="Ghost Bot logo" width="88" height="88" />
+</p>
 
-**Your AI team, in one local-first workspace.**
+<h1 align="center">Ghost Bot</h1>
+
+<p align="center"><strong>Your AI team, in one local-first workspace.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img src="docs/badges/apache.svg" alt="License: Apache 2.0" /></a>
+  <a href="LICENSE-MIT"><img src="docs/badges/mit.svg" alt="License: MIT" /></a>
+  <a href="docs/ROADMAP.md"><img src="docs/badges/status.svg" alt="Status: Alpha development" /></a>
+  <img src="docs/badges/linux.svg" alt="Platform: Linux" />
+  <img src="docs/badges/typescript.svg" alt="TypeScript: Strict" />
+  <img src="docs/badges/architecture.svg" alt="Architecture: Local-first" />
+</p>
+
+---
+
+<p align="center">
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Build status" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL status" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml/badge.svg?branch=main" alt="OpenSSF Scorecard workflow status" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="docs/badges/best-practices.svg" alt="OpenSSF Best Practices: Not registered" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="docs/badges/reuse.svg" alt="REUSE: Pending" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/sbom.yml"><img src="docs/badges/sbom.svg" alt="SBOM export configured" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/nvndy27/ghost-bot/actions">Workflow results</a> ·
+  <a href="https://scorecard.dev/viewer/?uri=github.com/nvndy27/ghost-bot">Scorecard report</a> ·
+  <a href="docs/OPEN_SOURCE_READINESS.md">Open-source readiness</a>
+</p>
+
+<p align="center"><sub>Workflow badges report actual main-branch runs, not certifications. Best Practices and REUSE are not yet verified; SBOM export is configured, not a verified release SBOM.</sub></p>
 
 Ghost Bot is a desktop AI workspace for personal agents, multi-model collaboration and developer workflows. Connect supported AI runtimes using your own accounts, API keys or local models, organize bots with independent configurations, and keep conversations and project data under your control.
 
-> **Development preview — targeting v0.1 Personal & Friends Alpha.** The application has a working Electron/daemon foundation and a verified Codex MVP. The complete Alpha is not yet released. The project is currently private, with an open-source-first direction; public distribution and licensing are pending.
+> **Development preview — targeting v0.1 Personal & Friends Alpha.** The application has a working Electron/daemon foundation and a verified Codex MVP. The complete Alpha is not yet released. The source repository is public; the application remains a development preview, not a stable or completed Alpha release.
 
 [Roadmap](docs/ROADMAP.md) · [Development progress](docs/PROGRESS.md) · [Provider matrix](docs/PROVIDER_MATRIX.md) · [Known issues](docs/KNOWN_ISSUES.md)
 
@@ -50,7 +82,7 @@ Ghost Bot does not include AI subscription access or API credits. Use only suppo
 
 ## Getting started — development build
 
-The repository is private during development. Access requires authorization. There is not yet a public installer for the Personal & Friends Alpha.
+The source repository is public. There is not yet a public installer for the Personal & Friends Alpha.
 
 ### Prerequisites
 
@@ -64,9 +96,11 @@ Use a normal user account. Do not run Ghost Bot as root or disable Electron sand
 
 ### Build and run
 
-From an authorized checkout of the relevant development branch:
+From a checkout of the relevant development branch:
 
 ```bash
+git clone https://github.com/nvndy27/ghost-bot.git
+cd ghost-bot
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
 corepack pnpm --filter @ghost-bot/desktop exec electron .
@@ -144,12 +178,12 @@ The renderer uses validated IPC; the daemon owns runtime authorization, sessions
 
 ## Development and contribution
 
-The project is being developed for personal use and a small group of testers first. Fedora with GNOME and Ubuntu are initial validation targets; Windows support will be claimed only after platform-specific testing. Public contributions and distribution are planned after the project is ready.
+The project is being developed for personal use and a small group of testers first. Fedora with GNOME and Ubuntu are initial validation targets; Windows support will be claimed only after platform-specific testing. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Stable distribution remains subject to release acceptance.
 
-Coding agents and contributors with repository access should read [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [roadmap](docs/ROADMAP.md), [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) before making changes. Use scoped branches/worktrees and reviewed PRs, preserve frozen migrations 0001–0013, and record actual test evidence.
+Coding agents and contributors should read [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [roadmap](docs/ROADMAP.md), [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) before making changes. Use scoped branches/worktrees and reviewed PRs, preserve frozen migrations 0001–0013, and record actual test evidence.
 
 ## License and privacy
 
-Ghost Bot is **open-source-first in direction**, but a production license has not yet been selected. The current repository is private and is not offered under an open-source license yet. Public release requires license selection, dependency and reference-asset rights review, and secret/history checks. Third-party design references must not be redistributed without permission.
+Ghost Bot's original project code and documentation are dual-licensed under the [MIT License](LICENSE-MIT) **or** [Apache License 2.0](LICENSE), at your option (SPDX: `MIT OR Apache-2.0`). See [NOTICE](NOTICE) for attribution and scope. Third-party material retains its own terms; reference screenshots under `design/references/` are not licensed by Ghost Bot and must not be redistributed without the applicable rights. The license does not grant rights to third-party trademarks or provider services. Dependency, asset-rights and secret/history review remain required before distributing release artifacts.
 
 Local-first does not mean fully offline: external provider requests send necessary context to the selected service, subject to permissions and consent. Local models can be used where the runtime supports them. No central Ghost Bot service is required by the planned first release.
