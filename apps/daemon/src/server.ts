@@ -77,6 +77,9 @@ import {
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
   TeamMemberRoutingKeySchema,
+  TeamDiscussionCancelSchema,
+  TeamDiscussionListSchema,
+  TeamDiscussionSendSchema,
   SetTeamMemberRoutingSchema,
   TeamRunIdParamSchema,
   TriggerRoutineIpcInputSchema,
@@ -111,6 +114,7 @@ import { SchedulerService } from './scheduler/service.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 import { SidebarOrganizationRepository } from './sidebar/repository.ts'
+import { TeamDiscussion } from './teams/discussion.ts'
 import { TeamMemberRoutingService } from './teams/member-routing.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
@@ -204,6 +208,7 @@ export class GhostBotDaemon {
   private botRepo: BotRepository | null = null
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
+  private teamDiscussion: TeamDiscussion | null = null
   private teamMemberRouting: TeamMemberRoutingService | null = null
   private sidebarRepo: SidebarOrganizationRepository | null = null
   private memoryService: MemoryService | null = null
@@ -350,6 +355,7 @@ export class GhostBotDaemon {
     })
     this.teamsService = new TeamsService(dbHandle, this.botRepo, teamsBridge)
     this.teamsService.reconcileOnStartup()
+    this.teamDiscussion = new TeamDiscussion(dbHandle, this.teamsService, memberRouting, this.runtimeRegistry)
 
     this.schedulerService = new SchedulerService(dbHandle, this.botRepo, this.teamsService, {
       tickIntervalMs: 5_000,
@@ -979,6 +985,8 @@ export class GhostBotDaemon {
     this.settingsRepo = null
     this.sessionRepo = null
     this.teamMemberRouting = null
+    await this.teamDiscussion?.abortAll()
+    this.teamDiscussion = null
     this.workspaceReadGrants.clear()
     this.workspaceFilesService = null
     if (this.memoryService) {
@@ -2546,6 +2554,27 @@ export class GhostBotDaemon {
 
       if (this.teamsService) {
         const teamsService = this.teamsService
+
+        if (req.method === 'POST' && this.teamDiscussion &&
+            (url.pathname === '/teams/discussion/list' ||
+              url.pathname === '/teams/discussion/send' ||
+              url.pathname === '/teams/discussion/cancel')) {
+          const body = await readJsonBody(req)
+          if (url.pathname.endsWith('/list')) {
+            const parsed = TeamDiscussionListSchema.safeParse(body)
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid group discussion query', { statusCode: 400 })
+            sendJson(res, 200, this.teamDiscussion.list(parsed.data))
+          } else if (url.pathname.endsWith('/cancel')) {
+            const parsed = TeamDiscussionCancelSchema.safeParse(body)
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid group discussion cancel payload', { statusCode: 400 })
+            sendJson(res, 200, await this.teamDiscussion.cancel(parsed.data))
+          } else {
+            const parsed = TeamDiscussionSendSchema.safeParse(body)
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid group discussion message', { statusCode: 400 })
+            sendJson(res, 201, await this.teamDiscussion.send(parsed.data))
+          }
+          return
+        }
 
         if (req.method === 'POST' && this.teamMemberRouting &&
             (url.pathname === '/teams/member-routing/get' || url.pathname === '/teams/member-routing/set')) {

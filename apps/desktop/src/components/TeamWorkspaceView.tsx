@@ -1,5 +1,5 @@
-import { TeamMemberRouting } from './TeamMemberRouting.tsx'
-import { useState } from 'react'
+import { TeamDiscussionView } from './TeamDiscussionView.tsx'
+import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { PanelLeft, PanelRight, Pencil } from 'lucide-react'
@@ -75,8 +75,11 @@ export function TeamWorkspaceView({
   onToggleRight,
 }: TeamWorkspaceViewProps) {
   const [goalInput, setGoalInput] = useState('')
+  const [advanced, setAdvanced] = useState(false)
   const [showDagPanel, setShowDagPanel] = useState(true)
   const [resolvingIds, setResolvingIds] = useState<Record<string, boolean>>({})
+
+  useEffect(() => { setAdvanced(false); setGoalInput('') }, [team.id])
 
   const botById = new Map(bots.map((b) => [b.id, b]))
   const leadBot = botById.get(team.leadBotId)
@@ -177,6 +180,9 @@ export function TeamWorkspaceView({
             </select>
           )}
 
+          <button type="button" className="gb-btn-outline" aria-pressed={advanced} onClick={() => setAdvanced(!advanced)}>
+            {advanced ? 'Back to discussion' : 'Advanced tasks'}
+          </button>
           <button type="button" className="gb-btn-outline gb-icon-inline" onClick={onEditTeam}>
             <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
             <span>Edit team</span>
@@ -189,9 +195,9 @@ export function TeamWorkspaceView({
         </div>
       </header>
 
+      {!advanced ? <TeamDiscussionView key={team.id} team={team} bots={bots} isMockMode={isMockMode} /> : <>
       <div className="gb-messages" style={{ flex: 1, overflowY: 'auto' }}>
         <div className="gb-messages-inner" style={{ display: 'grid', gap: 12 }}>
-          <TeamMemberRouting key={team.id} team={team} bots={bots} />
           {runError && (
             <div
               role="alert"
@@ -475,6 +481,7 @@ export function TeamWorkspaceView({
           </div>
         </div>
       </div>
+      </>}
     </>
   )
 }

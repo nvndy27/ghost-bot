@@ -664,6 +664,10 @@ export class RuntimeRegistry {
     }
   }
 
+  getOfflineDiscussionRuntime(): AgentRuntime | null {
+    return this.getRuntimeMode() === 'mock' && !this.stopped ? this.mock : null
+  }
+
   async getTeamRoutingCatalogs(): Promise<import('@ghost-bot/shared-types/ipc').TeamMemberRoutingDto['catalogs']> {
     const snapshot = await this.getSnapshot(false)
     if (snapshot.runtimeMode === 'mock') {

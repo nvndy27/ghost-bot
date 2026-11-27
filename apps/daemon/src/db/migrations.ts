@@ -901,6 +901,24 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_local_skills_owner ON local_skills(owner_id, name);
     `,
   },
+  {
+    version: 14,
+    name: '0014_team_discussion_turns',
+    sql: `
+      CREATE TABLE team_discussion_turns (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        operation_id TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        replies_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(team_id, operation_id)
+      );
+
+      CREATE INDEX idx_team_discussion_team_seq ON team_discussion_turns(team_id, seq);
+    `,
+  },
 ]
 
 export function runMigrations(sqlite: DatabaseSync): number {

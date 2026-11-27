@@ -35,6 +35,12 @@ import {
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
   TeamMemberRoutingKeySchema,
+  TeamDiscussionCancelSchema,
+  TeamDiscussionCancelResponseSchema,
+  TeamDiscussionListSchema,
+  TeamDiscussionSendSchema,
+  TeamDiscussionPageSchema,
+  TeamDiscussionTurnSchema,
   TeamMemberRoutingDtoSchema,
   SetTeamMemberRoutingSchema,
   TeamRecordDtoSchema,
@@ -1480,6 +1486,30 @@ function registerIpcHandlers(): void {
     }
     checkShape(raw, 0)
   }
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_DISCUSSION_LIST, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/discussion/list', TeamDiscussionPageSchema, {
+      method: 'POST',
+      body: TeamDiscussionListSchema.parse(input),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_DISCUSSION_SEND, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/discussion/send', TeamDiscussionTurnSchema, {
+      method: 'POST',
+      body: TeamDiscussionSendSchema.parse(input),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_DISCUSSION_CANCEL, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/discussion/cancel', TeamDiscussionCancelResponseSchema, {
+      method: 'POST',
+      body: TeamDiscussionCancelSchema.parse(input),
+    })
+  })
 
   ipcMain.handle(IPC_CHANNELS.TEAM_MEMBER_ROUTING_GET, async (event, input) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')

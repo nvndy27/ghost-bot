@@ -11,6 +11,9 @@ export const IPC_CHANNELS = {
   BOTS_DELETE: 'ghost:bots:delete',
   BOTS_SET_ACTIVE: 'ghost:bots:set-active',
   AVATAR_IMPORT_SVG: 'ghost:avatar:import-svg',
+  TEAM_DISCUSSION_LIST: 'ghost:teams:discussion:list',
+  TEAM_DISCUSSION_SEND: 'ghost:teams:discussion:send',
+  TEAM_DISCUSSION_CANCEL: 'ghost:teams:discussion:cancel',
   TEAM_MEMBER_ROUTING_GET: 'ghost:teams:member-routing:get',
   TEAM_MEMBER_ROUTING_SET: 'ghost:teams:member-routing:set',
   WORKSPACE_PICK: 'ghost:workspace:pick',
@@ -1452,6 +1455,46 @@ export type TeamMemberRoutingKey = z.infer<typeof TeamMemberRoutingKeySchema>
 export type SetTeamMemberRouting = z.infer<typeof SetTeamMemberRoutingSchema>
 export type TeamMemberRoutingDto = z.infer<typeof TeamMemberRoutingDtoSchema>
 
+export const TeamDiscussionListSchema = TeamIdParamSchema.extend({
+  beforeSeq: z.number().int().positive().optional(),
+})
+export const TeamDiscussionSendSchema = TeamIdParamSchema.extend({
+  operationId: z.uuid(),
+  text: z.string().trim().min(1).max(4000),
+  rounds: z.number().int().min(1).max(2).optional(),
+})
+export const TeamDiscussionCancelSchema = TeamIdParamSchema.extend({
+  operationId: z.uuid().optional(),
+})
+export const TeamDiscussionCancelResponseSchema = z.object({
+  teamId: TeamIpcIdSchema,
+  cancelled: z.boolean(),
+})
+export const TeamDiscussionRepliesSchema = z.array(z.object({
+  botId: BotIdSchema,
+  routing: TeamMemberRoutingTupleSchema,
+  revision: z.string().max(256),
+  text: z.string().min(1).max(8192),
+  round: z.number().int().min(1).max(2).optional(),
+})).min(1).max(24)
+export const TeamDiscussionTurnSchema = z.object({
+  id: z.uuid(),
+  seq: z.number().int().positive(),
+  text: z.string().min(1).max(4000),
+  replies: TeamDiscussionRepliesSchema,
+  createdAt: z.string(),
+})
+export const TeamDiscussionPageSchema = z.object({
+  turns: z.array(TeamDiscussionTurnSchema).max(20),
+  nextBeforeSeq: z.number().int().positive().nullable(),
+})
+export type TeamDiscussionList = z.infer<typeof TeamDiscussionListSchema>
+export type TeamDiscussionSend = z.infer<typeof TeamDiscussionSendSchema>
+export type TeamDiscussionCancel = z.infer<typeof TeamDiscussionCancelSchema>
+export type TeamDiscussionCancelResponse = z.infer<typeof TeamDiscussionCancelResponseSchema>
+export type TeamDiscussionTurn = z.infer<typeof TeamDiscussionTurnSchema>
+export type TeamDiscussionPage = z.infer<typeof TeamDiscussionPageSchema>
+
 export const TeamRunIdParamSchema = z.object({ teamRunId: TeamIpcIdSchema }).strict()
 
 export const TeamPlanTaskInputSchema = z
@@ -2389,6 +2432,9 @@ export interface GhostBotBridge {
   setOpenRouterCredential(input: SetOpenRouterCredentialInput): Promise<OpenRouterStatusDto>
   deleteOpenRouterCredential(): Promise<OpenRouterStatusDto>
   setOpenRouterExecutionAuthorized(input: SetOpenRouterAuthInput): Promise<OpenRouterStatusDto>
+  listTeamDiscussion(input: TeamDiscussionList): Promise<TeamDiscussionPage>
+  sendTeamDiscussion(input: TeamDiscussionSend): Promise<TeamDiscussionTurn>
+  cancelTeamDiscussion(input: TeamDiscussionCancel): Promise<TeamDiscussionCancelResponse>
   getTeamMemberRouting(input: TeamMemberRoutingKey): Promise<TeamMemberRoutingDto>
   setTeamMemberRouting(input: SetTeamMemberRouting): Promise<TeamMemberRoutingDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
