@@ -1,5 +1,17 @@
 # Progress log
 
+## Alpha.2A–B — Shared Workspace Integration
+
+The integration candidate joins the accepted UI.1 baseline `3ce8c3f6f7dcc925461010dab1ffa0f729562e00` with PR #18 at `9a0e07ec3e20cd036785b256f81d77d258f3f8a2`, which already includes PR #16 at `821d5d1a0a64d3b14c4f5d9757be3fc0d91d1c8b`.
+
+| State | Evidence |
+|---|---|
+| Tested | Personal Chat and Group Chat share the Workspace Panel shell. Overview preserves UI.1 icon controls and Team Activity. The daemon settings record persists the selected tab across contexts and restart. |
+| Tested | Real Electron IPC and authenticated daemon routes listed and opened a temporary file after native directory confirmation. The test supplied the dialog result from the Electron main test process. It verified rejection of a different selected root, renderer permission claims, absolute file paths, save attempts, stale workspace context and group access. It also checked editor content, read-only state, restart and shutdown. |
+| Tested | Workspace lint, shared-types and desktop typecheck, daemon and desktop builds passed. The focused daemon IPC, workspace service and Electron test run passed 13/13. The service tests exercised stale revisions and authorization changes during isolated saves. Zero live model inference. |
+| Blocked | File writes remain disabled at the daemon route. Staged-descriptor, directory-entry and byte checks narrow the pre-rename race. An external writer can still alter the target revision or staged directory entry before rename. Ask Approval and group/task write authority also need an approved binding. |
+| Implemented | The integration adds no migration or dependency. Alpha.1A remains at `290d956072a25b8dce377a835d8f78e38e42ed34` in its separate worktree. |
+
 ## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
 
 2026-11-27. Executed the finalized bounded 3-prompt live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on `22b3b16` (`integration/alpha0-native-chat-rc`, production baseline `6779ab3`, PR #15) using the dedicated ChatGPT `plus` profile (`gpt-6.2-sol`, `effort: low`, `read-only` permission, isolated temp dirs). See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).

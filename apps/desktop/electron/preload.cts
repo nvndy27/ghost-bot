@@ -14,6 +14,16 @@ const bridge: GhostBotBridge = {
   importAvatarSvg: (rawSvg, label) =>
     ipcRenderer.invoke('ghost:avatar:import-svg', { rawSvg, label }),
   pickWorkspace: () => ipcRenderer.invoke('ghost:workspace:pick', {}),
+  authorizeWorkspaceRead: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:authorize-read', { botId }),
+  resolveWorkspaceContext: (selector) =>
+    ipcRenderer.invoke('ghost:workspace:resolve-context', selector),
+  listWorkspaceDirectory: (params) =>
+    ipcRenderer.invoke('ghost:workspace:list-dir', params),
+  readWorkspaceFile: (params) =>
+    ipcRenderer.invoke('ghost:workspace:read-file', params),
+  saveWorkspaceFile: (params) =>
+    ipcRenderer.invoke('ghost:workspace:save-file', params),
   getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),
   updateSettings: (patch) => ipcRenderer.invoke('ghost:settings:update', patch),
   resetSettings: () => ipcRenderer.invoke('ghost:settings:reset', {}),

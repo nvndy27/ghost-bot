@@ -1,6 +1,7 @@
-import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
-import { Activity, PanelRight, RefreshCw } from 'lucide-react'
+import type { TeamRecordDto, WorkspaceTabId } from '@ghost-bot/shared-types/ipc'
+import { Activity, RefreshCw } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
+import { WorkspacePanelShell } from './WorkspacePanelShell.tsx'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
@@ -15,6 +16,8 @@ export interface TeamRightPanelProps {
   isMockMode: boolean
   onRefresh: () => void
   onCollapse: () => void
+  activeTab: WorkspaceTabId
+  onTabChange: (tab: WorkspaceTabId) => void
 }
 
 function asNumber(value: unknown): number | null {
@@ -36,6 +39,8 @@ export function TeamRightPanel({
   isMockMode,
   onRefresh,
   onCollapse,
+  activeTab,
+  onTabChange,
 }: TeamRightPanelProps) {
   const botById = new Map(bots.map((b) => [b.id, b]))
   const leadBot = botById.get(team.leadBotId)
@@ -59,8 +64,8 @@ export function TeamRightPanel({
   const quarantineReason = diagnostics ? asString(diagnostics.quarantineReason, '') : ''
   const cancellationState = diagnostics ? asString(diagnostics.cancellationState, '') : ''
 
-  return (
-    <aside className="gb-right-panel" style={{ width }} aria-label="Team activity panel">
+  const overview = (
+    <section aria-label="Team activity panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span className="gb-section-label gb-icon-inline" style={{ margin: 0 }}>
           <Activity size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
@@ -69,9 +74,6 @@ export function TeamRightPanel({
         <div style={{ display: 'flex', gap: 4 }}>
           <IconButton label="Refresh team activity" onClick={onRefresh}>
             <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
-          </IconButton>
-          <IconButton label="Collapse right panel" onClick={onCollapse} active pressed>
-            <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
         </div>
       </div>
@@ -196,6 +198,21 @@ export function TeamRightPanel({
           )}
         </div>
       )}
-    </aside>
+    </section>
+  )
+
+  return (
+    <WorkspacePanelShell
+      width={width}
+      contextKey={`team:${team.id}`}
+      contextLabel={team.name}
+      contextKind="team"
+      ownerId={team.id}
+      isMockMode={isMockMode}
+      onCollapse={onCollapse}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      overviewContent={overview}
+    />
   )
 }

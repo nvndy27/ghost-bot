@@ -1555,6 +1555,9 @@ export function App() {
           />
           {activeTeam ? (
             <TeamRightPanel
+              key={activeTeam.id}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               team={activeTeam}
               bots={bots}
@@ -1568,6 +1571,9 @@ export function App() {
             />
           ) : (
             <RightPanel
+              key={JSON.stringify([activeBot?.id, activeBot?.workspacePath, activeBot?.permission])}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               bot={activeBot}
               activeTasks={latestTools}

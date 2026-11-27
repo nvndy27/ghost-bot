@@ -12,6 +12,11 @@ export const IPC_CHANNELS = {
   BOTS_SET_ACTIVE: 'ghost:bots:set-active',
   AVATAR_IMPORT_SVG: 'ghost:avatar:import-svg',
   WORKSPACE_PICK: 'ghost:workspace:pick',
+  WORKSPACE_AUTHORIZE_READ: 'ghost:workspace:authorize-read',
+  WORKSPACE_RESOLVE_CONTEXT: 'ghost:workspace:resolve-context',
+  WORKSPACE_LIST_DIR: 'ghost:workspace:list-dir',
+  WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
+  WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
   SETTINGS_GET: 'ghost:settings:get',
   SETTINGS_UPDATE: 'ghost:settings:update',
   SETTINGS_RESET: 'ghost:settings:reset',
@@ -315,6 +320,9 @@ export const GeneralSettingsSchema = z.object({
   diagnosticsOptIn: z.boolean().default(false),
 })
 
+export const WorkspaceTabIdSchema = z.enum(['overview', 'files', 'changes', 'browser', 'output'])
+export type WorkspaceTabId = z.infer<typeof WorkspaceTabIdSchema>
+
 export const AppearanceSettingsSchema = z.object({
   theme: z.enum(['system', 'dark', 'light']).default('dark'),
   reducedMotion: z.boolean().default(false),
@@ -322,6 +330,7 @@ export const AppearanceSettingsSchema = z.object({
   rightWidth: z.number().min(220).max(420).default(285),
   leftCollapsed: z.boolean().default(false),
   rightCollapsed: z.boolean().default(false),
+  workspaceTab: WorkspaceTabIdSchema.default('overview'),
 })
 
 export const PersonalizationSettingsSchema = z.object({
@@ -2086,6 +2095,129 @@ export const OpenRouterStatusDtoSchema = z.object({
 
 export type OpenRouterStatusDto = z.infer<typeof OpenRouterStatusDtoSchema>
 
+export const WorkspaceAuthorizeReadInputSchema = z.object({ botId: BotIdSchema }).strict()
+
+export const WorkspaceReadGrantSchema = WorkspaceAuthorizeReadInputSchema.extend({
+  workspaceId: z.string().min(1).max(128),
+  selectedRoot: z.string().min(1).max(4096),
+}).strict()
+
+export const WorkspaceSelectorIpcSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export type WorkspaceSelectorIpcInput = z.infer<typeof WorkspaceSelectorIpcSchema>
+
+export const WorkspaceContextIpcResponseSchema = z.object({
+  authorized: z.boolean(),
+  workspaceId: z.string().min(1).nullable(),
+  canonicalRoot: z.string().nullable(),
+  ownerKind: z.enum(['bot', 'team']),
+  ownerId: z.string().min(1),
+  ownerName: z.string(),
+  canWrite: z.boolean(),
+  permissionMode: z.string(),
+  authGeneration: z.string().nullable(),
+  reason: z.string().nullable(),
+})
+
+export type WorkspaceContextIpcResponse = z.infer<typeof WorkspaceContextIpcResponseSchema>
+
+export const WorkspaceListDirectoryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().max(512).default(''),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export type WorkspaceListDirectoryIpcInput = z.infer<typeof WorkspaceListDirectoryIpcInputSchema>
+
+export const WorkspaceListDirectoryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  canonicalRoot: z.string(),
+  relativePath: z.string(),
+  entries: z.array(
+    z.object({
+      name: z.string(),
+      relativePath: z.string(),
+      kind: z.enum(['directory', 'file']),
+      sizeBytes: z.number().int().nonnegative().nullable(),
+      sensitive: z.boolean().optional(),
+    }),
+  ),
+  truncated: z.boolean(),
+  totalScanned: z.number().int().nonnegative(),
+})
+
+export type WorkspaceListDirectoryIpcResponse = z.infer<typeof WorkspaceListDirectoryIpcResponseSchema>
+
+export const WorkspaceReadFileIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export type WorkspaceReadFileIpcInput = z.infer<typeof WorkspaceReadFileIpcInputSchema>
+
+export const WorkspaceReadFileIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  name: z.string(),
+  content: z.string(),
+  revision: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  readOnly: z.boolean(),
+  language: z.string(),
+})
+
+export type WorkspaceReadFileIpcResponse = z.infer<typeof WorkspaceReadFileIpcResponseSchema>
+
+export const WorkspaceSaveFileIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    content: z.string().max(1024 * 1024),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export type WorkspaceSaveFileIpcInput = z.infer<typeof WorkspaceSaveFileIpcInputSchema>
+
+export const WorkspaceSaveFileIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  revision: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  savedAt: z.string(),
+})
+
+export type WorkspaceSaveFileIpcResponse = z.infer<typeof WorkspaceSaveFileIpcResponseSchema>
+
 export interface GhostBotBridge {
   getAppInfo(): Promise<AppInfoResponse>
   getDaemonHealth(): Promise<DaemonHealthResponse>
@@ -2098,6 +2230,13 @@ export interface GhostBotBridge {
   setActiveBot(id: string | null): Promise<{ activeBotId: string | null }>
   importAvatarSvg(rawSvg: string, label?: string): Promise<ImportAvatarSvgResponse>
   pickWorkspace(): Promise<WorkspacePickResponse>
+  authorizeWorkspaceRead(botId: string): Promise<boolean>
+  resolveWorkspaceContext(selector: WorkspaceSelectorIpcInput): Promise<WorkspaceContextIpcResponse>
+  listWorkspaceDirectory(
+    params: WorkspaceListDirectoryIpcInput,
+  ): Promise<WorkspaceListDirectoryIpcResponse>
+  readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
+  saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
   resetSettings(): Promise<AppSettings>

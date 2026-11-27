@@ -1,6 +1,15 @@
 # Next steps
 
-## Alpha.0B — Integrated Native Chat Release Candidate (Offline RC Ready)
+## Alpha.2A–B — Shared Workspace Integration (Draft Review)
+
+1. Review the history-preserving integration candidate on `integration/alpha2ab-shared-wiring`. Coordinate disposition of draft PRs #16 and #18 with their owner.
+2. Agent 2 reviews the read contract and the focused Electron acceptance. A native directory confirmation grants daemon-lifetime read access for the persisted personal bot root identity. List/read validate both workspace ID and the current authorization generation. Group access requires an explicit authorized task scope. The saved tab is a UI preference.
+3. Keep save disabled until the write boundary can prevent external revision and staged-entry races and can enforce the intended approval and task scope. Define the artifact reference contract when authorized task scope is available.
+4. Alpha.2C awaits maintainer authorization. Its write-dependent operations also require the write boundary above.
+
+## Alpha.0B — Integrated Native Chat Release Candidate (Historical Handoff)
+
+Alpha.0 accepted for scoped internal personal Codex Chat in PR #15. The steps below record the original handoff.
 
 1. Agent 2 performs independent security review and Fedora GNOME / Ubuntu AppImage + RPM packaging smoke verification on `integration/alpha0-native-chat-rc`.
 2. Owner reviews and authorizes the bounded live acceptance procedure (`<= 3` prompts on Codex CLI `0.172.0` ChatGPT `plus` profile; optional bounded second-provider check) in `docs/extensions/alpha0b-integrated-native-chat-rc.md`.

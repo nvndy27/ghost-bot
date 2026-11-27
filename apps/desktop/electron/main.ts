@@ -103,6 +103,15 @@ import {
   SetClaudeAuthInputSchema,
   GeminiStatusDtoSchema,
   SetGeminiCredentialInputSchema,
+  WorkspaceAuthorizeReadInputSchema,
+  WorkspaceContextIpcResponseSchema,
+  WorkspaceListDirectoryIpcInputSchema,
+  WorkspaceListDirectoryIpcResponseSchema,
+  WorkspaceReadFileIpcInputSchema,
+  WorkspaceReadFileIpcResponseSchema,
+  WorkspaceSaveFileIpcInputSchema,
+  WorkspaceSaveFileIpcResponseSchema,
+  WorkspaceSelectorIpcSchema,
   SetGeminiAuthInputSchema,
   KimiStatusDtoSchema,
   LocalOpenAiCompatStatusDtoSchema,
@@ -514,6 +523,67 @@ function registerIpcHandlers(): void {
     return WorkspacePickResponseSchema.parse({
       canceled: result.canceled || !chosen,
       path: chosen,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_AUTHORIZE_READ, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { botId } = WorkspaceAuthorizeReadInputSchema.parse(params)
+    const context = await queryDaemon('/workspace/context', WorkspaceContextIpcResponseSchema, {
+      method: 'POST',
+      body: { botId },
+    })
+    if (!mainWindow || !context.workspaceId || !context.canonicalRoot) {
+      throw new Error(context.reason ?? 'Configure a bot workspace before authorizing access')
+    }
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Allow read access to the bot workspace',
+      defaultPath: context.canonicalRoot,
+      properties: ['openDirectory'],
+      buttonLabel: 'Allow read access',
+    })
+    if (result.canceled || !result.filePaths[0]) return false
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/authorize-read', z.literal(true), {
+      method: 'POST',
+      body: { botId, workspaceId: context.workspaceId, selectedRoot: result.filePaths[0] },
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_RESOLVE_CONTEXT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceSelectorIpcSchema.parse(params)
+    return queryDaemon('/workspace/context', WorkspaceContextIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_LIST_DIR, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceListDirectoryIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/list', WorkspaceListDirectoryIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_READ_FILE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceReadFileIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/read', WorkspaceReadFileIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_SAVE_FILE, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceSaveFileIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/save', WorkspaceSaveFileIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
     })
   })
 

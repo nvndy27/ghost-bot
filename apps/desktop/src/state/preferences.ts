@@ -1,16 +1,9 @@
-import { z } from 'zod'
+import { AppearanceSettingsSchema } from '@ghost-bot/shared-types/ipc'
 import type { UiPreferences } from '../types/workspace.ts'
 
 const STORAGE_KEY = 'ghost-bot.ui-preferences.v1'
 
-export const UiPreferencesSchema = z.object({
-  theme: z.enum(['system', 'dark', 'light']).default('dark'),
-  leftWidth: z.number().min(180).max(380).default(240),
-  rightWidth: z.number().min(220).max(420).default(285),
-  leftCollapsed: z.boolean().default(false),
-  rightCollapsed: z.boolean().default(false),
-  reducedMotion: z.boolean().default(false),
-})
+export const UiPreferencesSchema = AppearanceSettingsSchema
 
 export const DEFAULT_PREFERENCES: UiPreferences = UiPreferencesSchema.parse({})
 

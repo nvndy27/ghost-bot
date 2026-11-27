@@ -1,8 +1,9 @@
 ## Personal & Friends Alpha release risks (2026-11-27)
 
-- Stacked provider PRs #6–#13, docs PR #12, and Alpha.0A PR require controlled convergence before Alpha.0 release sign-off; live Teams/Autonomous/Computer Use gates remain enforced.
-- Group Bot discussion-first UX, member-scoped model routing, user-visible private task chats, and Workspace Panel (Files/Editor, Git Diff, Browser/Live Demo, Output) are planned for Alpha.1–Alpha.2 and not yet implemented.
-- Final integrated packaging/platform and bounded live provider acceptance remain open for Alpha.0/Alpha.3 sign-off.
+- Alpha.0 is accepted for scoped internal Codex Chat through PR #15. Public distribution remains blocked by CU4-PKG-02. Live Teams, autonomous Scheduler, Computer Use, and the remaining provider gates stay in force.
+- The Alpha.2A/B candidate exposes personal workspace list and read after native directory confirmation. Read grants expire when the daemon stops. Group filesystem access requires an authorized task scope.
+- Workspace file containment requires Linux with `/proc/self/fd` and fails closed without it. Save is blocked at the daemon boundary. Staged-file identity and revision checks cannot make POSIX rename conditional on an unchanged target and source entry when another process writes concurrently. Ask Approval also requires an explicit grant before the write path can be exposed.
+- Final Personal & Friends Alpha integrated packaging, platform, and remaining live acceptance gates are open.
 
 ## Existing issues
 
