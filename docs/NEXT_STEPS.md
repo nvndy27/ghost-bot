@@ -178,7 +178,7 @@ Start with [progress](PROGRESS.md), [protocol](PROTOCOL.md), and [provider matri
 
 ## Alpha.3A release handoff
 
-Review the focused CSP harness change. After UI refinement, build the approved final SHA once and execute [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md) on provisioned Fedora and Ubuntu desktops. Record hashes and exact source SHA for every result. Preserve all migrations and current capability gates.
+Review the focused CSP harness change and this release tooling checkpoint. After UI refinement and RC freeze, build the approved final SHA once, capture prerequisite inventory, and execute the explicit previous/candidate runner in [release acceptance tooling](extensions/release-acceptance-tooling.md) on provisioned desktops. Record hashes and exact source SHA for every result. Fedora RPM launcher, native AppImage FUSE and Ubuntu desktop remain separate acceptance steps. Preserve all migrations and current capability gates.
 
 ## Targeted save correction handoff
 
