@@ -113,6 +113,10 @@ import {
   WorkspaceGitInspectSchema,
   WorkspaceGitOperationSchema,
   WorkspaceGitResponseSchema,
+  WorkspaceOutputCancelInputSchema,
+  WorkspaceOutputCancelResponseSchema,
+  WorkspaceOutputQuerySchema,
+  WorkspaceOutputResponseSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceListDirectoryIpcResponseSchema,
   WorkspaceReadFileIpcInputSchema,
@@ -643,6 +647,24 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const input = WorkspaceGitOperationSchema.parse(params)
     return queryDaemon('/workspace/git/cancel', z.boolean(), { method: 'POST', body: input })
+  })
+
+  ipcMain.handle('ghost:workspace:output-list', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceOutputQuerySchema.parse(params)
+    return queryDaemon('/workspace/output/list', WorkspaceOutputResponseSchema, {
+      method: 'POST',
+      body: input,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:output-cancel', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceOutputCancelInputSchema.parse(params)
+    return queryDaemon('/workspace/output/cancel', WorkspaceOutputCancelResponseSchema, {
+      method: 'POST',
+      body: input,
+    })
   })
 
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_SAVE_FILE, async (event, params) => {

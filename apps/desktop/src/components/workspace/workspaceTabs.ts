@@ -47,9 +47,9 @@ export const WORKSPACE_TABS: readonly WorkspaceTabDefinition[] = [
     id: 'output',
     label: 'Output',
     shortLabel: 'Output',
-    implemented: false,
+    implemented: true,
     milestone: 'Alpha.2F',
-    summary: 'Persisted run and command output stream is not yet enabled in Alpha.2A.',
+    summary: 'Authorized run, tool, terminal, and build/test execution output.',
   },
 ] as const
 

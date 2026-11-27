@@ -36,6 +36,8 @@ const bridge: GhostBotBridge = {
   },
   inspectWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-inspect', params),
   cancelWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-cancel', params),
+  listWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-list', input),
+  cancelWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-cancel', input),
   saveWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:save-file', params),
   getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),

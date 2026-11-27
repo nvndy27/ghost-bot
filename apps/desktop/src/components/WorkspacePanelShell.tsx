@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { WorkspaceGitChanges } from './workspace/WorkspaceGitChanges.tsx'
 import { WorkspaceBrowserTab } from './workspace/WorkspaceBrowserTab.tsx'
 import { WorkspaceFilesTab } from './workspace/WorkspaceFilesTab.tsx'
+import { WorkspaceOutputTab } from './workspace/WorkspaceOutputTab.tsx'
 import type { WorkspaceDraftSelection } from './workspace/workspaceDiscoveryClient.ts'
 import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
 import { WorkspacePlaceholderTab } from './workspace/WorkspacePlaceholderTab.tsx'
@@ -184,6 +185,13 @@ export function WorkspacePanelShell({
             <WorkspaceGitChanges key={contextKey} botId={contextKind === 'bot' ? ownerId : null} />
           ) : activeTabDef.id === 'browser' ? (
             <WorkspaceBrowserTab visible={activeTabDef.id === 'browser'} isMockMode={isMockMode} />
+          ) : activeTabDef.id === 'output' ? (
+            <WorkspaceOutputTab
+              contextKey={contextKey}
+              contextKind={contextKind}
+              ownerId={ownerId}
+              isMockMode={isMockMode}
+            />
           ) : (
             <WorkspacePlaceholderTab
               tab={activeTabDef}

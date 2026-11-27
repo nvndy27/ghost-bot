@@ -5,6 +5,12 @@ import {
 export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
 import type { WorkspaceBrowserBounds, WorkspaceBrowserCommand, WorkspaceBrowserState } from '@ghost-bot/shared-types/workspace-browser'
+import type {
+  WorkspaceOutputCancelInput,
+  WorkspaceOutputCancelResponse,
+  WorkspaceOutputQuery,
+  WorkspaceOutputResponse,
+} from '@ghost-bot/shared-types/workspace-output'
 export * from '@ghost-bot/shared-types/workspace-browser'
 import type { WorkspaceGitInspect, WorkspaceGitOperation, WorkspaceGitResponse } from '@ghost-bot/shared-types/workspace-git'
 export * from '@ghost-bot/shared-types/workspace-git'
@@ -2294,6 +2300,8 @@ export interface GhostBotBridge {
   setWorkspaceBrowserBounds(bounds: WorkspaceBrowserBounds): Promise<void>
   captureWorkspaceBrowser(tabId: string): Promise<string>
   onWorkspaceBrowserState(listener: (state: WorkspaceBrowserState) => void): () => void
+  listWorkspaceOutput(input: WorkspaceOutputQuery): Promise<WorkspaceOutputResponse>
+  cancelWorkspaceOutput(input: WorkspaceOutputCancelInput): Promise<WorkspaceOutputCancelResponse>
   inspectWorkspaceGit(params: WorkspaceGitInspect): Promise<WorkspaceGitResponse>
   cancelWorkspaceGit(params: WorkspaceGitOperation): Promise<boolean>
   getSettings(): Promise<AppSettings>
@@ -3071,4 +3079,5 @@ export const ComputerUseLedgerEntryDtoSchema = z.object({
   createdAt: z.string(),
 })
 
+export * from '@ghost-bot/shared-types/workspace-output'
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

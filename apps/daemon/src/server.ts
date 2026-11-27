@@ -134,6 +134,7 @@ import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
 import { LOCAL_USER_ID } from './memory/service.ts'
 import { WorkspaceDiscoveryOperations } from './workspace/discovery-operations.ts'
 import { WorkspaceGitService } from './workspace/git-service.ts'
+import { WorkspaceOutputService } from './workspace/output-service.ts'
 import { WorkspaceFilesService } from './workspace/files-service.ts'
 
 export interface DaemonServerOptions {
@@ -221,6 +222,7 @@ export class GhostBotDaemon {
   private workspaceDiscovery: WorkspaceDiscoveryOperations | null = null
   private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
   private workspaceGitService: WorkspaceGitService | null = null
+  private workspaceOutputService: WorkspaceOutputService | null = null
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
@@ -387,6 +389,7 @@ export class GhostBotDaemon {
       this.workspaceFilesService,
       (input) => this.requireDiscoveryGrant(input),
     )
+    this.workspaceOutputService = new WorkspaceOutputService(dbHandle)
     this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
     this.registerPersistentProviderAdapters()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
@@ -977,6 +980,7 @@ export class GhostBotDaemon {
     this.workspaceReadGrants.clear()
     this.workspaceGitService?.abortAll()
     this.workspaceGitService = null
+    this.workspaceOutputService = null
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
       this.terminalService = null
@@ -1784,6 +1788,35 @@ export class GhostBotDaemon {
         if (url.pathname === '/workspace/git/cancel') {
           const input = await readWorkspaceRequest(req, WorkspaceGitOperationSchema)
           sendJson(res, 200, await workspaceGit.cancel(input))
+          return
+        }
+      }
+
+      const workspaceOutput = this.workspaceOutputService
+      if (workspaceOutput && req.method === 'POST') {
+        if (url.pathname === '/workspace/output/list') {
+          const body = await readJsonBody(req)
+          sendJson(res, 200, workspaceOutput.listOutput(body))
+          return
+        }
+        if (url.pathname === '/workspace/output/cancel') {
+          const body = await readJsonBody(req)
+          const result = await workspaceOutput.cancelExecution(body, {
+            cancelRun: async (runId) => {
+              if (!orchestrator) {
+                throw new DaemonError('DAEMON_NOT_READY', 'Orchestrator unavailable', {
+                  statusCode: 503,
+                })
+              }
+              await orchestrator.cancelRun(runId)
+            },
+            cancelTerminalCommand: this.terminalService
+              ? async (commandId) => {
+                  await this.terminalService!.cancelCommand(commandId)
+                }
+              : undefined,
+          })
+          sendJson(res, 200, result)
           return
         }
       }

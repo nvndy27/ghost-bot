@@ -10,6 +10,7 @@
     "./workspace-discovery": "./workspace-discovery.ts",
     "./workspace-git": "./workspace-git.ts",
     "./workspace-browser": "./workspace-browser.ts",
+    "./workspace-output": "./workspace-output.ts",
     "./ipc": "./ipc.ts"
   },
   "dependencies": {
