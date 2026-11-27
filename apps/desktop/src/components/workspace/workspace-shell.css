@@ -57,41 +57,13 @@
 
 .gb-workspace-tablist {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 3px;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 2px;
   background: var(--gb-surface);
   border: 1px solid var(--gb-border);
   border-radius: var(--gb-radius-sm);
-}
-
-.gb-workspace-tab {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 4px 7px;
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.3;
-  text-align: center;
-  color: var(--gb-muted);
-  border: 1px solid transparent;
-  border-radius: 5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.gb-workspace-tab:hover:not(:disabled) {
-  color: var(--gb-text);
-  background: var(--gb-panel);
-  border-color: var(--gb-border);
-}
-
-.gb-workspace-tab[aria-selected='true'] {
-  color: var(--gb-text);
-  background: var(--gb-panel);
-  border-color: var(--gb-accent);
-  font-weight: 600;
 }
 
 .gb-workspace-tabpanel {

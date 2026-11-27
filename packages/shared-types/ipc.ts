@@ -1,4 +1,19 @@
+import {
+  WorkspaceDiscoveryOperationSchema, WorkspacePreviewInputSchema, WorkspaceSearchInputSchema,
+  type WorkspacePreviewResult, type WorkspaceSearchResult,
+} from '@ghost-bot/shared-types/workspace-discovery'
+export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
+import type { WorkspaceBrowserBounds, WorkspaceBrowserCommand, WorkspaceBrowserState } from '@ghost-bot/shared-types/workspace-browser'
+import type {
+  WorkspaceOutputCancelInput,
+  WorkspaceOutputCancelResponse,
+  WorkspaceOutputQuery,
+  WorkspaceOutputResponse,
+} from '@ghost-bot/shared-types/workspace-output'
+export * from '@ghost-bot/shared-types/workspace-browser'
+import type { WorkspaceGitInspect, WorkspaceGitOperation, WorkspaceGitResponse } from '@ghost-bot/shared-types/workspace-git'
+export * from '@ghost-bot/shared-types/workspace-git'
 
 export const IPC_CHANNELS = {
   APP_INFO: 'ghost:app:info',
@@ -23,8 +38,16 @@ export const IPC_CHANNELS = {
   WORKSPACE_AUTHORIZE_READ: 'ghost:workspace:authorize-read',
   WORKSPACE_RESOLVE_CONTEXT: 'ghost:workspace:resolve-context',
   WORKSPACE_LIST_DIR: 'ghost:workspace:list-dir',
+  WORKSPACE_SEARCH: 'ghost:workspace:search',
+  WORKSPACE_PREVIEW: 'ghost:workspace:preview',
+  WORKSPACE_CANCEL_DISCOVERY: 'ghost:workspace:cancel-discovery',
   WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
   WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
+  WORKSPACE_BROWSER_COMMAND: 'ghost:workspace:browser-command',
+  WORKSPACE_BROWSER_BOUNDS: 'ghost:workspace:browser-bounds',
+  WORKSPACE_BROWSER_SCREENSHOT: 'ghost:workspace:browser-screenshot',
+  WORKSPACE_GIT_INSPECT: 'ghost:workspace:git-inspect',
+  WORKSPACE_GIT_CANCEL: 'ghost:workspace:git-cancel',
   SETTINGS_GET: 'ghost:settings:get',
   SETTINGS_UPDATE: 'ghost:settings:update',
   SETTINGS_RESET: 'ghost:settings:reset',
@@ -345,6 +368,16 @@ export const AppearanceSettingsSchema = z.object({
   workspaceTab: WorkspaceTabIdSchema.default('overview'),
 })
 
+const AppearanceSettingsPatchSchema = z.object({
+  theme: AppearanceSettingsSchema.shape.theme.unwrap().optional(),
+  reducedMotion: AppearanceSettingsSchema.shape.reducedMotion.unwrap().optional(),
+  leftWidth: AppearanceSettingsSchema.shape.leftWidth.unwrap().optional(),
+  rightWidth: AppearanceSettingsSchema.shape.rightWidth.unwrap().optional(),
+  leftCollapsed: AppearanceSettingsSchema.shape.leftCollapsed.unwrap().optional(),
+  rightCollapsed: AppearanceSettingsSchema.shape.rightCollapsed.unwrap().optional(),
+  workspaceTab: WorkspaceTabIdSchema.optional(),
+})
+
 export const PersonalizationSettingsSchema = z.object({
   defaultInstructions: z.string().max(2000).default(''),
   responseStyle: z.enum(['concise', 'balanced', 'detailed']).default('balanced'),
@@ -419,7 +452,7 @@ export type AppSettings = z.infer<typeof AppSettingsSchema>
 export const AppSettingsPatchSchema = z
   .object({
     general: GeneralSettingsSchema.partial().optional(),
-    appearance: AppearanceSettingsSchema.partial().optional(),
+    appearance: AppearanceSettingsPatchSchema.optional(),
     personalization: PersonalizationSettingsSchema.partial().optional(),
     permissions: PermissionsSettingsSchema.partial().optional(),
     privacy: PrivacySettingsSchema.partial().optional(),
@@ -2333,10 +2366,86 @@ export const WorkspaceContextIpcResponseSchema = z.object({
   ownerId: z.string().min(1),
   ownerName: z.string(),
   canWrite: z.boolean(),
+  writeAuthorized: z.boolean().optional(),
   permissionMode: z.string(),
   authGeneration: z.string().nullable(),
   reason: z.string().nullable(),
 })
+
+export const WorkspaceWriteGrantSchema = z.object({
+  botId: BotIdSchema,
+  workspaceId: z.string().min(1).max(128),
+  authGeneration: z.string().min(1).max(64),
+})
+
+export const WorkspaceCreateEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    kind: z.enum(['file', 'directory']),
+    content: z.string().max(1024 * 1024).optional(),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceCreateEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  kind: z.enum(['file', 'directory']),
+  revision: z.string().nullable(),
+  sizeBytes: z.number().int().nonnegative().nullable(),
+})
+
+export const WorkspaceRenameEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    fromPath: z.string().min(1).max(512),
+    toPath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceRenameEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  fromPath: z.string(),
+  toPath: z.string(),
+  revision: z.string(),
+})
+
+export const WorkspaceDeleteFileIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceDeleteFileIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  quarantined: z.boolean(),
+})
+
+export type WorkspaceCreateEntryIpcInput = z.infer<typeof WorkspaceCreateEntryIpcInputSchema>
+export type WorkspaceCreateEntryIpcResponse = z.infer<typeof WorkspaceCreateEntryIpcResponseSchema>
+export type WorkspaceRenameEntryIpcInput = z.infer<typeof WorkspaceRenameEntryIpcInputSchema>
+export type WorkspaceRenameEntryIpcResponse = z.infer<typeof WorkspaceRenameEntryIpcResponseSchema>
+export type WorkspaceDeleteFileIpcInput = z.infer<typeof WorkspaceDeleteFileIpcInputSchema>
+export type WorkspaceDeleteFileIpcResponse = z.infer<typeof WorkspaceDeleteFileIpcResponseSchema>
 
 export type WorkspaceContextIpcResponse = z.infer<typeof WorkspaceContextIpcResponseSchema>
 
@@ -2441,6 +2550,9 @@ export interface GhostBotBridge {
   setActiveBot(id: string | null): Promise<{ activeBotId: string | null }>
   importAvatarSvg(rawSvg: string, label?: string): Promise<ImportAvatarSvgResponse>
   pickWorkspace(): Promise<WorkspacePickResponse>
+  searchWorkspaceFiles(input: z.input<typeof WorkspaceSearchInputSchema>): Promise<WorkspaceSearchResult>
+  previewWorkspaceFile(input: z.input<typeof WorkspacePreviewInputSchema>): Promise<WorkspacePreviewResult>
+  cancelWorkspaceDiscovery(input: z.input<typeof WorkspaceDiscoveryOperationSchema>): Promise<boolean>
   authorizeWorkspaceRead(botId: string): Promise<boolean>
   resolveWorkspaceContext(selector: WorkspaceSelectorIpcInput): Promise<WorkspaceContextIpcResponse>
   listWorkspaceDirectory(
@@ -2448,6 +2560,19 @@ export interface GhostBotBridge {
   ): Promise<WorkspaceListDirectoryIpcResponse>
   readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
   saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
+  authorizeWorkspaceWrite(botId: string): Promise<boolean>
+  revokeWorkspaceWrite(botId: string): Promise<boolean>
+  createWorkspaceEntry(params: WorkspaceCreateEntryIpcInput): Promise<WorkspaceCreateEntryIpcResponse>
+  renameWorkspaceEntry(params: WorkspaceRenameEntryIpcInput): Promise<WorkspaceRenameEntryIpcResponse>
+  deleteWorkspaceFile(params: WorkspaceDeleteFileIpcInput): Promise<WorkspaceDeleteFileIpcResponse>
+  workspaceBrowserCommand(input: WorkspaceBrowserCommand): Promise<WorkspaceBrowserState>
+  setWorkspaceBrowserBounds(bounds: WorkspaceBrowserBounds): Promise<void>
+  captureWorkspaceBrowser(tabId: string): Promise<string>
+  onWorkspaceBrowserState(listener: (state: WorkspaceBrowserState) => void): () => void
+  listWorkspaceOutput(input: WorkspaceOutputQuery): Promise<WorkspaceOutputResponse>
+  cancelWorkspaceOutput(input: WorkspaceOutputCancelInput): Promise<WorkspaceOutputCancelResponse>
+  inspectWorkspaceGit(params: WorkspaceGitInspect): Promise<WorkspaceGitResponse>
+  cancelWorkspaceGit(params: WorkspaceGitOperation): Promise<boolean>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
   resetSettings(): Promise<AppSettings>
@@ -3232,4 +3357,5 @@ export const ComputerUseLedgerEntryDtoSchema = z.object({
   createdAt: z.string(),
 })
 
+export * from '@ghost-bot/shared-types/workspace-output'
 export type AppearanceSettingsInput = z.infer<typeof AppearanceSettingsSchema>

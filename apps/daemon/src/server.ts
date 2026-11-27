@@ -94,9 +94,20 @@ import {
   UpdateSidebarOrganizationInputSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
+  WorkspaceGitInspectSchema,
+  WorkspaceGitOperationSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceReadFileIpcInputSchema,
+  WorkspaceCreateEntryIpcInputSchema,
+  WorkspaceDeleteFileIpcInputSchema,
   WorkspaceReadGrantSchema,
+  WorkspaceRenameEntryIpcInputSchema,
+  WorkspaceSaveFileIpcInputSchema,
+  WorkspaceWriteGrantSchema,
+  WorkspaceDiscoveryOperationSchema,
+  WorkspacePreviewInputSchema,
+  WorkspaceSearchInputSchema,
+  type PersonalWorkspaceAccessSchema,
   WorkspaceSelectorIpcSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
@@ -137,6 +148,9 @@ import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
 import { LOCAL_USER_ID } from './memory/service.ts'
+import { WorkspaceDiscoveryOperations } from './workspace/discovery-operations.ts'
+import { WorkspaceGitService } from './workspace/git-service.ts'
+import { WorkspaceOutputService } from './workspace/output-service.ts'
 import { WorkspaceFilesService } from './workspace/files-service.ts'
 
 export interface DaemonServerOptions {
@@ -224,7 +238,12 @@ export class GhostBotDaemon {
   private computerUseService: ComputerUseService | null = null
   private terminalService: ScopedTerminalService | null = null
   private skillsService: LocalSkillsService | null = null
+  private workspaceDiscovery: WorkspaceDiscoveryOperations | null = null
   private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
+  private readonly workspaceWriteGrants = new Map<string, { workspaceId: string; authGeneration: string; expiresAtMs: number }>()
+  private workspaceGitService: WorkspaceGitService | null = null
+  private workspaceOutputService: WorkspaceOutputService | null = null
+  private workspaceWritesStopping = false
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
@@ -397,7 +416,28 @@ export class GhostBotDaemon {
     this.terminalService = new ScopedTerminalService(dbHandle, this.botRepo)
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
+    this.workspaceWritesStopping = false
     this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
+    this.workspaceFilesService.setWriteGrantChecker((auth) => {
+      const grant = this.workspaceWriteGrants.get(auth.ownerId)
+      if (grant && (grant.workspaceId !== auth.workspaceId || grant.authGeneration !== auth.authGeneration)) {
+        this.workspaceWriteGrants.delete(auth.ownerId)
+      }
+      return this.assertActiveWriteGrant({
+        botId: auth.ownerId,
+        workspaceId: auth.workspaceId,
+        authGeneration: auth.authGeneration,
+      })
+    })
+    this.workspaceDiscovery = new WorkspaceDiscoveryOperations(
+      this.workspaceFilesService,
+      (input) => this.requireDiscoveryGrant(input),
+    )
+    this.workspaceGitService = new WorkspaceGitService(
+      this.workspaceFilesService,
+      (input) => this.requireDiscoveryGrant(input),
+    )
+    this.workspaceOutputService = new WorkspaceOutputService(dbHandle)
     this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
     this.registerPersistentProviderAdapters()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
@@ -970,7 +1010,64 @@ export class GhostBotDaemon {
     })
   }
 
+  private assertActiveWriteGrant(input: {
+    botId?: string
+    teamId?: string
+    workspaceId: string
+    authGeneration: string
+  }) {
+    if (input.teamId || !input.botId) {
+      throw new DaemonError(
+        'WORKSPACE_WRITE_UNAUTHORIZED',
+        'Group and task workspace writes remain gated',
+        { statusCode: 403 },
+      )
+    }
+    const writeGrant = this.workspaceWriteGrants.get(input.botId)
+    if (
+      this.workspaceWritesStopping ||
+      !writeGrant ||
+      writeGrant.workspaceId !== input.workspaceId ||
+      writeGrant.authGeneration !== input.authGeneration ||
+      Date.now() >= writeGrant.expiresAtMs
+    ) {
+      if (writeGrant && Date.now() >= writeGrant.expiresAtMs) {
+        this.workspaceWriteGrants.delete(input.botId)
+      }
+      throw new DaemonError(
+        'WORKSPACE_WRITE_UNAUTHORIZED',
+        'Explicit native write consent is required or has expired',
+        { statusCode: 403 },
+      )
+    }
+    return writeGrant
+  }
+
+  private async requireDiscoveryGrant(input: z.infer<typeof PersonalWorkspaceAccessSchema>): Promise<void> {
+    const context = await this.workspaceFilesService?.resolveContext({ botId: input.botId })
+    const grant = this.workspaceReadGrants.get(input.botId)
+    if (!context?.authorized ||
+        context.workspaceId !== input.workspaceId || context.authGeneration !== input.authGeneration ||
+        grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+      throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
+        statusCode: 403,
+      })
+    }
+  }
+
   async stop(): Promise<void> {
+    this.workspaceDiscovery?.abortAll()
+    this.workspaceDiscovery = null
+    this.workspaceReadGrants.clear()
+    this.workspaceWritesStopping = true
+    this.workspaceWriteGrants.clear()
+    this.workspaceGitService?.abortAll()
+    this.workspaceGitService = null
+    this.workspaceOutputService = null
+    const discussion = this.teamDiscussion
+    this.teamDiscussion = null
+    this.privateTasks = null
+    await discussion?.abortAll()
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
       this.terminalService = null
@@ -998,10 +1095,6 @@ export class GhostBotDaemon {
     this.settingsRepo = null
     this.sessionRepo = null
     this.teamMemberRouting = null
-    await this.teamDiscussion?.abortAll()
-    this.teamDiscussion = null
-    this.privateTasks = null
-    this.workspaceReadGrants.clear()
     this.workspaceFilesService = null
     if (this.memoryService) {
       this.memoryService.close()
@@ -1680,10 +1773,18 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          const updatedBot = await repo.updateBot(parsed.data)
-          if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
-            this.workspaceReadGrants.delete(idCheck.data)
+          const update = async () => {
+            const bot = await repo.updateBot(parsed.data)
+            this.workspaceDiscovery?.abortForBot(idCheck.data)
+            this.workspaceWriteGrants.delete(idCheck.data)
+            if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
+              this.workspaceReadGrants.delete(idCheck.data)
+            }
+            return bot
           }
+          const updatedBot = this.workspaceFilesService
+            ? await this.workspaceFilesService.withOwnerMutationBarrier(idCheck.data, update)
+            : await update()
           if (parsed.data.patch.permission === 'read-only' || parsed.data.patch.workspacePath) {
             await this.terminalService?.revokeByBotId(idCheck.data, 'bot_policy_updated').catch(() => {})
           }
@@ -1692,18 +1793,26 @@ export class GhostBotDaemon {
         }
         if (req.method === 'DELETE') {
           let archivedMcpIds: string[] = []
-          const result = repo.deleteBot(idCheck.data, {
-            onArchiveBot: (botId, now) => {
-              this.memoryService?.archiveMemoriesForBotInTx(botId, now)
-              this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
-              this.sidebarRepo?.pruneBotInTx(botId, now)
-              this.sessionRepo?.pruneReadStateForBotInTx(botId, now)
-              if (this.mcpService) {
-                archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
-              }
-            },
-          })
-          this.workspaceReadGrants.delete(idCheck.data)
+          const remove = () => {
+            const deleted = repo.deleteBot(idCheck.data, {
+              onArchiveBot: (botId, now) => {
+                this.memoryService?.archiveMemoriesForBotInTx(botId, now)
+                this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
+                this.sidebarRepo?.pruneBotInTx(botId, now)
+                this.sessionRepo?.pruneReadStateForBotInTx(botId, now)
+                if (this.mcpService) {
+                  archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
+                }
+              },
+            })
+            this.workspaceReadGrants.delete(idCheck.data)
+            this.workspaceWriteGrants.delete(idCheck.data)
+            this.workspaceDiscovery?.abortForBot(idCheck.data)
+            return deleted
+          }
+          const result = this.workspaceFilesService
+            ? await this.workspaceFilesService.withOwnerMutationBarrier(idCheck.data, remove)
+            : remove()
           await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
@@ -1764,6 +1873,68 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'POST' &&
+          (url.pathname === '/workspace/git/authorize-mutation' || url.pathname === '/workspace/git/mutate')) {
+        // Git write admission is independent of workspace read and Files write grants.
+        throw new DaemonError(
+          'GIT_MUTATIONS_GATED',
+          'Git changes are read-only until index and working-tree writes can be protected.',
+          { statusCode: 501 },
+        )
+      }
+
+      const workspaceGit = this.workspaceGitService
+      if (workspaceGit && req.method === 'POST') {
+        if (url.pathname === '/workspace/git/inspect') {
+          const input = await readWorkspaceRequest(req, WorkspaceGitInspectSchema)
+          const cancellation = new AbortController()
+          const onClose = () => cancellation.abort()
+          res.once('close', onClose)
+          try {
+            sendJson(res, 200, await workspaceGit.inspect(input, cancellation.signal))
+          } finally {
+            res.off('close', onClose)
+          }
+          return
+        }
+        if (url.pathname === '/workspace/git/cancel') {
+          const input = await readWorkspaceRequest(req, WorkspaceGitOperationSchema)
+          sendJson(res, 200, await workspaceGit.cancel(input))
+          return
+        }
+      }
+
+      const workspaceOutput = this.workspaceOutputService
+      if (workspaceOutput && req.method === 'POST') {
+        if (url.pathname === '/workspace/output/list') {
+          const body = await readJsonBody(req)
+          sendJson(res, 200, workspaceOutput.listOutput(body))
+          return
+        }
+        if (url.pathname === '/workspace/output/cancel') {
+          const orchestrator = this.runOrchestrator
+          const body = await readJsonBody(req)
+          const result = await workspaceOutput.cancelExecution(body, {
+            cancelRun: async (runId) => {
+              if (!orchestrator) {
+                throw new DaemonError('DAEMON_NOT_READY', 'Orchestrator unavailable', {
+                  statusCode: 503,
+                })
+              }
+              const res = await orchestrator.cancelRun(runId)
+              return { status: res.run.status }
+            },
+            cancelTerminalCommand: this.terminalService
+              ? async (commandId) => {
+                  return this.terminalService!.cancelCommand(commandId)
+                }
+              : undefined,
+          })
+          sendJson(res, 200, result)
+          return
+        }
+      }
+
       if (this.workspaceFilesService) {
         // Only Electron main has the daemon credential and can submit the native dialog result.
         if (req.method === 'POST' && url.pathname === '/workspace/authorize-read') {
@@ -1793,19 +1964,83 @@ export class GhostBotDaemon {
               statusCode: 403,
             })
           }
-          const context = await this.workspaceFilesService.resolveContext(selector)
+          const files = this.workspaceFilesService
+          const context = await files.withOwnerMutationBarrier(selector.botId!, async () => {
+            const resolved = await files.resolveContext(selector)
+            const existing = this.workspaceWriteGrants.get(selector.botId!)
+            if (existing && (!resolved.authorized || existing.workspaceId !== resolved.workspaceId ||
+                existing.authGeneration !== resolved.authGeneration)) {
+              this.workspaceWriteGrants.delete(selector.botId!)
+            }
+            return resolved
+          })
           const grant = this.workspaceReadGrants.get(context.ownerId)
           const authorized = context.authorized &&
             grant !== undefined &&
             grant.workspaceId === context.workspaceId &&
             grant.authGeneration === context.authGeneration
+          const writeGrant = this.workspaceWriteGrants.get(context.ownerId)
+          const writeAuthorized = Boolean(
+            authorized &&
+              context.canWrite &&
+              writeGrant !== undefined &&
+              writeGrant.workspaceId === context.workspaceId &&
+              writeGrant.authGeneration === context.authGeneration &&
+              Date.now() < writeGrant.expiresAtMs,
+          )
           sendJson(res, 200, {
             ...context,
             authorized,
-            canWrite: false,
+            canWrite: writeAuthorized,
+            writeAuthorized,
             authGeneration: authorized ? context.authGeneration : null,
             reason: authorized ? null : context.reason ?? 'Allow read access to this bot workspace',
           })
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/authorize-write') {
+          const { botId, workspaceId, authGeneration } = await readWorkspaceRequest(
+            req,
+            WorkspaceWriteGrantSchema,
+          )
+          const files = this.workspaceFilesService
+          await files.withOwnerMutationBarrier(botId, async () => {
+            const readGrant = this.workspaceReadGrants.get(botId)
+            const context = await files.resolveContext({ botId })
+            if (
+              this.workspaceWritesStopping ||
+              !context.authorized ||
+              context.permissionMode !== 'workspace' ||
+              !context.canWrite ||
+              context.workspaceId !== workspaceId ||
+              context.authGeneration !== authGeneration ||
+              !readGrant ||
+              readGrant.workspaceId !== workspaceId ||
+              readGrant.authGeneration !== authGeneration
+            ) {
+              throw new DaemonError(
+                'WORKSPACE_WRITE_UNAUTHORIZED',
+                'Write consent requires an active read grant and writable bot policy',
+                { statusCode: 403 },
+              )
+            }
+            this.workspaceWriteGrants.set(botId, {
+              workspaceId,
+              authGeneration,
+              expiresAtMs: Date.now() + 30 * 60_000,
+            })
+          })
+          sendJson(res, 200, true)
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/revoke-write') {
+          const { botId } = await readWorkspaceRequest(req, WorkspaceSelectorIpcSchema)
+          if (botId) {
+            await this.workspaceFilesService.withOwnerMutationBarrier(botId, () => {
+              this.workspaceWriteGrants.delete(botId)
+            })
+          }
+          sendJson(res, 200, true)
           return
         }
         if (req.method === 'POST' && url.pathname === '/workspace/list') {
@@ -1839,13 +2074,68 @@ export class GhostBotDaemon {
             })
           }
           const result = await this.workspaceFilesService.readFile(input)
-          sendJson(res, 200, { ...result, readOnly: true })
+          const writeGrant = input.botId ? this.workspaceWriteGrants.get(input.botId) : undefined
+          const writeActive = Boolean(
+            writeGrant &&
+              writeGrant.workspaceId === input.workspaceId &&
+              writeGrant.authGeneration === input.authGeneration &&
+              Date.now() < writeGrant.expiresAtMs,
+          )
+          sendJson(res, 200, { ...result, readOnly: result.readOnly || !writeActive })
           return
         }
+        const discovery = this.workspaceDiscovery
+        if (req.method === 'POST' && discovery) {
+          if (url.pathname === '/workspace/cancel-discovery') {
+            const input = await readWorkspaceRequest(req, WorkspaceDiscoveryOperationSchema)
+            sendJson(res, 200, await discovery.cancel(input))
+            return
+          }
+          if (url.pathname === '/workspace/search' || url.pathname === '/workspace/preview') {
+            const controller = new AbortController()
+            const abort = () => controller.abort()
+            res.once('close', abort)
+            try {
+              const result = url.pathname === '/workspace/search'
+                ? await discovery.search(await readWorkspaceRequest(req, WorkspaceSearchInputSchema), controller.signal)
+                : await discovery.preview(await readWorkspaceRequest(req, WorkspacePreviewInputSchema), controller.signal)
+              if (!res.destroyed) sendJson(res, 200, result)
+            } catch (error) {
+              if (!res.destroyed) {
+                if (error instanceof Error && error.name === 'AbortError') {
+                  throw new DaemonError('DISCOVERY_CANCELLED', 'Workspace operation was cancelled', { statusCode: 409 })
+                }
+                throw error
+              }
+            } finally {
+              res.off('close', abort)
+            }
+            return
+          }
+        }
         if (req.method === 'POST' && url.pathname === '/workspace/save') {
-          throw new DaemonError('WORKSPACE_WRITES_DISABLED', 'Workspace file saving is disabled pending write-boundary verification', {
-            statusCode: 403,
-          })
+          const input = await readWorkspaceRequest(req, WorkspaceSaveFileIpcInputSchema)
+          this.assertActiveWriteGrant(input)
+          sendJson(res, 200, await this.workspaceFilesService.saveFile(input))
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/create') {
+          const input = await readWorkspaceRequest(req, WorkspaceCreateEntryIpcInputSchema)
+          this.assertActiveWriteGrant(input)
+          sendJson(res, 200, await this.workspaceFilesService.createEntry(input))
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/rename') {
+          const input = await readWorkspaceRequest(req, WorkspaceRenameEntryIpcInputSchema)
+          this.assertActiveWriteGrant(input)
+          sendJson(res, 200, await this.workspaceFilesService.renameEntry(input))
+          return
+        }
+        if (req.method === 'POST' && url.pathname === '/workspace/delete') {
+          const input = await readWorkspaceRequest(req, WorkspaceDeleteFileIpcInputSchema)
+          this.assertActiveWriteGrant(input)
+          sendJson(res, 200, await this.workspaceFilesService.deleteFile(input))
+          return
         }
       }
 
@@ -2574,6 +2864,7 @@ export class GhostBotDaemon {
               url.pathname === '/teams/tasks/list-private' ||
               url.pathname === '/teams/tasks/cancel-private')) {
           const body = await readJsonBody(req)
+          if (!this.privateTasks) throw new DaemonError('UNAVAILABLE', 'Private tasks are shutting down', { statusCode: 503 })
           if (url.pathname.endsWith('/delegate')) {
             const parsed = DelegateTeamTaskInputSchema.safeParse(body)
             if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid task delegation payload', { statusCode: 400 })
@@ -2595,6 +2886,7 @@ export class GhostBotDaemon {
               url.pathname === '/teams/discussion/send' ||
               url.pathname === '/teams/discussion/cancel')) {
           const body = await readJsonBody(req)
+          if (!this.teamDiscussion) throw new DaemonError('UNAVAILABLE', 'Group discussion is shutting down', { statusCode: 503 })
           if (url.pathname.endsWith('/list')) {
             const parsed = TeamDiscussionListSchema.safeParse(body)
             if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid group discussion query', { statusCode: 400 })

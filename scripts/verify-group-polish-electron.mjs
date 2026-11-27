@@ -176,6 +176,8 @@ try {
   await page.locator('[data-task-summary]').waitFor()
   await page.getByRole('button', { name: 'View task chat' }).click()
   await page.getByTestId('private-task-header').waitFor()
+  await page.getByText('Workspace access is unavailable in Private Task Chats.').waitFor()
+  assert.equal(await page.getByRole('tablist', { name: 'Workspace sections' }).count(), 0)
   await row(target).click()
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -196,10 +198,25 @@ try {
     await setTheme('light')
     await page.screenshot({ path: join(screenshotDir, 'group-chat-light.png') })
     await page.setViewportSize({ width: 900, height: 700 })
+    const assertNarrowLayout = async () => {
+      const tabs = page.getByRole('tablist', { name: 'Workspace sections' }).getByRole('tab')
+      const bounds = await tabs.evaluateAll((elements) => elements.map((tab) => {
+        const { top, width } = tab.getBoundingClientRect()
+        return { top, width, text: tab.textContent }
+      }))
+      assert.equal(bounds.length, 5)
+      assert.ok(bounds.every((tab) => tab.top === bounds[0].top && tab.width === 32 && tab.text === ''))
+      const mentionBounds = await mention.boundingBox()
+      const delegateBounds = await page.getByRole('button', { name: 'Delegate task' }).boundingBox()
+      const sendBounds = await send.boundingBox()
+      assert.ok(delegateBounds.x - mentionBounds.x < 100 && sendBounds.x > delegateBounds.x + delegateBounds.width)
+    }
     await page.locator('.gb-overview-member-label small').first().waitFor()
     assert.ok(await page.locator('.gb-overview-member-label small').first().getAttribute('title'))
+    await assertNarrowLayout()
     await page.screenshot({ path: join(screenshotDir, 'group-chat-narrow-light.png') })
     await setTheme('dark')
+    await assertNarrowLayout()
     await page.screenshot({ path: join(screenshotDir, 'group-chat-narrow-dark.png') })
     await page.setViewportSize({ width: 1440, height: 900 })
   }
@@ -213,6 +230,21 @@ try {
   await page.getByRole('button', { name: 'Cancel task' }).click()
   await page.getByRole('button', { name: 'Back to group' }).click()
   await page.getByText(/Task (stopped_by_parent|cancelled|outcome uncertain)/).first().waitFor()
+
+  await page.getByRole('button', { name: 'Delegate task' }).click()
+  await page.getByLabel('Delegate member').selectOption('chief')
+  await page.getByLabel('Task objective').fill('Mock approval fixture for completion')
+  await page.getByRole('button', { name: 'Confirm task delegation' }).click()
+  const awaitingApproval = page.locator('[data-private-task-id]').filter({ hasText: 'Mock approval fixture for completion' })
+  await awaitingApproval.getByText('awaiting_approval', { exact: true }).waitFor()
+  const approvalRunId = await awaitingApproval.getAttribute('data-private-task-id')
+  assert.ok(approvalRunId)
+  await row(target).click()
+  await page.getByRole('button', { name: 'Advanced tasks', exact: true }).click()
+  await page.getByLabel('Select team run').selectOption(approvalRunId)
+  await page.getByRole('button', { name: 'Approve once', exact: true }).click()
+  await page.getByRole('button', { name: 'Back to discussion' }).click()
+  await page.locator('[data-task-summary]').filter({ hasText: 'Mock approval fixture for completion' }).waitFor()
 
   await page.setViewportSize({ width: 900, height: 700 })
   await row(teams[3]).click()

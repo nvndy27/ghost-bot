@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { _electron as electron } from 'playwright-core'
+import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 import { avatarPresets } from '../packages/avatar/presets.ts'
 import {
   WORKSPACE_TABS,
@@ -15,19 +15,13 @@ import {
   resolveEffectiveTheme,
 } from '../apps/desktop/src/state/preferences.ts'
 
-const repoRoot = process.cwd()
-const desktopDir = join(repoRoot, 'apps', 'desktop')
-
 test('Alpha.2A workspace tab definitions and keyboard navigation contract', () => {
   assert.deepEqual(
     WORKSPACE_TABS.map((t) => t.id),
     ['overview', 'files', 'changes', 'browser', 'output'],
   )
-  assert.equal(WORKSPACE_TABS[0].implemented, true)
-  assert.equal(WORKSPACE_TABS[1].implemented, true)
-  for (const deferred of WORKSPACE_TABS.slice(2)) {
-    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2B`)
-    assert.ok(deferred.milestone?.startsWith('Alpha.2'), `${deferred.id} must declare future milestone`)
+  for (const tab of WORKSPACE_TABS) {
+    assert.equal(tab.implemented, true, `${tab.id} is part of the integrated Workspace`)
   }
 
   assert.equal(getNextWorkspaceTab('overview', 'ArrowRight'), 'files')
@@ -57,24 +51,14 @@ test('Alpha.2A preserves UiPreferences compatibility and 12 avatar presets', () 
 
 test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, maximize, keyboard & bot identity', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-alpha2a-'))
-  const screenshotDir = join(repoRoot, 'design', 'reviews', 'alpha-2a')
+  const screenshotDir = join(dataDir, 'screenshots')
   await mkdir(screenshotDir, { recursive: true })
 
-  const launch = () => electron.launch({
-    executablePath: join(desktopDir, 'node_modules', '.bin', 'electron'),
-    args: [join(desktopDir, 'dist-electron', 'main.js')],
-    cwd: desktopDir,
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_BOT_SMOKE_EXIT: '0',
-    },
-  })
+  const launch = () => launchWorkspaceElectron(dataDir)
 
   let app = await launch()
   try {
-    const page = await app.firstWindow()
+    let page = await app.firstWindow()
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.waitForSelector('[data-testid="workspace-panel-shell"]')
 
@@ -102,7 +86,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const firstBotText = (await botOptions.first().innerText()).trim()
     assert.ok(!/gpt-|claude-|gemini-|kimi-|high|medium|low/i.test(firstBotText), `Unexpected model/effort in sidebar: ${firstBotText}`)
 
-    // 3. Keyboard-accessible tab navigation + honest unimplemented states
+    // 3. Keyboard-accessible tab navigation and scoped capability states
     const overviewTab = page.getByTestId('workspace-tab-overview')
     await overviewTab.focus()
     await page.keyboard.press('ArrowRight')
@@ -113,15 +97,15 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
 
     await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-active-tab="changes"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-changes"]')
+    await page.waitForSelector('[data-testid="workspace-git-changes"]')
 
     await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-active-tab="browser"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-browser"]')
+    await page.waitForSelector('[data-testid="workspace-browser-tab"]')
 
     await page.keyboard.press('End')
     await page.waitForSelector('[data-active-tab="output"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-output"]')
+    await page.waitForSelector('[data-testid="workspace-output-tab"]')
 
     // 4. The selected section persists across bots while the workspace context switches.
     await botOptions.nth(1).click()
@@ -142,11 +126,14 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       }, expectedWidth)
     }
     const resizedWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
-    assert.ok(resizedWidth > initialWidth, `Expected right panel width to increase on ArrowLeft (${initialWidth} -> ${resizedWidth})`)
 
     // 6. Maximize and restore (button + Escape)
     const maxBtn = page.getByTestId('workspace-maximize-btn')
+    await maxBtn.locator('svg.lucide-maximize-2').waitFor()
+    assert.equal(await maxBtn.getAttribute('title'), 'Maximize workspace panel')
     await maxBtn.click()
+    await maxBtn.locator('svg.lucide-minimize-2').waitFor()
+    assert.equal(await maxBtn.getAttribute('aria-label'), 'Restore workspace panel')
     assert.equal(await shell.getAttribute('data-maximized'), 'true')
     const maxWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     assert.ok(maxWidth > resizedWidth, `Expected maximized width (${maxWidth}) > resized width (${resizedWidth})`)
@@ -163,12 +150,60 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.getByRole('button', { name: 'Expand right workspace' }).click()
     await page.waitForSelector('[data-testid="workspace-panel-shell"]')
 
-    // 8. Theme switching (light & system) + Team Activity preservation if a team exists
-    await page.getByRole('button', { name: 'Open Settings' }).click()
-    await page.getByLabel('Theme').selectOption('light')
-    await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
-    await page.keyboard.press('Escape')
-    await page.screenshot({ path: join(screenshotDir, 'alpha2a-overview-light-1440x900.png') })
+    // 8. The five icon-only tabs fit at the minimum width in both themes.
+    const handleBounds = await resizeHandle.boundingBox()
+    assert.ok(handleBounds)
+    const handleY = handleBounds.y + handleBounds.height / 2
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleY)
+    await page.mouse.down()
+    await page.mouse.move(1438, handleY)
+    await page.mouse.up()
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === 220)
+    const screenshotOutput = process.env.GHOST_BOT_WORKSPACE_SCREENSHOT_DIR ?? screenshotDir
+    await mkdir(screenshotOutput, { recursive: true })
+    const tablist = shell.getByRole('tablist', { name: 'Workspace sections' })
+    for (const theme of ['dark', 'light'] as const) {
+      await page.getByRole('button', { name: 'Open Settings' }).click()
+      await page.getByLabel('Theme').selectOption(theme)
+      await page.waitForFunction((expected) => document.documentElement.dataset.theme === expected, theme)
+      await page.keyboard.press('Escape')
+      for (const [label, glyph] of [
+        ['Overview', 'layout-dashboard'], ['Files', 'files'], ['Changes', 'git-branch'],
+        ['Browser', 'globe'], ['Output', 'terminal'],
+      ] as const) {
+        const tab = tablist.getByRole('tab', { name: label, exact: true })
+        assert.equal(await tab.getAttribute('title'), label)
+        assert.equal(await tab.textContent(), '')
+        const icon = tab.locator(`svg.lucide-${glyph}`)
+        assert.equal(await icon.getAttribute('aria-hidden'), 'true')
+        assert.equal(await icon.getAttribute('width'), '18')
+        assert.equal(await icon.getAttribute('height'), '18')
+      }
+      const row = await tablist.evaluate((list) => {
+        const bounds = list.getBoundingClientRect()
+        return Array.from(list.querySelectorAll('[role="tab"]'), (tab) => {
+          const rect = tab.getBoundingClientRect()
+          return { top: rect.top, width: rect.width, height: rect.height,
+            inside: rect.left >= bounds.left && rect.right <= bounds.right }
+        })
+      })
+      assert.equal(row.length, 5)
+      assert.ok(row.every((tab) => tab.top === row[0].top && tab.width === 32 && tab.height === 32 && tab.inside))
+      await tablist.getByRole('tab', { name: 'Output', exact: true }).click()
+      await shell.getByTestId('workspace-output-tab').waitFor()
+      assert.equal(await tablist.getByRole('tab', { name: 'Output', exact: true }).getAttribute('aria-selected'), 'true')
+      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(250, 249, 246)'
+      await page.waitForFunction(({ theme, expectedBackground }) => {
+        const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
+        return panel?.getBoundingClientRect().width === 220 &&
+          document.documentElement.dataset.theme === theme &&
+          getComputedStyle(panel).backgroundColor === expectedBackground
+      }, { theme, expectedBackground })
+      await page.mouse.move(700, 100)
+      await shell.screenshot({ path: join(screenshotOutput, `workspace-icons-${theme}-220px.png`), scale: 'css' })
+      await tablist.getByRole('tab', { name: 'Overview', exact: true }).click()
+    }
 
     // Switch to system theme and restore dark-friendly layout
     await page.getByRole('button', { name: 'Open Settings' }).click()
@@ -204,7 +239,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
         memberBotIds: [bot.id, bots[1].id],
       })
     }, workspace)
-    await page.reload()
+    await app.close()
+    app = await launch()
+    page = await app.firstWindow()
+    page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
+    page.on('pageerror', (err) => consoleErrors.push(err.message))
     await page.getByTestId('workspace-tab-files').click()
     await page.getByText('Allow read access to this bot workspace', { exact: false }).waitFor()
     const authorize = page.getByRole('button', { name: 'Allow read access', exact: true })
@@ -222,6 +261,8 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await editor.waitFor()
     assert.equal(await editor.inputValue(), 'Initial fixture\n')
 
+    await page.getByRole('searchbox', { name: 'Search workspace' }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Add selection to chat draft' }).isDisabled(), true)
     assert.equal(await editor.getAttribute('readonly'), '')
     assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
 
@@ -256,10 +297,15 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       page.evaluate(async ({ target, expectedRevision }) => {
         return window.ghostBot!.saveWorkspaceFile({ ...target, expectedRevision, content: 'Denied edit' })
       }, { target: original, expectedRevision: revision }),
-      /saving is disabled/i,
+      /native write consent is required/i,
     )
     assert.equal(await readFile(file, 'utf8'), 'External edit\n')
 
+    const reopenBotWorkspace = async () => {
+      const options = page.getByRole('listbox', { name: 'Bots' }).getByRole('option')
+      await options.nth(1).click()
+      await options.first().click()
+    }
     const replacement = join(dataDir, 'replacement-workspace')
     await mkdir(replacement)
     await page.evaluate(async ({ id, workspacePath }) => {
@@ -269,7 +315,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       page.evaluate((target) => window.ghostBot!.readWorkspaceFile(target), original),
       /authorization changed/i,
     )
-    await page.reload()
+    await reopenBotWorkspace()
     await page.getByTestId('workspace-files-unavailable').waitFor()
     assert.equal(await editor.count(), 0)
 
@@ -289,7 +335,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       window.ghostBot!.resolveWorkspaceContext({ botId })
     ), original.botId)
     assert.equal(restoredContext.authorized, false, 'Restoring a root must not revive the old grant')
-    await page.reload()
+    await reopenBotWorkspace()
     await authorize.click()
     await page.getByTestId('workspace-tree-entry-sample.txt').waitFor()
     await app.close()

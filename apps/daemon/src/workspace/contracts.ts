@@ -25,6 +25,7 @@ export const WorkspaceContextResponseSchema = z.object({
   ownerId: z.string().min(1),
   ownerName: z.string(),
   canWrite: z.boolean(),
+  writeAuthorized: z.boolean().optional(),
   permissionMode: z.string(),
   authGeneration: z.string().nullable(),
   reason: z.string().nullable(),
@@ -121,3 +122,77 @@ export const WorkspaceSaveFileResponseSchema = z.object({
 })
 
 export type WorkspaceSaveFileResponse = z.infer<typeof WorkspaceSaveFileResponseSchema>
+
+export const WorkspaceCreateEntryInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+    kind: z.enum(['file', 'directory']),
+    content: z.string().max(WORKSPACE_LIMITS.maxFileBytes).optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+  .refine(
+    (v) => v.content === undefined || Buffer.byteLength(v.content, 'utf8') <= WORKSPACE_LIMITS.maxFileBytes,
+    { message: 'Content exceeds maximum UTF-8 byte limit' },
+  )
+
+export const WorkspaceCreateEntryResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  kind: z.enum(['file', 'directory']),
+  revision: z.string().nullable(),
+  sizeBytes: z.number().int().nonnegative().nullable(),
+})
+
+export const WorkspaceRenameEntryInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    fromPath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+    toPath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceRenameEntryResponseSchema = z.object({
+  workspaceId: z.string(),
+  fromPath: z.string(),
+  toPath: z.string(),
+  revision: z.string(),
+})
+
+export const WorkspaceDeleteFileInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .strict()
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceDeleteFileResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  quarantined: z.boolean(),
+  quarantinePath: z.string().optional(),
+})
+
+export type WorkspaceCreateEntryResponse = z.infer<typeof WorkspaceCreateEntryResponseSchema>
+export type WorkspaceRenameEntryResponse = z.infer<typeof WorkspaceRenameEntryResponseSchema>
+export type WorkspaceDeleteFileResponse = z.infer<typeof WorkspaceDeleteFileResponseSchema>

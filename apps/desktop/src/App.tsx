@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import { AppSettingsSchema } from '@ghost-bot/shared-types/ipc'
@@ -24,7 +24,7 @@ import type {
   UpdateTeamIpcInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
-import { X } from 'lucide-react'
+import { PanelRight, X } from 'lucide-react'
 import { BotEditorModal } from './components/BotEditorModal.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './components/IconButton.tsx'
 import { ChatComposer } from './components/ChatComposer.tsx'
@@ -35,6 +35,7 @@ import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
 import { LeftSidebar, orderSidebarItems } from './components/LeftSidebar.tsx'
 import { PrivateTaskChatView } from './components/PrivateTaskChatView.tsx'
 import { MessageList } from './components/MessageList.tsx'
+import type { WorkspaceDraftSelection } from './components/workspace/workspaceDiscoveryClient.ts'
 import { RightPanel } from './components/RightPanel.tsx'
 import { SettingsModal } from './components/SettingsModal.tsx'
 import { TeamEditorModal } from './components/TeamEditorModal.tsx'
@@ -151,6 +152,7 @@ export function App() {
       appearance: loadUiPreferences(),
     }
   })
+  const settingsWrites = useRef(Promise.resolve())
   const [bots, setBots] = useState<WorkspaceBot[]>(() => (hasBridge ? [] : INITIAL_MOCK_BOTS))
   const [activeBotId, setActiveBotId] = useState<string | null>(() =>
     hasBridge ? null : 'chief',
@@ -167,7 +169,7 @@ export function App() {
   const [inspectionBySession, setInspectionBySession] = useState<
     Record<string, SessionInspectionResponse | null>
   >({})
-  const [draft, setDraft] = useState<string>('')
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
@@ -223,12 +225,36 @@ export function App() {
   const activeTeam = teams.find((t) => t.id === activeTeamId) ?? null
   const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
   const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
+  const draftKey = activeSessionId ? `session:${activeSessionId}` : `bot:${activeBotId ?? ''}`
+  const draft = drafts[draftKey] ?? ''
+  const setDraft = (text: string) => setDrafts((previous) => ({ ...previous, [draftKey]: text }))
+  const draftContext = useMemo(() => ({ activeBotId, activeSessionId, activeTeamId, activePrivateTaskId, updatedAt: activeBot?.updatedAt }),
+    [activeBotId, activeSessionId, activeTeamId, activePrivateTaskId, activeBot?.updatedAt])
+  const draftContextRef = useRef(draftContext)
+  draftContextRef.current = draftContext
+
+  const addSelectionToDraft = async (selection: WorkspaceDraftSelection) => {
+    const bridge = window.ghostBot
+    if (!bridge || activeTeamId || activePrivateTaskId || !activeSessionId || selection.botId !== activeBotId ||
+        draftContextRef.current !== draftContext || !selection.text.trim() ||
+        new TextEncoder().encode(selection.text).length > 16 * 1024) {
+      throw new Error('The selection is unavailable for this conversation')
+    }
+    const grant = await bridge.resolveWorkspaceContext({ botId: selection.botId })
+    if (draftContextRef.current !== draftContext ||
+        !grant.authorized || grant.workspaceId !== selection.workspaceId ||
+        grant.authGeneration !== selection.authGeneration) {
+      throw new Error('The workspace or conversation changed; select the text again')
+    }
+    setDrafts((previous) => {
+      const existing = previous[draftKey] ?? ''
+      return { ...previous, [draftKey]: existing ? `${existing}\n\n${selection.text}` : selection.text }
+    })
+  }
   const activeBotIdRef = useRef<string | null>(activeBotId)
   const activeSessionIdRef = useRef<string | null>(activeSessionId)
-  const activeTeamIdRef = useRef<string | null>(activeTeamId)
   activeBotIdRef.current = activeBotId
   activeSessionIdRef.current = activeSessionId
-  activeTeamIdRef.current = activeTeamId
   const activeSessionRun = activeSessionId ? (activeRunBySession[activeSessionId] ?? null) : null
   const activeSessionInspection = activeSessionId
     ? (inspectionBySession[activeSessionId] ?? null)
@@ -515,7 +541,8 @@ export function App() {
           stopPollingRun(run.id)
           await refreshSessionMessages(sessionId, latestRun)
           const isCurrentlyViewed =
-            !activeTeamIdRef.current &&
+            !draftContextRef.current.activeTeamId &&
+            !draftContextRef.current.activePrivateTaskId &&
             activeBotIdRef.current === botId &&
             activeSessionIdRef.current === sessionId
           if (isCurrentlyViewed) {
@@ -606,11 +633,18 @@ export function App() {
     }
   }, [activeBotId, botsLoaded])
 
+  const queueSettingsWrite = (write: () => Promise<AppSettings>): Promise<void> => {
+    const written = settingsWrites.current.then(async () => {
+      setSettings(await write())
+    })
+    settingsWrites.current = written.catch(() => undefined)
+    return written
+  }
+
   const handleUpdateSettings = async (patch: AppSettingsPatch): Promise<void> => {
     const bridge = window.ghostBot
     if (bridge) {
-      const updated = await bridge.updateSettings(patch)
-      setSettings(updated)
+      await queueSettingsWrite(() => bridge.updateSettings(patch))
       return
     }
     setSettings((prev) => {
@@ -629,8 +663,7 @@ export function App() {
   const handleResetSettings = async (): Promise<void> => {
     const bridge = window.ghostBot
     if (bridge) {
-      const reset = await bridge.resetSettings()
-      setSettings(reset)
+      await queueSettingsWrite(() => bridge.resetSettings())
       return
     }
     saveUiPreferences(DEFAULT_APP_SETTINGS.appearance)
@@ -1850,7 +1883,14 @@ export function App() {
             onMouseDown={startResize('right')}
             onKeyDown={handleResizeKeyDown('right')}
           />
-          {activeTeam ? (
+          {activePrivateTaskId ? (
+            <aside className="gb-right-panel" style={{ width: prefs.rightWidth }} aria-label="Private task workspace">
+              <IconButton label="Collapse workspace panel" onClick={() => updateAppearance({ rightCollapsed: true })}>
+                <PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              </IconButton>
+              <p className="gb-muted">Workspace access is unavailable in Private Task Chats.</p>
+            </aside>
+          ) : activeTeam ? (
             <TeamRightPanel
               key={activeTeam.id}
               activeTab={prefs.workspaceTab}
@@ -1868,6 +1908,7 @@ export function App() {
             />
           ) : (
             <RightPanel
+              onAddSelectionToDraft={activeSessionId ? addSelectionToDraft : undefined}
               key={JSON.stringify([activeBot?.id, activeBot?.updatedAt, activeBot?.workspacePath, activeBot?.permission])}
               activeTab={prefs.workspaceTab}
               onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}

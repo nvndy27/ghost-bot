@@ -10,8 +10,13 @@
 
 - Alpha.0 is accepted for scoped internal Codex Chat through PR #15. Public distribution remains blocked by CU4-PKG-02. Live Teams, autonomous Scheduler, Computer Use, and the remaining provider gates stay in force.
 - The Alpha.2A/B candidate exposes personal workspace list and read after native directory confirmation. Read grants expire when the daemon stops or the bot authorization changes. Group filesystem access requires an authorized task scope.
-- Workspace file containment requires Linux with `/proc/self/fd` and fails closed without it. Save is blocked at the daemon boundary. Staged-file identity and revision checks cannot make POSIX rename conditional on an unchanged target and source entry when another process writes concurrently. Ask Approval also requires an explicit grant before the write path can be exposed.
-- Final Personal & Friends Alpha integrated packaging, platform, and remaining live acceptance gates are open.
+- The PR #39 checkpoint allows native-granted personal Workspace mode to save text and create empty files/folders on Linux. Save performs bounded verification after atomic replacement. External processes can race POSIX namespace operations. Non-empty creation needs descriptor-bound publication and cleanup. Rename and delete need source identity guarantees, and delete also needs safe quarantine creation and recovery. Existing quarantine entries stay recoverable. Ask Approval and group writes remain gated.
+- Alpha.2D.2 Git writes are unavailable. Snapshot inspection is read-only. Real index publication needs to preserve external index and lock changes and validate the approved revision at publication. Reverting a working-tree file also needs a safe expected-revision replacement.
+- Hosted Ubuntu CI passed every Workspace Electron scenario on `98c383377d223cfbf1e9ae72c4557b876eedc8e1`. The full job failed in Computer Use because bundled-worker Chrome rejected its SUID sandbox helper on the runner. Keep merge acceptance pending a runner-side fix that retains sandboxing. [Hosted run](https://github.com/nvndy27/ghost-bot/actions/runs/45997227848/job/140499553110)
+- Alpha.2G Workspace package acceptance is scoped to Fedora desktop fixtures and the offline mock runtime. Installed RPM launcher, AppImage FUSE path, Ubuntu desktop packaging, public browser networking and live runtime checks require separate evidence.
+- Unified acceptance requires independent review, maintainer visual approval and required CI on the actual candidate. PR #45 also reproduced Chrome rejecting the hosted runner's SUID helper in the Computer Use worker. Agent 2 owns the runner correction. The unified candidate preserves the sandbox requirements. [PR #45 hosted run](https://github.com/nvndy27/ghost-bot/actions/runs/45998660975/job/140504401185)
+- Group integrity PR #42 prevents new split private bindings and fails closed on legacy orphan metadata. Its corrected restart fixture exercises authorized private delegation. The correction also covers a concurrent operation-ID collision across assignees.
+- Final Personal & Friends Alpha platform and live acceptance gates are open.
 
 ## Alpha.1A limits
 
@@ -20,6 +25,13 @@
 ## Shared baseline review
 
 - Independent review of PR #20 and the convergence candidate remains pending. The read-only Git proposal is independent of the filesystem write gate and still requires maintainer approval.
+- Alpha.2C.1 search, preview and chat draft insertion require Agent 1 shared IPC and composer integration. PDF previews require compatible host Poppler, prlimit and Bubblewrap with isolated user and network namespaces. Preview is unavailable when those capabilities cannot be established.
+
+## Alpha.2C.1 integration
+
+- The shared discovery candidate is provisionally stacked on PR #21. Daemon IPC is tested. Agent 2 owns combined Electron acceptance, including PDF and selection-to-draft. Save, group filesystem access and Git mutation gates are unchanged.
+
+- Read-only Git Changes requires an isolated Linux runtime and an ordinary local repository at the granted root. Linked, redirected and oversized repositories fail closed. Packaging support awaits Alpha.3 verification.
 
 ## Alpha.1 convergence
 

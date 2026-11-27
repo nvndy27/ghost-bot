@@ -1,0 +1,18 @@
+.gb-git-changes { min-height: 0; overflow: auto; padding: 8px; overflow-wrap: anywhere; }
+.gb-git-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gb-git-changes h3 { font-size: 12px; margin: 10px 0 4px; }
+.gb-git-row { display: block; width: 100%; text-align: left; padding: 5px 6px; overflow-wrap: anywhere; }
+.gb-git-diff { overflow: auto; max-height: 300px; padding: 6px; border: 1px solid var(--gb-border); white-space: pre; }
+.gb-git-add { color: var(--gb-success); }
+.gb-git-delete { color: var(--gb-danger); }
+
+
+.gb-git-mutations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.gb-git-mutations p {
+  flex-basis: 100%;
+}

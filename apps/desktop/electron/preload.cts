@@ -20,10 +20,36 @@ const bridge: GhostBotBridge = {
     ipcRenderer.invoke('ghost:workspace:resolve-context', selector),
   listWorkspaceDirectory: (params) =>
     ipcRenderer.invoke('ghost:workspace:list-dir', params),
+  searchWorkspaceFiles: (input) => ipcRenderer.invoke('ghost:workspace:search', input),
+  previewWorkspaceFile: (input) => ipcRenderer.invoke('ghost:workspace:preview', input),
+  cancelWorkspaceDiscovery: (input) => ipcRenderer.invoke('ghost:workspace:cancel-discovery', input),
   readWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:read-file', params),
+  workspaceBrowserCommand: (input) => ipcRenderer.invoke('ghost:workspace:browser-command', input),
+  setWorkspaceBrowserBounds: (bounds) => ipcRenderer.invoke('ghost:workspace:browser-bounds', bounds),
+  captureWorkspaceBrowser: (id) => ipcRenderer.invoke('ghost:workspace:browser-screenshot', id),
+  onWorkspaceBrowserState: (listener) => {
+    const channel = 'ghost:workspace:browser-state'
+    const receive = (_event: unknown, value: Parameters<typeof listener>[0]) => listener(value)
+    ipcRenderer.on(channel, receive)
+    return () => ipcRenderer.removeListener(channel, receive)
+  },
+  inspectWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-inspect', params),
+  cancelWorkspaceGit: (params) => ipcRenderer.invoke('ghost:workspace:git-cancel', params),
+  listWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-list', input),
+  cancelWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-cancel', input),
   saveWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:save-file', params),
+  authorizeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:authorize-write', { botId }),
+  revokeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:revoke-write', { botId }),
+  createWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:create-entry', params),
+  renameWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:rename-entry', params),
+  deleteWorkspaceFile: (params) =>
+    ipcRenderer.invoke('ghost:workspace:delete-file', params),
   getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),
   updateSettings: (patch) => ipcRenderer.invoke('ghost:settings:update', patch),
   resetSettings: () => ipcRenderer.invoke('ghost:settings:reset', {}),

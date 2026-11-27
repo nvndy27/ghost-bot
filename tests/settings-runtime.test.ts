@@ -30,10 +30,16 @@ test('SettingsRepository persists updates, recovers from corrupt JSON, migrates 
     assert.equal(updated.general.launchBehavior, 'new-session')
     assert.equal(updated.privacy.retentionDays, 60)
 
+    // Independent appearance patches must preserve existing values across IPC and storage.
+    repo1.updateSettings({ appearance: { workspaceTab: 'output' } })
+    repo1.updateSettings({ appearance: { rightWidth: 220 } })
+
     // Calling migrateLegacyAppearance again must NOT overwrite newer SQLite values
     const afterReMigrate = repo1.migrateLegacyAppearance({ theme: 'dark', leftWidth: 200 })
     assert.equal(afterReMigrate.appearance.theme, 'light')
     assert.equal(afterReMigrate.appearance.leftWidth, 264)
+    assert.equal(afterReMigrate.appearance.rightWidth, 220)
+    assert.equal(afterReMigrate.appearance.workspaceTab, 'output')
     h1.close()
 
     // Reopen DB to verify restart persistence
@@ -41,6 +47,7 @@ test('SettingsRepository persists updates, recovers from corrupt JSON, migrates 
     const repo2 = new SettingsRepository(h2)
     assert.equal(repo2.getSettings().general.launchBehavior, 'new-session')
     assert.equal(repo2.getSettings().privacy.retentionDays, 60)
+    assert.deepEqual(repo2.getSettings().appearance, afterReMigrate.appearance)
 
     // Corrupt JSON recovers safely to defaults
     h2.sqlite

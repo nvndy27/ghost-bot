@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   offline:
-    runs-on: ubuntu-22.04
+    # Jammy's Bubblewrap lacks the mandatory nested user-namespace restriction.
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -26,7 +27,7 @@ jobs:
       - name: Prepare isolated Linux test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap xvfb xauth dbus-x11 libsecret-tools weston libgtk-3-0 libnss3 libasound2 libgbm1
+          sudo apt-get install -y --no-install-recommends apparmor-profiles bubblewrap git poppler-utils xvfb xauth dbus-x11 libsecret-tools weston libgtk-3-0t64 libnss3 libasound2t64 libgbm1
           # Workers use the read-only /usr mount and invoke /usr/bin/node.
           if [ "$(readlink -f "$(command -v node)")" != /usr/bin/node ]; then
             sudo install -m 0755 "$(command -v node)" /usr/bin/node
@@ -36,9 +37,23 @@ jobs:
           google-chrome --version
           weston --version
           # Fail rather than bypass the required OS isolation.
-          bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL \
-            --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
-            --symlink usr/bin /bin --proc /proc --dev /dev /usr/bin/node --version
+          /usr/bin/git --version
+          /usr/bin/pdfinfo -v
+          /usr/bin/pdftoppm -v
+          probe_workspace_sandbox() {
+            /usr/bin/bwrap --unshare-all --unshare-user --unshare-net --disable-userns --assert-userns-disabled \
+              --die-with-parent --new-session --cap-drop ALL \
+              --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
+              --symlink usr/bin /bin --proc /proc --dev /dev /usr/bin/node --version
+          }
+          if ! probe_workspace_sandbox; then
+            # Load Noble's packaged profile for bwrap alone when user namespaces are AppArmor-restricted.
+            profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+            test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1
+            test -r "$profile"
+            sudo apparmor_parser -r "$profile"
+            probe_workspace_sandbox
+          fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -48,6 +63,9 @@ jobs:
       # Browser/daemon integration fixtures are resource-intensive; serialize test files
       # on hosted runners. Keep every test and production RPC deadline unchanged.
       - name: Root offline tests
+        env:
+          GHOST_BOT_REQUIRE_GIT_SANDBOX: '1'
+          GHOST_BOT_REQUIRE_PDF_SANDBOX: '1'
         timeout-minutes: 12
         run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m node --test --test-timeout=120000 --test-concurrency=1 --test-reporter=tap tests/*.test.ts
       - name: Workspace offline tests

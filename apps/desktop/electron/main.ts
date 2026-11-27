@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { WorkspaceBrowserController } from './workspace-browser/controller.js'
 import {
   AppearanceSettingsSchema,
   AppInfoResponseSchema,
@@ -124,9 +125,29 @@ import {
   SetGeminiCredentialInputSchema,
   WorkspaceAuthorizeReadInputSchema,
   WorkspaceContextIpcResponseSchema,
+  WorkspaceBrowserBoundsSchema,
+  WorkspaceBrowserCommandSchema,
+  WorkspaceCreateEntryIpcInputSchema,
+  WorkspaceCreateEntryIpcResponseSchema,
+  WorkspaceDeleteFileIpcInputSchema,
+  WorkspaceDeleteFileIpcResponseSchema,
+  WorkspaceGitInspectSchema,
+  WorkspaceGitOperationSchema,
+  WorkspaceGitResponseSchema,
+  WorkspaceOutputCancelInputSchema,
+  WorkspaceOutputCancelResponseSchema,
+  WorkspaceOutputQuerySchema,
+  WorkspaceOutputResponseSchema,
+  WorkspaceRenameEntryIpcInputSchema,
+  WorkspaceRenameEntryIpcResponseSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceListDirectoryIpcResponseSchema,
   WorkspaceReadFileIpcInputSchema,
+  WorkspaceDiscoveryOperationSchema,
+  WorkspacePreviewInputSchema,
+  WorkspacePreviewResultSchema,
+  WorkspaceSearchInputSchema,
+  WorkspaceSearchResultSchema,
   WorkspaceReadFileIpcResponseSchema,
   WorkspaceSaveFileIpcInputSchema,
   WorkspaceSaveFileIpcResponseSchema,
@@ -216,6 +237,7 @@ const distIndexPath = join(appRoot, 'dist', 'index.html')
 const distIndexUrl = pathToFileURL(distIndexPath).href
 
 let mainWindow: BrowserWindow | null = null
+let workspaceBrowser: WorkspaceBrowserController | null = null
 let daemonChild: ChildProcessWithoutNullStreams | null = null
 let runtimeDir = ''
 let daemonSocketPath = ''
@@ -588,6 +610,30 @@ function registerIpcHandlers(): void {
     })
   })
 
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_SEARCH, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/search', WorkspaceSearchResultSchema, {
+      method: 'POST',
+      body: WorkspaceSearchInputSchema.parse(params),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_PREVIEW, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/preview', WorkspacePreviewResultSchema, {
+      method: 'POST',
+      body: WorkspacePreviewInputSchema.parse(params),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_CANCEL_DISCOVERY, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/workspace/cancel-discovery', z.boolean(), {
+      method: 'POST',
+      body: WorkspaceDiscoveryOperationSchema.parse(params),
+    })
+  })
+
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_READ_FILE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = WorkspaceReadFileIpcInputSchema.parse(params)
@@ -597,10 +643,125 @@ function registerIpcHandlers(): void {
     })
   })
 
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_COMMAND, async (event, input) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    return workspaceBrowser.command(WorkspaceBrowserCommandSchema.parse(input))
+  })
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_BOUNDS, (event, bounds) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    workspaceBrowser.setBounds(WorkspaceBrowserBoundsSchema.parse(bounds))
+  })
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_SCREENSHOT, async (event, id) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    return workspaceBrowser.screenshot(z.uuid().parse(id))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_GIT_INSPECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceGitInspectSchema.parse(params)
+    return queryDaemon('/workspace/git/inspect', WorkspaceGitResponseSchema, {
+      method: 'POST',
+      body: input,
+      timeoutMs: 6500,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_GIT_CANCEL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceGitOperationSchema.parse(params)
+    return queryDaemon('/workspace/git/cancel', z.boolean(), { method: 'POST', body: input })
+  })
+
+  ipcMain.handle('ghost:workspace:output-list', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceOutputQuerySchema.parse(params)
+    return queryDaemon('/workspace/output/list', WorkspaceOutputResponseSchema, {
+      method: 'POST',
+      body: input,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:output-cancel', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceOutputCancelInputSchema.parse(params)
+    return queryDaemon('/workspace/output/cancel', WorkspaceOutputCancelResponseSchema, {
+      method: 'POST',
+      body: input,
+    })
+  })
+
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_SAVE_FILE, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = WorkspaceSaveFileIpcInputSchema.parse(params)
     return queryDaemon('/workspace/save', WorkspaceSaveFileIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:authorize-write', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { botId } = z.object({ botId: BotIdSchema }).parse(params)
+    const context = await queryDaemon('/workspace/context', WorkspaceContextIpcResponseSchema, {
+      method: 'POST',
+      body: { botId },
+    })
+    if (!context.authorized || !context.workspaceId || !context.authGeneration || !context.canonicalRoot) {
+      return false
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+    if (!win) return false
+    const promptRes = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Authorize workspace write access',
+      message: `Allow ${context.ownerName || botId} to modify files in ${context.canonicalRoot}?`,
+      detail: 'Allows saving text files, creating empty files, and creating folders for 30 minutes.',
+      buttons: ['Allow write access', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (promptRes.response !== 0 || !isAuthorizedSender(event)) return false
+    return queryDaemon('/workspace/authorize-write', z.literal(true), {
+      method: 'POST',
+      body: {
+        botId,
+        workspaceId: context.workspaceId,
+        authGeneration: context.authGeneration,
+      },
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:revoke-write', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { botId } = z.object({ botId: BotIdSchema }).parse(params)
+    return queryDaemon('/workspace/revoke-write', z.literal(true), {
+      method: 'POST',
+      body: { botId },
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:create-entry', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceCreateEntryIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/create', WorkspaceCreateEntryIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:rename-entry', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceRenameEntryIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/rename', WorkspaceRenameEntryIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:delete-file', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceDeleteFileIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/delete', WorkspaceDeleteFileIpcResponseSchema, {
       method: 'POST',
       body: parsed,
     })
@@ -2188,6 +2349,10 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers()
   mainWindow = createMainWindow()
+  workspaceBrowser = new WorkspaceBrowserController(mainWindow)
+  mainWindow.webContents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) workspaceBrowser?.closeAll()
+  })
 
   if (process.env.GHOST_BOT_SMOKE_EXIT === '1') {
     const consoleErrors: string[] = []
@@ -2227,6 +2392,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  workspaceBrowser?.closeAll()
   quitting = true
 })
 

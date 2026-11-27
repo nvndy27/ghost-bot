@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCodeEditor } from './WorkspaceCodeEditor.tsx'
+import { WorkspacePreview, WorkspaceSearch } from './WorkspaceDiscoveryPanel.tsx'
+import {
+  getWorkspaceDiscoveryTransport,
+  type WorkspaceDiscoveryTransport,
+  type WorkspaceDraftSelection,
+} from './workspaceDiscoveryClient.ts'
 import { WorkspaceFileTree } from './WorkspaceFileTree.tsx'
 import {
   getDefaultWorkspaceFilesTransport,
@@ -18,6 +24,9 @@ export interface WorkspaceFilesTabProps {
   isMockMode: boolean
   transport?: WorkspaceFilesTransport | null
   store?: WorkspaceFilesStore
+  visible?: boolean
+  discoveryTransport?: WorkspaceDiscoveryTransport | null
+  onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
 }
 
 export function WorkspaceFilesTab({
@@ -29,11 +38,21 @@ export function WorkspaceFilesTab({
   isMockMode,
   transport: injectedTransport,
   store = sharedWorkspaceFilesStore,
+  visible = true,
+  discoveryTransport: injectedDiscovery,
+  onAddSelectionToDraft,
 }: WorkspaceFilesTabProps) {
   const transport = useMemo(
     () => (injectedTransport !== undefined ? injectedTransport : getDefaultWorkspaceFilesTransport()),
     [injectedTransport],
   )
+
+  const discovery = useMemo(
+    () => injectedDiscovery === undefined ? getWorkspaceDiscoveryTransport() : injectedDiscovery,
+    [injectedDiscovery],
+  )
+  const [previewTarget, setPreviewTarget] = useState<{ key: string; relativePath: string } | null>(null)
+  const [jumpTo, setJumpTo] = useState<{ relativePath: string; lineNumber: number } | null>(null)
 
   const [, setVersion] = useState(0)
   const [contextLoading, setContextLoading] = useState(true)
@@ -84,17 +103,18 @@ export function WorkspaceFilesTab({
         },
       }))
 
+      const targetGeneration = store.getActiveWorkspaceState(targetContextKey)?.contextInfo.authGeneration
       try {
         const res = await transport.listDirectory({
           ...sel,
           workspaceId,
-          authGeneration:
-            store.getActiveWorkspaceState(targetContextKey)?.contextInfo.authGeneration ?? '',
+          authGeneration: targetGeneration ?? '',
           relativePath,
         })
         if (activeKeyRef.current !== targetContextKey) return
         const latest = store.getActiveWorkspaceState(targetContextKey)
-        if (!latest || latest.workspaceId !== res.workspaceId) return
+        if (!latest || latest.workspaceId !== res.workspaceId ||
+          latest.contextInfo.authGeneration !== targetGeneration) return
 
         store.updateWorkspace(storageKey, (prev) => ({
           ...prev,
@@ -172,6 +192,58 @@ export function WorkspaceFilesTab({
     void refreshContextAndRoot()
   }, [refreshContextAndRoot])
 
+  const watchedPath = currentState?.activePath
+  const watchedWorkspace = currentState?.workspaceId
+  const watchedGeneration = currentState?.contextInfo.authGeneration
+  const watchedKey = currentState?.storageKey
+  useEffect(() => {
+    if (!visible || !transport || !selector || !watchedPath ||
+        !watchedWorkspace || !watchedGeneration || !watchedKey) return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout>
+    const check = async () => {
+      const starting = store.getActiveWorkspaceState(contextKey)?.tabs.find((tab) => tab.relativePath === watchedPath)
+      try {
+        if (!starting || starting.saving) return
+        const result = await transport.readFile({
+          ...selector,
+          relativePath: watchedPath,
+          workspaceId: watchedWorkspace,
+          authGeneration: watchedGeneration,
+        })
+        if (disposed || result.workspaceId !== watchedWorkspace || result.relativePath !== watchedPath) return
+        store.updateWorkspace(watchedKey, (state) => {
+          const tab = state.tabs.find((candidate) => candidate.relativePath === watchedPath)
+          if (state.contextInfo.authGeneration !== watchedGeneration ||
+              !tab || tab.saving || tab.revision !== starting.revision) return state
+          const changed = tab.revision !== result.revision
+          const dirty = tab.draftContent !== tab.savedContent
+          const conflict = 'This file changed on disk. Reload or keep editing your draft.'
+          if (tab.readOnly === result.readOnly && (!changed || (dirty && tab.conflictMessage === conflict))) return state
+          const updated = { ...tab, readOnly: result.readOnly }
+          if (changed && dirty) {
+            updated.conflictMessage = conflict
+          } else if (changed) {
+            updated.revision = result.revision
+            updated.savedContent = result.content
+            updated.draftContent = result.content
+            updated.conflictMessage = null
+          }
+          return { ...state, tabs: state.tabs.map((candidate) => candidate === tab ? updated : candidate) }
+        })
+      } catch {
+        // The explicit reload and save paths report unavailable or unauthorized files.
+      } finally {
+        if (!disposed) timer = setTimeout(() => void check(), 1000)
+      }
+    }
+    timer = setTimeout(() => void check(), 1000)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+    }
+  }, [contextKey, selector, store, transport, visible, watchedGeneration, watchedKey, watchedPath, watchedWorkspace])
+
   const handleToggleDir = (relativePath: string) => {
     if (!selector || !currentState) return
     const isExpanded = currentState.expandedDirs.includes(relativePath)
@@ -212,6 +284,7 @@ export function WorkspaceFilesTab({
     const targetContextKey = contextKey
     const targetStorageKey = currentState.storageKey
     const targetWorkspaceId = currentState.workspaceId
+    const targetGeneration = currentState.contextInfo.authGeneration
     setLoadingFilePath(relativePath)
     setLoadFileError(null)
 
@@ -219,12 +292,13 @@ export function WorkspaceFilesTab({
       const res = await transport.readFile({
         ...selector,
         workspaceId: targetWorkspaceId,
-        authGeneration: currentState.contextInfo.authGeneration ?? '',
+        authGeneration: targetGeneration ?? '',
         relativePath,
       })
       if (activeKeyRef.current !== targetContextKey) return
       const latest = store.getActiveWorkspaceState(targetContextKey)
-      if (!latest || latest.workspaceId !== res.workspaceId) return
+      if (!latest || latest.workspaceId !== res.workspaceId ||
+          latest.contextInfo.authGeneration !== targetGeneration) return
 
       const outcome = store.openOrUpdateTab(targetStorageKey, {
         relativePath: res.relativePath,
@@ -329,6 +403,40 @@ export function WorkspaceFilesTab({
   }
 
   const expandedSet = new Set(currentState.expandedDirs)
+  const { authGeneration } = currentState.contextInfo
+  const access = contextKind === 'bot' && ownerId && authGeneration
+    ? { botId: ownerId, workspaceId: currentState.workspaceId, authGeneration }
+    : null
+  const accessKey = JSON.stringify(access)
+
+  function selectFile(relativePath: string, lineNumber: number | null = null) {
+    setPreviewTarget(null)
+    setJumpTo(lineNumber === null ? null : { relativePath, lineNumber })
+    if (discovery && access && /\.(?:gif|png|pdf)$/i.test(relativePath)) {
+      setPreviewTarget({ key: accessKey, relativePath })
+    } else {
+      void openOrReloadFile(relativePath, false)
+    }
+  }
+
+
+  async function requireCurrentAccess() {
+    if (!transport || !access || activeKeyRef.current !== contextKey) {
+      throw new Error('The originating workspace is no longer active.')
+    }
+    const context = await transport.resolveContext({ botId: access.botId })
+    const latest = store.getActiveWorkspaceState(contextKey)
+    if (activeKeyRef.current !== contextKey || latest?.workspaceId !== access.workspaceId ||
+        latest.contextInfo.authGeneration !== access.authGeneration) {
+      throw new Error('The originating workspace is no longer active.')
+    }
+    if (!context.authorized || context.workspaceId !== access.workspaceId ||
+        context.authGeneration !== access.authGeneration) {
+      void refreshContextAndRoot()
+      throw new Error('Workspace authorization changed. Refresh the workspace and try again.')
+    }
+    return access
+  }
 
   return (
     <div className="gb-files-tab" data-testid="workspace-files-tab">
@@ -343,7 +451,71 @@ export function WorkspaceFilesTab({
         <span className="gb-badge" data-testid="workspace-files-permission-badge">
           {currentState.contextInfo.canWrite ? 'Writable' : 'Read-only'}
         </span>
+        {currentState.contextInfo.canWrite && <span className="gb-muted">Rename and delete unavailable</span>}
+        {contextKind === 'bot' &&
+          ownerId &&
+          currentState.contextInfo.permissionMode === 'workspace' &&
+          transport.authorizeWrite &&
+          !currentState.contextInfo.canWrite && (
+            <button
+              type="button"
+              className="gb-workspace-icon-btn"
+              disabled={authorizing}
+              data-testid="workspace-authorize-write-btn"
+              onClick={async () => {
+                setAuthorizing(true)
+                setLoadFileError(null)
+                try {
+                  if (await transport.authorizeWrite!(ownerId)) {
+                    await refreshContextAndRoot()
+                  }
+                } catch (err) {
+                  setLoadFileError(err instanceof Error ? err.message : 'Write authorization failed')
+                } finally {
+                  setAuthorizing(false)
+                }
+              }}
+            >
+              Allow write
+            </button>
+          )}
+        {contextKind === 'bot' &&
+          ownerId &&
+          currentState.contextInfo.canWrite &&
+          transport.revokeWrite && (
+            <button
+              type="button"
+              className="gb-workspace-icon-btn"
+              data-testid="workspace-revoke-write-btn"
+              onClick={async () => {
+                await transport.revokeWrite!(ownerId)
+                await refreshContextAndRoot()
+              }}
+            >
+              Revoke write
+            </button>
+          )}
       </div>
+
+      {visible && access && (discovery ? (
+        <WorkspaceSearch key={accessKey} access={access} transport={discovery}
+          onOpenResult={async (hit) => {
+            await requireCurrentAccess()
+            selectFile(hit.relativePath, hit.lineNumber)
+          }} />
+      ) : <p className="gb-muted gb-workspace-discovery" role="status">Workspace search and preview are unavailable.</p>)}
+      {visible && access && discovery && currentState.activePath &&
+          /\.(?:md|markdown|svg)$/i.test(currentState.activePath) && (
+        <button type="button" className="gb-workspace-icon-btn"
+          onClick={() => setPreviewTarget({ key: accessKey, relativePath: currentState.activePath! })}>
+          Preview opened file
+        </button>
+      )}
+      {visible && access && discovery && previewTarget?.key === accessKey && (
+        <WorkspacePreview key={JSON.stringify([accessKey, previewTarget.relativePath])}
+          access={access} transport={discovery} relativePath={previewTarget.relativePath}
+          onClose={() => setPreviewTarget(null)} />
+      )}
 
       <div className="gb-files-layout">
         <WorkspaceFileTree
@@ -351,13 +523,46 @@ export function WorkspaceFilesTab({
           directories={currentState.directories}
           expandedDirs={expandedSet}
           selectedFilePath={currentState.activePath}
+          canWrite={currentState.contextInfo.canWrite}
           onToggleDir={handleToggleDir}
-          onSelectFile={(path) => void openOrReloadFile(path, false)}
+          onSelectFile={selectFile}
           onRefresh={() => void refreshContextAndRoot()}
+          onCreateEntry={
+            selector && transport.createEntry && currentState.contextInfo.authGeneration
+              ? (kind, relativePath) => {
+                  void (async () => {
+                    setLoadFileError(null)
+                    try {
+                      await transport.createEntry!({
+                        ...selector,
+                        workspaceId: currentState.workspaceId,
+                        authGeneration: currentState.contextInfo.authGeneration!,
+                        relativePath,
+                        kind,
+                        content: kind === 'file' ? '' : undefined,
+                      })
+                      await refreshContextAndRoot()
+                      if (kind === 'file') {
+                        await openOrReloadFile(relativePath, true)
+                      }
+                    } catch (err) {
+                      setLoadFileError(err instanceof Error ? err.message : 'Create failed')
+                    }
+                  })()
+                }
+              : undefined
+          }
         />
 
         <WorkspaceCodeEditor
           tabs={currentState.tabs}
+          jumpTo={jumpTo}
+          onSendSelection={access && onAddSelectionToDraft
+            ? async (relativePath, text) => {
+              const current = await requireCurrentAccess()
+              await onAddSelectionToDraft({ ...current, relativePath, text })
+            }
+            : undefined}
           activePath={currentState.activePath}
           loadingFilePath={loadingFilePath}
           loadError={loadFileError}

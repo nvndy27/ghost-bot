@@ -1,12 +1,28 @@
 # Next steps
 
+## Unified Alpha.1 and Alpha.2 acceptance
+
+Review the exact unified Draft PR head and its integrated offline evidence. Agent 2 owns the focused independent verdict and the hosted Chromium sandbox prerequisite. The maintainer owns visual approval of the Group composer and Workspace tabs. Required CI must pass on the reviewed head. Keep the executable packaging harness for fresh Alpha.3 artifacts after scope is agreed.
+
 ## Alpha.1 integrity and Group Chat polish
 
-Review the integrity and UI drafts as a stack. Pin the accepted Agent 2 workspace head, reconcile shared daemon/Electron/App interfaces with both histories intact, then run the affected integration tests and CI. Alpha.3 acceptance awaits agreed scope.
+Review the integrity and UI stack as part of the unified candidate. Alpha.3 acceptance awaits agreed scope.
 
 ## Alpha.1B and Alpha.1C
 
 Review the Alpha.1B draft against accepted main. Keep the approved Alpha.1C discussion feature on a separate branch with mock-only, tool-free execution; preserve advanced Teams runs as separate functionality.
+
+## Alpha.2G to Alpha.3 handoff
+
+Use the [executable package acceptance harness](extensions/alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance) for fresh Ubuntu desktop and installed Fedora artifacts. Preserve the current mutation gates and use the unified SHA for fresh package evidence.
+
+## Alpha.2D.2 Git mutation handoff
+
+Reconcile the provisional stack before acceptance. Keep Git write admission denied until a separate native per-operation approval can be bound to the repository, selected paths and expected revisions, and used with a commit mechanism that preserves external writes. Verify race, revocation and partial-publication behavior in real repositories and Electron before enabling any action. Agent 1 can resolve the exact-SHA Private Task Chat findings independently.
+
+## Alpha.2C.2 write handoff
+
+Review the hardened PR #39 head on the provisional stack. Preserve the same-grant admission checks and the new Electron watch and revocation regressions during reconciliation. Keep the gated operations disabled until their publication or authorization boundaries are enforceable.
 
 ## Open-source readiness follow-up
 
@@ -27,12 +43,17 @@ Review the [convergence candidate and Alpha.2C proposal](extensions/alpha-shared
 
 Review the Alpha.1A branch against accepted UI.1 main. Shared wiring is available in the separate convergence draft for maintainer review. Keep Group task indicators and Private Task Chats scoped to Alpha.1D.
 
+## Alpha.2D.1 — Read-only Git Changes
+
+Review the isolated draft stacked on PR #22. At convergence, preserve both the existing discovery contract and the feature-specific `inspectWorkspaceGit` / `cancelWorkspaceGit` channels. Re-run the focused Electron Git scenario on the combined baseline. Keep Git mutations gated.
+
 ## Alpha.2A–B — Shared Workspace Integration (Draft Review)
 
 1. Review the history-preserving integration candidate on `integration/alpha2ab-shared-wiring`. Coordinate disposition of draft PRs #16 and #18 with their owner.
 2. Agent 2 reviews the read contract and the focused Electron acceptance. A native directory confirmation grants daemon-lifetime read access for the persisted personal bot root identity. List/read validate both workspace ID and the grant’s authorization generation. Updating or restoring a workspace or changing its permission requires fresh confirmation. Group access requires an explicit authorized task scope. The saved tab is a UI preference.
 3. Keep save disabled until the write boundary can prevent external revision and staged-entry races and can enforce the intended approval and task scope. Define the artifact reference contract when authorized task scope is available.
 4. The approved read-only Alpha.2C Git scope awaits the accepted shared main SHA. Its scope is separate from the write boundary above.
+5. Alpha.2C.1 has a separate authorized integration branch. Agent 1 reviews the search, preview, cancellation and composer interface handoff and wires shared boundaries. Wire the isolated PDF page renderer through the same guarded preview route. Validate actual Electron search, cancellation, previews and draft insertion on the refreshed convergence baseline before Alpha.2C.1 acceptance.
 
 ## Alpha.0B — Integrated Native Chat Release Candidate (Historical Handoff)
 

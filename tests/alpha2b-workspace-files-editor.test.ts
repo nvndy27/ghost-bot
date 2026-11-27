@@ -67,6 +67,8 @@ async function createTempDaemonAndWorkspaces() {
   insertBot.run('bot-unconf', 'Bot Unconfigured', '', 'workspace', now, now)
 
   const service = new WorkspaceFilesService(db)
+  const fixtureGrant = {}
+  service.setWriteGrantChecker(() => fixtureGrant)
   return {
     root,
     ws1,
