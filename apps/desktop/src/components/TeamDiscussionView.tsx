@@ -223,7 +223,7 @@ export function TeamDiscussionView({
                         type="button"
                         className="gb-btn-outline"
                         style={{ fontSize: 11.5, padding: '2px 8px' }}
-                        onClick={() => void bridge.cancelPrivateTaskChat({ teamId: team.id, teamRunId: task.teamRunId }).then(() => {
+                        onClick={() => void bridge.cancelPrivateTaskChat({ teamId: team.id, teamRunId: task.teamRunId, taskId: task.taskId }).then(() => {
                           onTasksChanged?.()
                           return bridge.listPrivateTaskChats({ teamId: team.id }).then((r) => setPrivateTasks(r.tasks))
                         })}

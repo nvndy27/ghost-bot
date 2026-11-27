@@ -180,6 +180,7 @@ export interface OfflineTeamDispatch {
   effort: string
   revision: string
   revalidate(): void
+  onCreateRun?(runId: string): void
 }
 
 export interface RunOrchestratorOptions {
@@ -1216,6 +1217,8 @@ export class RunOrchestrator {
         },
         timestamp: now,
       })
+
+      team?.onCreateRun?.(runId)
 
       const insertedRow = this.dbHandle.sqlite
         .prepare(

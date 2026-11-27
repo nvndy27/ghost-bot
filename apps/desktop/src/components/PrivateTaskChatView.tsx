@@ -95,7 +95,7 @@ export function PrivateTaskChatView({
     setCancelling(true)
     setError(null)
     try {
-      await bridge.cancelPrivateTaskChat({ teamId: task.teamId, teamRunId: task.teamRunId })
+      await bridge.cancelPrivateTaskChat({ teamId: task.teamId, teamRunId: task.teamRunId, taskId: task.taskId })
       const listRes = await bridge.listPrivateTaskChats({ teamId: task.teamId })
       const latest = listRes.tasks.find((t) => t.teamRunId === task.teamRunId)
       if (latest) onTaskUpdated(latest)

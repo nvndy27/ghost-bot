@@ -235,8 +235,12 @@ export class TeamsService {
     plan?: TeamTaskPlan
     planner?: TeamTaskPlanner
     autoExecute?: boolean
+    onCreate?: (run: TeamRunRecord, tasks: TeamTaskRecord[]) => void
   }): Promise<{ run: TeamRunRecord; tasks: TeamTaskRecord[]; created: boolean }> {
     try {
+      if (input.idempotencyKey.trim().startsWith('private-task:') && !input.onCreate) {
+        throw new DaemonError('SCOPE_FORBIDDEN', 'Use the private task delegation action', { statusCode: 403 })
+      }
       const team = this.repository.getTeam(input.teamId, LOCAL_USER_ID)
       const leadPolicy = await this.bridge.revalidateWorkerPolicy({
         teamId: team.id,
@@ -287,6 +291,7 @@ export class TeamsService {
         goal: input.goal,
         idempotencyKey: input.idempotencyKey,
         planner,
+        onCreate: input.onCreate,
       })
       if (input.autoExecute && result.created) {
         void this.executeTeamRunToCompletion(result.run.id).catch(() => {})

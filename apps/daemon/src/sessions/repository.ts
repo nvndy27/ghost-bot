@@ -450,30 +450,32 @@ export class SessionRepository {
   }
 
   getOrCreateTeamSession(input: { identity: string; agentId: string; runtimeId: string; accountId: string }): string {
+    return this.dbHandle.transaction(() => this.getOrCreateTeamSessionInTx(input))
+  }
+
+  getOrCreateTeamSessionInTx(input: { identity: string; agentId: string; runtimeId: string; accountId: string }): string {
     this.assertActiveBot(input.agentId)
     const key = `teams.session-binding:${input.identity}`
-    return this.dbHandle.transaction(() => {
-      const existing = this.dbHandle.sqlite.prepare(`
-        SELECT sessions.id
-        FROM settings JOIN sessions ON sessions.id = json_extract(settings.value_json, '$')
-        WHERE settings.key = ? AND sessions.agent_id = ? AND sessions.runtime_id = ?
-          AND sessions.account_id = ? AND sessions.archived_at IS NULL
-      `).get(key, input.agentId, input.runtimeId, input.accountId) as { id: string } | undefined
-      if (existing) return existing.id
-      const id = `sess_${randomUUID()}`
-      const now = new Date().toISOString()
-      this.dbHandle.sqlite.prepare(`
-        INSERT INTO sessions (id, agent_id, account_id, runtime_id, title, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(id, input.agentId, input.accountId, input.runtimeId, 'Group worker conversation', now, now)
-      const persist = this.dbHandle.sqlite.prepare(`
-        INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
-      `)
-      persist.run(key, JSON.stringify(id), now)
-      persist.run(TEAM_SESSION_SETTING_PREFIX + id, JSON.stringify(input.identity), now)
-      return id
-    })
+    const existing = this.dbHandle.sqlite.prepare(`
+      SELECT sessions.id
+      FROM settings JOIN sessions ON sessions.id = json_extract(settings.value_json, '$')
+      WHERE settings.key = ? AND sessions.agent_id = ? AND sessions.runtime_id = ?
+        AND sessions.account_id = ? AND sessions.archived_at IS NULL
+    `).get(key, input.agentId, input.runtimeId, input.accountId) as { id: string } | undefined
+    if (existing) return existing.id
+    const id = `sess_${randomUUID()}`
+    const now = new Date().toISOString()
+    this.dbHandle.sqlite.prepare(`
+      INSERT INTO sessions (id, agent_id, account_id, runtime_id, title, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.agentId, input.accountId, input.runtimeId, 'Group worker conversation', now, now)
+    const persist = this.dbHandle.sqlite.prepare(`
+      INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `)
+    persist.run(key, JSON.stringify(id), now)
+    persist.run(TEAM_SESSION_SETTING_PREFIX + id, JSON.stringify(input.identity), now)
+    return id
   }
 
   getSession(sessionId: string): SessionRecord {

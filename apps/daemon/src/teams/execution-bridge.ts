@@ -1,3 +1,4 @@
+import { privateTaskSessionIdentity, readPrivateTaskMeta } from './private-task-identity.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
   DaemonCancellationAck,
@@ -233,6 +234,14 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
       }
     }
 
+    const parent = this.deps.dbHandle.sqlite.prepare('SELECT idempotency_key FROM team_runs WHERE id = ?')
+      .get(ctx.teamRunId) as { idempotency_key: string } | undefined
+    const privateTask = parent?.idempotency_key.startsWith('private-task:')
+    const approved = privateTask && ctx.teamRunId ? readPrivateTaskMeta(this.deps.dbHandle, ctx.teamRunId) : null
+    if (privateTask && (!approved?.revision || approved.taskId !== ctx.taskId ||
+        approved.teamId !== ctx.teamId || approved.assignedBotId !== ctx.assignedBotId || !this.deps.memberRouting)) {
+      return { status: 'failed', code: 'PRIVATE_TASK_BINDING_INVALID', message: 'Private task is missing its approved execution binding', retryable: false }
+    }
     const memberRouting = this.deps.memberRouting
     let routing: OfflineTeamDispatch | undefined
     if (memberRouting) {
@@ -244,7 +253,11 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           this.deps.getRuntimeState().runtimeMode !== 'mock') {
         return { status: 'failed', code: 'TEAM_ROUTING_UNAVAILABLE', message: 'The selected member configuration cannot execute in this runtime', retryable: false }
       }
-      const identity = createHash('sha256').update(JSON.stringify([ctx.teamId, ctx.teamRunId, ctx.assignedBotId, effective, revision])).digest('hex')
+      if (approved && (revision !== approved.revision ||
+          JSON.stringify(effective) !== JSON.stringify(approved.routing))) {
+        return { status: 'failed', code: 'TEAM_ROUTING_CHANGED', message: 'Member routing changed after delegation; delegate a new task', retryable: false }
+      }
+      const identity = approved ? privateTaskSessionIdentity(approved) : createHash('sha256').update(JSON.stringify([ctx.teamId, ctx.teamRunId, ctx.assignedBotId, effective, revision])).digest('hex')
       routing = {
         ...effective, runtimeId: effective.runtimeId, accountId: effective.accountId,
         teamId: ctx.teamId, teamRunId: ctx.teamRunId, botId: ctx.assignedBotId, revision, identity,
@@ -252,15 +265,18 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           if (this.deps.getRuntimeGeneration?.() !== generation) {
             throw new DaemonError('TEAM_ROUTING_CHANGED', 'Runtime generation changed before dispatch', { statusCode: 409 })
           }
+          if (approved && readPrivateTaskMeta(this.deps.dbHandle, approved.teamRunId)?.revision !== approved.revision) {
+            throw new DaemonError('PRIVATE_TASK_BINDING_INVALID', 'Private task binding changed before dispatch', { statusCode: 409 })
+          }
           memberRouting.revalidate(key, resolved)
         },
       }
     }
-    const sessionId = routing
+    const sessionId = approved?.sessionId ?? (routing
       ? this.deps.sessionRepo.getOrCreateTeamSession({
         identity: routing.identity, agentId: routing.botId, runtimeId: routing.runtimeId, accountId: routing.accountId,
       })
-      : this.getOrCreateTeamSessionId(ctx.teamRunId, ctx.assignedBotId)
+      : this.getOrCreateTeamSessionId(ctx.teamRunId, ctx.assignedBotId))
     const startMs = Date.now()
     const flightKey = `${ctx.taskId}:${ctx.attempt}`
     const isParentCancelling = () => {
@@ -282,18 +298,11 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
     const flightState: { cancelled: boolean; daemonRunId?: string } = { cancelled: false }
     this.inFlightDispatches.set(flightKey, flightState)
 
-    try {
-      const { run } = await this.deps.orchestrator.startRun({
-        sessionId,
-        text: ctx.prompt,
-        idempotencyKey: `team:${ctx.taskId}:attempt:${ctx.attempt}`,
-      }, routing)
-      flightState.daemonRunId = run.id
-
+    const linkRun = (runId: string) => {
       const rt = this.deps.getRuntimeState()
       this.deps.dbHandle.sqlite
         .prepare(
-          `INSERT OR IGNORE INTO team_execution_links (
+          `INSERT INTO team_execution_links (
             id, team_run_id, team_task_id, agent_id, session_id, daemon_run_id,
             runtime_id, account_id, attempt, role, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'worker', ?)`,
@@ -304,12 +313,22 @@ export class TeamsExecutionBridge implements DaemonTeamBridgeContract, TeamTaskD
           ctx.taskId,
           ctx.assignedBotId,
           sessionId,
-          run.id,
+          runId,
           routing?.runtimeId ?? rt.runtimeMode,
           routing?.accountId ?? rt.accountId ?? 'local',
           ctx.attempt,
           new Date().toISOString(),
         )
+
+    }
+    try {
+      const { run, deduplicated } = await this.deps.orchestrator.startRun({
+        sessionId,
+        text: ctx.prompt,
+        idempotencyKey: `team:${ctx.taskId}:attempt:${ctx.attempt}`,
+      }, routing ? { ...routing, onCreateRun: linkRun } : undefined)
+      flightState.daemonRunId = run.id
+      if (!routing && !deduplicated) linkRun(run.id)
 
       if (flightState.cancelled || isParentCancelling()) {
         this.deps.orchestrator.cancelRun(run.id)

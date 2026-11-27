@@ -103,6 +103,7 @@ export class TeamCoordinator {
       idempotencyKey: string
       conversationId?: string
       planner: TeamTaskPlanner
+      onCreate?: (run: TeamRunRecord, tasks: TeamTaskRecord[]) => void
     },
     nowMs = Date.now(),
   ): Promise<{ run: TeamRunRecord; tasks: TeamTaskRecord[]; created: boolean }> {
@@ -317,11 +318,10 @@ export class TeamCoordinator {
         )
         .run(1 + validatedPlan.tasks.length, plannerTokens, plannerDuration, nowIso, teamRunId)
 
-      return {
-        run: this.getTeamRun(teamRunId, input.ownerId),
-        tasks: this.listRunTasks(teamRunId, input.ownerId),
-        created: true,
-      }
+      const run = this.getTeamRun(teamRunId, input.ownerId)
+      const tasks = this.listRunTasks(teamRunId, input.ownerId)
+      input.onCreate?.(run, tasks)
+      return { run, tasks, created: true }
     })
   }
 
