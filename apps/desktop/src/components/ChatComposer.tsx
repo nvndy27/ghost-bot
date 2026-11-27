@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
+import { ArrowUp, BrainCircuit, Paperclip, ShieldCheck, Square } from 'lucide-react'
 import { MOCK_MODELS } from '../data/mockWorkspace.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface ChatComposerProps {
   bot: WorkspaceBot
@@ -94,15 +96,13 @@ export function ChatComposer({
         />
         <div className="gb-composer-footer">
           <div className="gb-composer-selectors">
-            <button
-              type="button"
-              disabled
+            <IconButton
+              label="Attach file (unavailable in Phase 1B)"
               title="Attachments (Phase 2)"
-              aria-label="Attach file (unavailable in Phase 1B)"
-              style={{ padding: '4px 6px', fontSize: '13px' }}
+              disabled
             >
-              📎
-            </button>
+              <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
 
             <select
               aria-label="Model"
@@ -126,42 +126,48 @@ export function ChatComposer({
               )}
             </select>
 
-            <select
-              aria-label="Reasoning effort"
-              value={bot.effort}
-              disabled={isStreaming || availableModels.length === 0}
-              onChange={(e) => onEffortChange(e.target.value)}
-            >
-              {activeModel.efforts.map((eff) => (
-                <option key={eff} value={eff}>
-                  {eff.charAt(0).toUpperCase() + eff.slice(1)}
-                </option>
-              ))}
-            </select>
+            <div className="gb-composer-select-wrap">
+              <BrainCircuit size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              <select
+                aria-label="Reasoning effort"
+                value={bot.effort}
+                disabled={isStreaming || availableModels.length === 0}
+                onChange={(e) => onEffortChange(e.target.value)}
+              >
+                {activeModel.efforts.map((eff) => (
+                  <option key={eff} value={eff}>
+                    {eff.charAt(0).toUpperCase() + eff.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-            <select
-              aria-label="Permission mode"
-              value={bot.permission}
-              disabled={isStreaming}
-              onChange={(e) => onPermissionChange(e.target.value as PermissionMode)}
-            >
-              <option value="read-only">Read Only</option>
-              <option
-                value="ask-approval"
-                disabled={!isMockMode && isCodexBot && !verifiedModes.includes('ask-approval')}
+            <div className="gb-composer-select-wrap">
+              <ShieldCheck size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              <select
+                aria-label="Permission mode"
+                value={bot.permission}
+                disabled={isStreaming}
+                onChange={(e) => onPermissionChange(e.target.value as PermissionMode)}
               >
-                Ask approval
-              </option>
-              <option
-                value="workspace"
-                disabled={!isMockMode && isCodexBot && !verifiedModes.includes('workspace')}
-              >
-                Workspace Access
-              </option>
-              <option value="full-access" disabled>
-                Full Access (Disabled)
-              </option>
-            </select>
+                <option value="read-only">Read Only</option>
+                <option
+                  value="ask-approval"
+                  disabled={!isMockMode && isCodexBot && !verifiedModes.includes('ask-approval')}
+                >
+                  Ask approval
+                </option>
+                <option
+                  value="workspace"
+                  disabled={!isMockMode && isCodexBot && !verifiedModes.includes('workspace')}
+                >
+                  Workspace Access
+                </option>
+                <option value="full-access" disabled>
+                  Full Access (Disabled)
+                </option>
+              </select>
+            </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -175,22 +181,22 @@ export function ChatComposer({
             {isStreaming ? (
               <button
                 type="button"
-                className="gb-send-btn"
+                className="gb-send-btn gb-stop-btn"
                 onClick={onStop}
                 title="Stop generation"
                 aria-label="Stop generation"
               >
-                ■
+                <Square size={13} strokeWidth={2} fill="currentColor" aria-hidden="true" />
               </button>
             ) : (
               <button
                 type="submit"
-                className="gb-send-btn"
+                className={`gb-send-btn${canSend ? ' ready' : ''}`}
                 disabled={!canSend}
                 title={canSend ? 'Send message' : 'Unavailable for current mode/runtime'}
                 aria-label="Send message"
               >
-                ↑
+                <ArrowUp size={ICON_SIZE.md} strokeWidth={2.1} aria-hidden="true" />
               </button>
             )}
           </div>

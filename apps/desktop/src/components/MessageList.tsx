@@ -1,3 +1,4 @@
+import { AlertCircle, Check, Loader2, ShieldCheck } from 'lucide-react'
 import type {
   ChatMessage,
   PendingApproval,
@@ -5,6 +6,7 @@ import type {
   WorkspaceBot,
 } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE } from './IconButton.tsx'
 
 export function UserMessage({ text }: { text: string }) {
   return <div className="gb-user-bubble">{text}</div>
@@ -34,8 +36,15 @@ export function ToolActivityCard({ tools }: { tools: ToolStep[] }) {
                 step.status === 'done' ? 'gb-tool-dot-done' : 'gb-tool-dot-running'
               }
               aria-hidden="true"
+              style={{ display: 'inline-flex', alignItems: 'center' }}
             >
-              {step.status === 'done' ? '✓' : step.status === 'failed' ? '!' : '✳'}
+              {step.status === 'done' ? (
+                <Check size={ICON_SIZE.xs} strokeWidth={2.2} />
+              ) : step.status === 'failed' ? (
+                <AlertCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: 'var(--gb-danger)' }} />
+              ) : (
+                <Loader2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} className="gb-spin" />
+              )}
             </span>
             <span>{step.label}</span>
           </div>
@@ -78,7 +87,7 @@ export function ApprovalCard({
   return (
     <div className="gb-card" role="region" aria-label="Approval request">
       <div className="gb-approval-title">
-        <span aria-hidden="true">🛡</span>
+        <ShieldCheck size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ color: 'var(--gb-accent)' }} />
         <span>{approval.title}</span>
         {approval.permissionMode && (
           <span className="gb-badge" style={{ marginLeft: 'auto', fontSize: '11px' }}>

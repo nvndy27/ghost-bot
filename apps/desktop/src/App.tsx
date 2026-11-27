@@ -22,7 +22,9 @@ import type {
   UpdateTeamIpcInput,
 } from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
+import { X } from 'lucide-react'
 import { BotEditorModal } from './components/BotEditorModal.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './components/IconButton.tsx'
 import { ChatComposer } from './components/ChatComposer.tsx'
 import { ChatHeader } from './components/ChatHeader.tsx'
 import { ComputerUseLiveViewerModal } from './components/ComputerUseLiveViewerModal.tsx'
@@ -1400,9 +1402,9 @@ export function App() {
             }}
           >
             <span>{bannerError}</span>
-            <button type="button" onClick={() => setBannerError(null)} aria-label="Dismiss error">
-              ×
-            </button>
+            <IconButton label="Dismiss error" onClick={() => setBannerError(null)}>
+              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
           </div>
         )}
 

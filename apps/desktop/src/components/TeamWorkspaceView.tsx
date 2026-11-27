@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import { PanelLeft, PanelRight, Pencil } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface TeamWorkspaceViewProps {
   team: TeamRecordDto
@@ -123,14 +125,9 @@ export function TeamWorkspaceView({
       <header className="gb-chat-header">
         <div className="gb-chat-header-title">
           {leftCollapsed && (
-            <button
-              type="button"
-              className="gb-btn-outline"
-              onClick={onToggleLeft}
-              aria-label="Show sidebar"
-            >
-              Sidebar
-            </button>
+            <IconButton label="Show sidebar" onClick={onToggleLeft} pressed={false}>
+              <PanelLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
           )}
           {leadBot && <BotAvatar config={leadBot.avatar} status={runIsActive ? 'working' : 'idle'} size={28} />}
           <div style={{ minWidth: 0 }}>
@@ -179,18 +176,14 @@ export function TeamWorkspaceView({
             </select>
           )}
 
-          <button type="button" className="gb-btn-outline" onClick={onEditTeam}>
-            Edit team
+          <button type="button" className="gb-btn-outline gb-icon-inline" onClick={onEditTeam}>
+            <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            <span>Edit team</span>
           </button>
           {rightCollapsed && (
-            <button
-              type="button"
-              className="gb-btn-outline"
-              onClick={onToggleRight}
-              aria-label="Show team panel"
-            >
-              Activity
-            </button>
+            <IconButton label="Show team panel" onClick={onToggleRight} pressed={false}>
+              <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
           )}
         </div>
       </header>

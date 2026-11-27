@@ -1,6 +1,8 @@
 import { useRef } from 'react'
+import { X } from 'lucide-react'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { PendingApproval } from '../types/workspace.ts'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export function DiffPreviewModal({
   approval,
@@ -24,9 +26,9 @@ export function DiffPreviewModal({
       >
         <div className="gb-modal-head">
           <strong>{approval.diffTitle}</strong>
-          <button type="button" onClick={onClose} aria-label="Close diff preview">
-            ×
-          </button>
+          <IconButton label="Close diff preview" onClick={onClose}>
+            <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
         <pre
           style={{

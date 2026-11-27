@@ -1,6 +1,8 @@
 import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import { PanelLeft, Plus, Search, Settings, UsersRound } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface LeftSidebarProps {
   width: number
@@ -52,26 +54,22 @@ export function LeftSidebar({
       <div className="gb-sidebar-head">
         <h1>My bots</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-          <button
-            type="button"
-            onClick={onCreateBot}
-            title="Create bot"
-            aria-label="Create bot"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            onClick={onCollapse}
-            title="Collapse sidebar"
-            aria-label="Collapse sidebar"
-          >
-            «
-          </button>
+          <IconButton label="Create bot" onClick={onCreateBot}>
+            <Plus size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+          <IconButton label="Collapse sidebar" onClick={onCollapse} pressed={false}>
+            <PanelLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
       </div>
 
       <div className="gb-search-wrap">
+        <Search
+          size={ICON_SIZE.sm}
+          strokeWidth={ICON_STROKE}
+          className="gb-search-icon"
+          aria-hidden="true"
+        />
         <input
           className="gb-search-input"
           type="search"
@@ -120,12 +118,13 @@ export function LeftSidebar({
           <span>Teams</span>
           <button
             type="button"
-            className="gb-btn-outline"
-            style={{ padding: '2px 7px', fontSize: 11 }}
+            className="gb-btn-outline gb-icon-inline"
+            style={{ padding: '2px 7px', fontSize: 11, gap: '4px' }}
             onClick={onCreateTeam}
             aria-label="Create team"
           >
-            + New
+            <Plus size={12} strokeWidth={2.1} aria-hidden="true" />
+            <span>New</span>
           </button>
         </div>
         {teamsLoading ? (
@@ -159,8 +158,14 @@ export function LeftSidebar({
                 }}
                 onClick={() => onSelectTeam(team.id)}
               >
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {team.name}
+                <span
+                  className="gb-icon-inline"
+                  style={{ minWidth: 0, overflow: 'hidden', gap: '7px' }}
+                >
+                  <UsersRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--gb-muted)' }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {team.name}
+                  </span>
                 </span>
                 <span className="gb-badge">
                   {isMockMode ? `${team.memberBotIds.length} mock` : `${team.memberBotIds.length}`}
@@ -179,7 +184,7 @@ export function LeftSidebar({
         onClick={onOpenSettings}
         aria-label="Open Settings"
       >
-        <span aria-hidden="true">⚙</span>
+        <Settings size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ color: 'var(--gb-muted)', flexShrink: 0 }} />
         <span>Settings</span>
       </button>
     </aside>

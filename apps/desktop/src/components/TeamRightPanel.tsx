@@ -1,6 +1,8 @@
 import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import { Activity, PanelRight, RefreshCw } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface TeamRightPanelProps {
   width: number
@@ -60,28 +62,17 @@ export function TeamRightPanel({
   return (
     <aside className="gb-right-panel" style={{ width }} aria-label="Team activity panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span className="gb-section-label" style={{ margin: 0 }}>
-          Team Activity
+        <span className="gb-section-label gb-icon-inline" style={{ margin: 0 }}>
+          <Activity size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          <span>Team Activity</span>
         </span>
         <div style={{ display: 'flex', gap: 4 }}>
-          <button
-            type="button"
-            className="gb-btn-outline"
-            style={{ padding: '4px 8px', fontSize: 12 }}
-            onClick={onRefresh}
-            aria-label="Refresh team activity"
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="gb-btn-outline"
-            style={{ padding: '4px 8px', fontSize: 12 }}
-            onClick={onCollapse}
-            aria-label="Collapse right panel"
-          >
-            Hide
-          </button>
+          <IconButton label="Refresh team activity" onClick={onRefresh}>
+            <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+          <IconButton label="Collapse right panel" onClick={onCollapse} active pressed>
+            <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
       </div>
 

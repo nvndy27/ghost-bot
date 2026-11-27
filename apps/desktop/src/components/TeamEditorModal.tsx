@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { CreateTeamIpcInput, TeamRecordDto, UpdateTeamIpcInput } from '@ghost-bot/shared-types/ipc'
+import { X } from 'lucide-react'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface TeamEditorModalProps {
   open: boolean
@@ -187,9 +189,9 @@ export function TeamEditorModal({
           <strong id="team-editor-title">
             {mode === 'create' ? 'Create Team' : `Edit Team · ${initialTeam?.name ?? ''}`}
           </strong>
-          <button type="button" className="gb-btn-outline" onClick={onClose} aria-label="Close team editor">
-            Close
-          </button>
+          <IconButton label="Close team editor" onClick={onClose}>
+            <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} style={{ padding: 20, display: 'grid', gap: 14 }}>
