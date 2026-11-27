@@ -121,3 +121,7 @@ PDF/Git require compatible Linux isolation and host utilities. Browser acceptanc
 - [ ] Maintainer explicitly approves publication, release notes and supported platforms. Until then v0.1 stays unreleased.
 
 Agent 1 supplies this readiness plan. Agent 2 owns Alpha.3A, package dependencies, the harness and platform evidence. Final package acceptance follows Alpha.3 readiness, approved Alpha.4 UI acceptance and candidate freeze. Existing package tests are reused for readiness planning. Their prior results do not certify newly built release artifacts. [Distribution requirements](../OPEN_SOURCE_READINESS.md), [packaging harness](alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance).
+
+## Alpha.4C integration checkpoint — 2026-11-28
+
+**In Progress** — Draft unified UI candidate PR #53 is `1de440f01e3478399e8cd0c1d77791a9aad5ce19`; required CI/CodeQL and Agent 2 focused review are pending. Actual integrated Dark/Light Electron screenshots and focused acceptance are linked from [Alpha.4C convergence](alpha4c-ui-convergence.md). This is not the frozen release candidate and does not certify new package artifacts. Continue only the existing Alpha.3A readiness planning while review runs. After Alpha.4 visual approval, resolve the Alpha.3 readiness/platform checklist, obtain maintainer candidate-freeze approval, then have Agent 2 build and verify final packages once. v0.1 remains unreleased; no package build was run for Alpha.4C.
