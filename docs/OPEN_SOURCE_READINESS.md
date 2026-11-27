@@ -10,8 +10,17 @@ dual-license; reference screenshots are excluded from the grant.
 
 ## Configured checks (results pending)
 
-- CI: Linux Node 24, frozen pnpm install, lint, typecheck, root and workspace
-  tests, build. No live provider calls, secrets, signing or deployment intended.
+- CI: Ubuntu 22.04, Node 24, frozen pnpm install, lint, typecheck, build before
+  root and workspace tests (which require bundled desktop/daemon/worker fixtures).
+  The runner supplies Xvfb, an isolated D-Bus session, Weston and Bubblewrap;
+  an actual unprivileged namespace probe must pass. Tests have bounded execution
+  and cleanup, without disabling browser isolation or dropping test files.
+  No live provider calls, secrets, signing or deployment intended.
+- Initial CI run [45950009023](https://github.com/nvndy27/ghost-bot/actions/runs/45950009023):
+  install, lint and typecheck passed; root tests reported errors and timed out,
+  so remaining steps did not run. CodeQL run
+  [45950009112](https://github.com/nvndy27/ghost-bot/actions/runs/45950009112)
+  completed successfully. Revised CI results are pending.
 - CodeQL: JavaScript/TypeScript analysis; inspect Security alerts and setup
   prerequisites. Successful execution is not proof of absence of vulnerabilities.
 - Dependabot: weekly npm and Actions updates; review update PRs and enable

@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   offline:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -23,9 +23,32 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
+      - name: Prepare isolated Linux test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap xvfb xauth dbus-x11 libsecret-tools weston libgtk-3-0 libnss3 libasound2 libgbm1
+          # Workers use the read-only /usr mount and invoke /usr/bin/node.
+          if [ "$(readlink -f "$(command -v node)")" != /usr/bin/node ]; then
+            sudo install -m 0755 "$(command -v node)" /usr/bin/node
+          fi
+          /usr/bin/node --version
+          test -x /usr/bin/google-chrome
+          google-chrome --version
+          weston --version
+          # Fail rather than bypass the required OS isolation.
+          bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL \
+            --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
+            --symlink usr/bin /bin --proc /proc --dev /dev /usr/bin/node --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm -r --if-present test
-      - run: pnpm build
+      - name: Build desktop and worker fixtures
+        id: build
+        run: pnpm build
+      - name: Root offline tests
+        timeout-minutes: 12
+        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m node --test --test-timeout=120000 --test-concurrency=2 --test-reporter=tap tests/*.test.ts
+      - name: Workspace offline tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 12
+        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m pnpm -r --workspace-concurrency=2 --if-present test
