@@ -1,5 +1,11 @@
 # Next steps
 
+## Alpha.0B — Integrated Native Chat Release Candidate (Offline RC Ready)
+
+1. Agent 2 performs independent security review and Fedora GNOME / Ubuntu AppImage + RPM packaging smoke verification on `integration/alpha0-native-chat-rc`.
+2. Owner reviews and authorizes the bounded live acceptance procedure (`<= 3` prompts on Codex CLI `0.172.0` ChatGPT `plus` profile; optional bounded second-provider check) in `docs/extensions/alpha0b-integrated-native-chat-rc.md`.
+3. Upon Alpha.0 sign-off, converge PRs #6–#14, #12, and Alpha.0B RC, then allocate single-owner boundaries (`packages/shared-types/ipc.ts`, `apps/desktop/src/App.tsx`, `0014+` migrations) before starting parallel Alpha.1 (Group Bot) and Alpha.2 (Workspace Panel).
+
 ## Alpha.0A — Native Chat Closure & Integration Readiness (Completed Offline)
 
 1. Converge stacked PRs #6–#13, documentation PR #12 (`docs/v0.1-personal-friends-alpha`), and Alpha.0A PR per `docs/extensions/alpha0a-native-chat-closure.md`.

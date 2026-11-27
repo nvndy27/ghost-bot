@@ -1,5 +1,14 @@
 # Progress log
 
+## Alpha.0B — Integrated Native Chat Release Candidate
+
+2026-11-27. Branched `integration/alpha0-native-chat-rc` from `fec34fc` (`feat/alpha0a-native-chat-closure`, PR #14), verified complete Git ancestry from `origin/main` (`07839ff`), reconciled full owner-approved `v0.1 Personal & Friends Alpha` `README.md` and `docs/ROADMAP.md` from PR #12 (`docs/v0.1-personal-friends-alpha`), and verified offline RC readiness with zero live inference or paid API spend. See [Alpha.0B RC report](extensions/alpha0b-integrated-native-chat-rc.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Reconciled PR #12 (`1802b0af`, `d4d5dbd`) full `README.md` and `docs/ROADMAP.md` (`Alpha.0`–`Alpha.3`, `Post-alpha`) while retaining Provider.7, Alpha.0A, and all `Phase 0`–`Phase 6` technical milestones; preserved frozen migrations `0001`–`0013` byte-for-byte; documented authoritative provider capability matrix, Agent 2 packaging/security handoff, bounded live acceptance request, and Alpha.1/Alpha.2 shared contract ownership. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `corepack pnpm audit --prod` (`No known vulnerabilities found`), frozen migration diff check (`0` changes to `migrations.ts`/`schema.ts` since `ddc97fc`), 3 consecutive full-workspace regression runs (**234/234** per run: `root` 141/141, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts sequentially (16/16), and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
 ## Alpha.0A — Native Chat Closure & Integration Readiness
 
 2026-11-27. Branched `feat/alpha0a-native-chat-closure` from `0291693` (`feat/provider7-unified-execution`). Closed A0-01..A0-06 native Chat correctness/security findings, extended daemon-path provider acceptance (`llamacpp`, `claude-api`, `gemini-api`, `ollama` via deterministic fixtures), and prepared PR #6–#13 + PR #12 reconciliation and Alpha.1/Alpha.2 contract inventory with zero live inference or paid API spend. See [Alpha.0A report](extensions/alpha0a-native-chat-closure.md).
