@@ -123,9 +123,9 @@ export async function runAlpha0LiveAcceptance(options = {}) {
   const evidence = {
     alpha0LiveAcceptance: 'failed',
     attemptedTurns: 0,
-    sessionId: null,
-    externalThreadId: null,
-    accountIdPresent: false,
+    sessionIdPresent: false,
+    externalThreadBound: false,
+    accountBindingVerified: false,
     modelUsed: null,
     effortUsed: null,
     runs: [],
@@ -134,6 +134,9 @@ export async function runAlpha0LiveAcceptance(options = {}) {
     error: null,
   }
 
+  let sessionId = ''
+  let expectedExternalThreadId = ''
+  let expectedAccountId = ''
   const knownRunIds = new Set()
 
   try {
@@ -173,7 +176,8 @@ export async function runAlpha0LiveAcceptance(options = {}) {
         (id) => window.ghostBot.createSession({ agentId: id, title: 'Alpha.0 Live Acceptance' }),
         botId,
       )
-      evidence.sessionId = createdSess.id
+      sessionId = createdSess.id
+      evidence.sessionIdPresent = Boolean(sessionId)
       await page.reload({ waitUntil: 'networkidle' })
       await page.waitForSelector('text=Chief of Staff')
 
@@ -195,32 +199,48 @@ export async function runAlpha0LiveAcceptance(options = {}) {
 
       const run1Id = await waitForNewRunId(
         getMessages,
-        evidence.sessionId,
+        sessionId,
         knownRunIds,
         runDetectTimeoutMs,
         pollIntervalMs,
       )
       knownRunIds.add(run1Id)
       const run1 = await waitForRunTerminalIpc(getRun, run1Id, runTerminalTimeoutMs, pollIntervalMs)
-      const msgs1 = await getMessages(evidence.sessionId)
+      const msgs1 = await getMessages(sessionId)
       const run1AssistantText = extractAssistantTextForRun(msgs1.messages, run1Id)
       const events1 = await getRunEvents(run1Id)
-      const usage1 = (events1?.events ?? []).findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
-      const sessInspect1 = await inspectSession(evidence.sessionId)
-      evidence.externalThreadId = sessInspect1?.externalSessionId ?? null
-      evidence.accountIdPresent = Boolean(sessInspect1?.accountId)
+      const evList1 = Array.isArray(events1?.events) ? events1.events : []
+      const usage1 = evList1.findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
+      const deltaCount1 = evList1.filter((ev) => ev?.type === 'message.delta').length
+      const terminalEvt1 =
+        evList1.findLast?.(
+          (ev) =>
+            ev?.type === 'run.completed' ||
+            ev?.type === 'run.failed' ||
+            ev?.type === 'run.cancelled' ||
+            ev?.type === 'run.interrupted',
+        )?.type ?? null
+
+      const sessInspect1 = await inspectSession(sessionId)
+      expectedExternalThreadId = sessInspect1?.externalSessionId ?? ''
+      expectedAccountId = msgs1?.session?.accountId ?? ''
+      evidence.externalThreadBound = Boolean(expectedExternalThreadId)
 
       evidence.runs.push({
         prompt: 1,
         runId: run1Id,
         status: run1.status,
         assistantReplyMatched: /ALPHA0_OK/.test(run1AssistantText),
+        deltaEventCount: deltaCount1,
+        terminalEvent: terminalEvt1,
         usage: usage1,
       })
 
       assert.equal(run1.status, 'completed', `Prompt 1 expected completed, got ${run1.status}`)
       assert.match(run1AssistantText, /ALPHA0_OK/, 'Prompt 1 assistant message must contain ALPHA0_OK')
-      assert.ok(evidence.externalThreadId, 'External Codex thread ID must be persisted after Prompt 1')
+      assert.ok(expectedExternalThreadId, 'External Codex thread ID must be persisted after Prompt 1')
+      assert.ok(expectedAccountId, 'Session accountId must be persisted in SessionRecord after Prompt 1')
+      assert.equal(msgs1?.session?.externalSessionId, expectedExternalThreadId)
 
       // Prompt 2: Bounded streaming cancellation
       budget.consume('Prompt 2')
@@ -232,7 +252,7 @@ export async function runAlpha0LiveAcceptance(options = {}) {
 
       const run2Id = await waitForNewRunId(
         getMessages,
-        evidence.sessionId,
+        sessionId,
         knownRunIds,
         runDetectTimeoutMs,
         pollIntervalMs,
@@ -255,12 +275,22 @@ export async function runAlpha0LiveAcceptance(options = {}) {
 
       const run2 = await waitForRunTerminalIpc(getRun, run2Id, runTerminalTimeoutMs, pollIntervalMs)
       const events2 = await getRunEvents(run2Id)
-      const usage2 = (events2?.events ?? []).findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
+      const evList2 = Array.isArray(events2?.events) ? events2.events : []
+      const usage2 = evList2.findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
+      const terminalEvt2 =
+        evList2.findLast?.(
+          (ev) =>
+            ev?.type === 'run.completed' ||
+            ev?.type === 'run.failed' ||
+            ev?.type === 'run.cancelled' ||
+            ev?.type === 'run.interrupted',
+        )?.type ?? null
       evidence.runs.push({
         prompt: 2,
         runId: run2Id,
         status: run2.status,
         stopClicked,
+        terminalEvent: terminalEvt2,
         usage: usage2,
       })
 
@@ -293,15 +323,21 @@ export async function runAlpha0LiveAcceptance(options = {}) {
       const inspectSession2 = (sId) =>
         page2.evaluate((id) => window.ghostBot.inspectSession(id), sId)
 
-      const sessInspect2 = await inspectSession2(evidence.sessionId)
+      const sessInspect2 = await inspectSession2(sessionId)
       assert.equal(
         sessInspect2?.externalSessionId,
-        evidence.externalThreadId,
+        expectedExternalThreadId,
         'External Codex thread ID must persist across restart',
       )
-      assert.ok(sessInspect2?.accountId, 'Account binding must persist across restart')
+      assert.equal(sessInspect2?.resumable, true, 'Session must remain resumable after restart')
+      assert.equal(sessInspect2?.quarantined, false, 'Session must not be quarantined after clean cancel')
 
-      const msgsBefore3 = await getMessages2(evidence.sessionId)
+      const msgsBefore3 = await getMessages2(sessionId)
+      assert.equal(
+        msgsBefore3?.session?.accountId,
+        expectedAccountId,
+        'Session accountId must match original binding after restart',
+      )
       const restoredRun1Text = extractAssistantTextForRun(msgsBefore3.messages, evidence.runs[0].runId)
       assert.match(restoredRun1Text, /ALPHA0_OK/, 'Restored conversation must retain Prompt 1 assistant reply')
 
@@ -315,23 +351,45 @@ export async function runAlpha0LiveAcceptance(options = {}) {
 
       const run3Id = await waitForNewRunId(
         getMessages2,
-        evidence.sessionId,
+        sessionId,
         knownRunIds,
         runDetectTimeoutMs,
         pollIntervalMs,
       )
       knownRunIds.add(run3Id)
       const run3 = await waitForRunTerminalIpc(getRun2, run3Id, runTerminalTimeoutMs, pollIntervalMs)
-      const msgs3 = await getMessages2(evidence.sessionId)
+      const msgs3 = await getMessages2(sessionId)
+      assert.equal(
+        msgs3?.session?.accountId,
+        expectedAccountId,
+        'Session accountId must remain unchanged after Prompt 3',
+      )
+      assert.equal(
+        msgs3?.session?.externalSessionId,
+        expectedExternalThreadId,
+        'External Codex thread ID must remain unchanged after Prompt 3',
+      )
       const run3AssistantText = extractAssistantTextForRun(msgs3.messages, run3Id)
       const events3 = await getRunEvents2(run3Id)
-      const usage3 = (events3?.events ?? []).findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
+      const evList3 = Array.isArray(events3?.events) ? events3.events : []
+      const usage3 = evList3.findLast?.((ev) => ev?.type === 'usage.updated')?.payload ?? 'unavailable'
+      const deltaCount3 = evList3.filter((ev) => ev?.type === 'message.delta').length
+      const terminalEvt3 =
+        evList3.findLast?.(
+          (ev) =>
+            ev?.type === 'run.completed' ||
+            ev?.type === 'run.failed' ||
+            ev?.type === 'run.cancelled' ||
+            ev?.type === 'run.interrupted',
+        )?.type ?? null
 
       evidence.runs.push({
         prompt: 3,
         runId: run3Id,
         status: run3.status,
         assistantReplyMatched: /ALPHA0_OK/.test(run3AssistantText),
+        deltaEventCount: deltaCount3,
+        terminalEvent: terminalEvt3,
         usage: usage3,
       })
 
@@ -346,15 +404,20 @@ export async function runAlpha0LiveAcceptance(options = {}) {
     try {
       const sessRow = db
         .prepare('SELECT external_session_id, account_id, runtime_id FROM sessions WHERE id = ?')
-        .get(evidence.sessionId)
-      assert.equal(sessRow?.external_session_id, evidence.externalThreadId)
+        .get(sessionId)
+      assert.equal(sessRow?.external_session_id, expectedExternalThreadId)
+      assert.equal(sessRow?.account_id, expectedAccountId)
       assert.equal(sessRow?.runtime_id, 'codex')
-      assert.ok(sessRow?.account_id)
+      evidence.accountBindingVerified = true
 
       const dbRuns = db
         .prepare('SELECT id, status, permission_mode FROM runs WHERE session_id = ? ORDER BY created_at ASC')
-        .all(evidence.sessionId)
+        .all(sessionId)
       assert.equal(dbRuns.length, 3)
+      assert.deepEqual(
+        dbRuns.map((r) => r.id),
+        evidence.runs.map((r) => r.runId),
+      )
       assert.equal(dbRuns[0].status, 'completed')
       assert.equal(dbRuns[1].status, 'cancelled')
       assert.equal(dbRuns[2].status, 'completed')
