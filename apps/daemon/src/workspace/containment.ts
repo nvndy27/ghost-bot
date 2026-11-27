@@ -405,6 +405,7 @@ export async function listContainedDirectory(
   rootDev: number,
   rootIno: number,
   relativePath: string,
+  limits?: { maxScan: number; shouldStop: () => boolean },
 ): Promise<{
   entries: WorkspaceDirectoryEntry[]
   truncated: boolean
@@ -422,11 +423,14 @@ export async function listContainedDirectory(
 
     try {
       for await (const entry of dir) {
-        totalScanned += 1
-        if (totalScanned > WORKSPACE_LIMITS.maxDirectoryScan) {
+        if (
+          totalScanned >= Math.min(WORKSPACE_LIMITS.maxDirectoryScan, limits?.maxScan ?? Infinity) ||
+          limits?.shouldStop()
+        ) {
           truncated = true
           break
         }
+        totalScanned += 1
         if (entry.isSymbolicLink()) continue
         if (!entry.isDirectory() && !entry.isFile()) continue
         if (isSensitiveSegment(entry.name)) continue
@@ -489,20 +493,28 @@ export async function readContainedTextFile(
   rootDev: number,
   rootIno: number,
   relativePath: string,
-): Promise<{
-  content: string
-  revision: string
-  sizeBytes: number
-  name: string
-  normalizedRelativePath: string
-}> {
-  const segments = normalizeWorkspaceRelativePath(relativePath, false)
-  const fileName = segments[segments.length - 1]
+  maxBytes: number = WORKSPACE_LIMITS.maxFileBytes,
+) {
+  const fileName = normalizeWorkspaceRelativePath(relativePath, false).at(-1)!
   if (isBlockedBinaryExtension(fileName)) {
     throw new DaemonError('UNSUPPORTED_BINARY_FILE', `File '${fileName}' is a binary type`, {
       statusCode: 415,
     })
   }
+
+  const { bytes, ...file } = await readContainedFileBytes(canonicalRoot, rootDev, rootIno, relativePath, maxBytes)
+  return { ...file, content: assertValidUtf8Text(bytes, file.normalizedRelativePath) }
+}
+
+export async function readContainedFileBytes(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  relativePath: string,
+  maxBytes: number,
+) {
+  const segments = normalizeWorkspaceRelativePath(relativePath, false)
+  const fileName = segments[segments.length - 1]
 
   const parentSegments = segments.slice(0, -1)
   const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parentSegments)
@@ -536,20 +548,19 @@ export async function readContainedTextFile(
         statusCode: 403,
       })
     }
-    if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
+    if (st.size > maxBytes) {
       throw new DaemonError(
         'FILE_TOO_LARGE',
-        `File exceeds maximum readable size (${WORKSPACE_LIMITS.maxFileBytes} bytes)`,
+        `File exceeds maximum readable size (${maxBytes} bytes)`,
         { statusCode: 413 },
       )
     }
 
     const exactBuf = await readExactFromHandle(fileHandle, st.size)
-    const content = assertValidUtf8Text(exactBuf, segments.join('/'))
     const revision = computeRevisionToken(st, exactBuf)
 
     return {
-      content,
+      bytes: exactBuf,
       revision,
       sizeBytes: exactBuf.length,
       name: fileName,

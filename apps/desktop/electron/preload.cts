@@ -20,6 +20,9 @@ const bridge: GhostBotBridge = {
     ipcRenderer.invoke('ghost:workspace:resolve-context', selector),
   listWorkspaceDirectory: (params) =>
     ipcRenderer.invoke('ghost:workspace:list-dir', params),
+  searchWorkspaceFiles: (input) => ipcRenderer.invoke('ghost:workspace:search', input),
+  previewWorkspaceFile: (input) => ipcRenderer.invoke('ghost:workspace:preview', input),
+  cancelWorkspaceDiscovery: (input) => ipcRenderer.invoke('ghost:workspace:cancel-discovery', input),
   readWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:read-file', params),
   saveWorkspaceFile: (params) =>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
 import { AppSettingsSchema } from '@ghost-bot/shared-types/ipc'
@@ -33,6 +33,7 @@ import { ScopedTerminalModal } from './components/ScopedTerminalModal.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
 import { LeftSidebar, orderSidebarItems } from './components/LeftSidebar.tsx'
 import { MessageList } from './components/MessageList.tsx'
+import type { WorkspaceDraftSelection } from './components/workspace/workspaceDiscoveryClient.ts'
 import { RightPanel } from './components/RightPanel.tsx'
 import { SettingsModal } from './components/SettingsModal.tsx'
 import { TeamEditorModal } from './components/TeamEditorModal.tsx'
@@ -165,7 +166,7 @@ export function App() {
   const [inspectionBySession, setInspectionBySession] = useState<
     Record<string, SessionInspectionResponse | null>
   >({})
-  const [draft, setDraft] = useState<string>('')
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
@@ -219,6 +220,32 @@ export function App() {
   const activeTeam = teams.find((t) => t.id === activeTeamId) ?? null
   const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
   const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
+  const draftKey = activeSessionId ? `session:${activeSessionId}` : `bot:${activeBotId ?? ''}`
+  const draft = drafts[draftKey] ?? ''
+  const setDraft = (text: string) => setDrafts((previous) => ({ ...previous, [draftKey]: text }))
+  const draftContext = useMemo(() => ({ activeBotId, activeSessionId, activeTeamId, updatedAt: activeBot?.updatedAt }),
+    [activeBotId, activeSessionId, activeTeamId, activeBot?.updatedAt])
+  const draftContextRef = useRef(draftContext)
+  draftContextRef.current = draftContext
+
+  const addSelectionToDraft = async (selection: WorkspaceDraftSelection) => {
+    const bridge = window.ghostBot
+    if (!bridge || activeTeamId || !activeSessionId || selection.botId !== activeBotId ||
+        draftContextRef.current !== draftContext || !selection.text.trim() ||
+        new TextEncoder().encode(selection.text).length > 16 * 1024) {
+      throw new Error('The selection is unavailable for this conversation')
+    }
+    const grant = await bridge.resolveWorkspaceContext({ botId: selection.botId })
+    if (draftContextRef.current !== draftContext ||
+        !grant.authorized || grant.workspaceId !== selection.workspaceId ||
+        grant.authGeneration !== selection.authGeneration) {
+      throw new Error('The workspace or conversation changed; select the text again')
+    }
+    setDrafts((previous) => {
+      const existing = previous[draftKey] ?? ''
+      return { ...previous, [draftKey]: existing ? `${existing}\n\n${selection.text}` : selection.text }
+    })
+  }
   const activeBotIdRef = useRef<string | null>(activeBotId)
   const activeSessionIdRef = useRef<string | null>(activeSessionId)
   const activeTeamIdRef = useRef<string | null>(activeTeamId)
@@ -1810,6 +1837,7 @@ export function App() {
             />
           ) : (
             <RightPanel
+              onAddSelectionToDraft={activeSessionId ? addSelectionToDraft : undefined}
               key={JSON.stringify([activeBot?.id, activeBot?.updatedAt, activeBot?.workspacePath, activeBot?.permission])}
               activeTab={prefs.workspaceTab}
               onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}

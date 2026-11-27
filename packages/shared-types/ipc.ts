@@ -1,3 +1,8 @@
+import {
+  WorkspaceDiscoveryOperationSchema, WorkspacePreviewInputSchema, WorkspaceSearchInputSchema,
+  type WorkspacePreviewResult, type WorkspaceSearchResult,
+} from '@ghost-bot/shared-types/workspace-discovery'
+export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
 
 export const IPC_CHANNELS = {
@@ -15,6 +20,9 @@ export const IPC_CHANNELS = {
   WORKSPACE_AUTHORIZE_READ: 'ghost:workspace:authorize-read',
   WORKSPACE_RESOLVE_CONTEXT: 'ghost:workspace:resolve-context',
   WORKSPACE_LIST_DIR: 'ghost:workspace:list-dir',
+  WORKSPACE_SEARCH: 'ghost:workspace:search',
+  WORKSPACE_PREVIEW: 'ghost:workspace:preview',
+  WORKSPACE_CANCEL_DISCOVERY: 'ghost:workspace:cancel-discovery',
   WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
   WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
   SETTINGS_GET: 'ghost:settings:get',
@@ -2263,6 +2271,9 @@ export interface GhostBotBridge {
   setActiveBot(id: string | null): Promise<{ activeBotId: string | null }>
   importAvatarSvg(rawSvg: string, label?: string): Promise<ImportAvatarSvgResponse>
   pickWorkspace(): Promise<WorkspacePickResponse>
+  searchWorkspaceFiles(input: z.input<typeof WorkspaceSearchInputSchema>): Promise<WorkspaceSearchResult>
+  previewWorkspaceFile(input: z.input<typeof WorkspacePreviewInputSchema>): Promise<WorkspacePreviewResult>
+  cancelWorkspaceDiscovery(input: z.input<typeof WorkspaceDiscoveryOperationSchema>): Promise<boolean>
   authorizeWorkspaceRead(botId: string): Promise<boolean>
   resolveWorkspaceContext(selector: WorkspaceSelectorIpcInput): Promise<WorkspaceContextIpcResponse>
   listWorkspaceDirectory(

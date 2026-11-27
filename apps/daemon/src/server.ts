@@ -89,6 +89,10 @@ import {
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceReadFileIpcInputSchema,
   WorkspaceReadGrantSchema,
+  WorkspaceDiscoveryOperationSchema,
+  WorkspacePreviewInputSchema,
+  WorkspaceSearchInputSchema,
+  type PersonalWorkspaceAccessSchema,
   WorkspaceSelectorIpcSchema,
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
@@ -126,6 +130,7 @@ import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
 import { LOCAL_USER_ID } from './memory/service.ts'
+import { WorkspaceDiscoveryOperations } from './workspace/discovery-operations.ts'
 import { WorkspaceFilesService } from './workspace/files-service.ts'
 
 export interface DaemonServerOptions {
@@ -210,6 +215,7 @@ export class GhostBotDaemon {
   private computerUseService: ComputerUseService | null = null
   private terminalService: ScopedTerminalService | null = null
   private skillsService: LocalSkillsService | null = null
+  private workspaceDiscovery: WorkspaceDiscoveryOperations | null = null
   private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
@@ -369,6 +375,10 @@ export class GhostBotDaemon {
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
     this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
+    this.workspaceDiscovery = new WorkspaceDiscoveryOperations(
+      this.workspaceFilesService,
+      (input) => this.requireDiscoveryGrant(input),
+    )
     this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
     this.registerPersistentProviderAdapters()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
@@ -941,7 +951,22 @@ export class GhostBotDaemon {
     })
   }
 
+  private async requireDiscoveryGrant(input: z.infer<typeof PersonalWorkspaceAccessSchema>): Promise<void> {
+    const context = await this.workspaceFilesService?.resolveContext({ botId: input.botId })
+    const grant = this.workspaceReadGrants.get(input.botId)
+    if (!context?.authorized ||
+        context.workspaceId !== input.workspaceId || context.authGeneration !== input.authGeneration ||
+        grant?.workspaceId !== input.workspaceId || grant.authGeneration !== input.authGeneration) {
+      throw new DaemonError('WORKSPACE_UNAUTHORIZED', 'Workspace authorization changed or read access has not been granted', {
+        statusCode: 403,
+      })
+    }
+  }
+
   async stop(): Promise<void> {
+    this.workspaceDiscovery?.abortAll()
+    this.workspaceDiscovery = null
+    this.workspaceReadGrants.clear()
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
       this.terminalService = null
@@ -968,7 +993,6 @@ export class GhostBotDaemon {
     this.botRepo = null
     this.settingsRepo = null
     this.sessionRepo = null
-    this.workspaceReadGrants.clear()
     this.workspaceFilesService = null
     if (this.memoryService) {
       this.memoryService.close()
@@ -1648,6 +1672,7 @@ export class GhostBotDaemon {
             })
           }
           const updatedBot = await repo.updateBot(parsed.data)
+          this.workspaceDiscovery?.abortForBot(idCheck.data)
           if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
             this.workspaceReadGrants.delete(idCheck.data)
           }
@@ -1671,6 +1696,7 @@ export class GhostBotDaemon {
             },
           })
           this.workspaceReadGrants.delete(idCheck.data)
+          this.workspaceDiscovery?.abortForBot(idCheck.data)
           await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
@@ -1808,6 +1834,35 @@ export class GhostBotDaemon {
           const result = await this.workspaceFilesService.readFile(input)
           sendJson(res, 200, { ...result, readOnly: true })
           return
+        }
+        const discovery = this.workspaceDiscovery
+        if (req.method === 'POST' && discovery) {
+          if (url.pathname === '/workspace/cancel-discovery') {
+            const input = await readWorkspaceRequest(req, WorkspaceDiscoveryOperationSchema)
+            sendJson(res, 200, await discovery.cancel(input))
+            return
+          }
+          if (url.pathname === '/workspace/search' || url.pathname === '/workspace/preview') {
+            const controller = new AbortController()
+            const abort = () => controller.abort()
+            res.once('close', abort)
+            try {
+              const result = url.pathname === '/workspace/search'
+                ? await discovery.search(await readWorkspaceRequest(req, WorkspaceSearchInputSchema), controller.signal)
+                : await discovery.preview(await readWorkspaceRequest(req, WorkspacePreviewInputSchema), controller.signal)
+              if (!res.destroyed) sendJson(res, 200, result)
+            } catch (error) {
+              if (!res.destroyed) {
+                if (error instanceof Error && error.name === 'AbortError') {
+                  throw new DaemonError('DISCOVERY_CANCELLED', 'Workspace operation was cancelled', { statusCode: 409 })
+                }
+                throw error
+              }
+            } finally {
+              res.off('close', abort)
+            }
+            return
+          }
         }
         if (req.method === 'POST' && url.pathname === '/workspace/save') {
           throw new DaemonError('WORKSPACE_WRITES_DISABLED', 'Workspace file saving is disabled pending write-boundary verification', {

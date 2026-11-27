@@ -16,6 +16,11 @@
 ## Shared baseline review
 
 - Independent review of PR #20 and the convergence candidate remains pending. The read-only Git proposal is independent of the filesystem write gate and still requires maintainer approval.
+- Alpha.2C.1 search, preview and chat draft insertion require Agent 1 shared IPC and composer integration. PDF previews require compatible host Poppler, prlimit and Bubblewrap with isolated user and network namespaces. Preview is unavailable when those capabilities cannot be established.
+
+## Alpha.2C.1 integration
+
+- The shared discovery candidate is provisionally stacked on PR #21. Daemon IPC is tested. Agent 2 owns combined Electron acceptance, including PDF and selection-to-draft. Save, group filesystem access and Git mutation gates are unchanged.
 
 ## Existing issues
 
