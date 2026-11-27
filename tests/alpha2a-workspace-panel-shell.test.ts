@@ -198,7 +198,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
         memberBotIds: [bot.id, bots[1].id],
       })
     }, workspace)
-    await page.reload()
+    await page.reload({ waitUntil: 'commit' })
     await page.getByTestId('workspace-tab-files').click()
     await page.getByText('Allow read access to this bot workspace', { exact: false }).waitFor()
     const authorize = page.getByRole('button', { name: 'Allow read access', exact: true })
@@ -265,7 +265,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       page.evaluate((target) => window.ghostBot!.readWorkspaceFile(target), original),
       /authorization changed/i,
     )
-    await page.reload()
+    await page.reload({ waitUntil: 'commit' })
     await page.getByTestId('workspace-files-unavailable').waitFor()
     assert.equal(await editor.count(), 0)
 
@@ -284,7 +284,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       window.ghostBot!.resolveWorkspaceContext({ botId })
     ), original.botId)
     assert.equal(restoredContext.authorized, false, 'Restoring a root must not revive the old grant')
-    await page.reload()
+    await page.reload({ waitUntil: 'commit' })
     await authorize.click()
     await page.getByTestId('workspace-tree-entry-sample.txt').waitFor()
     await app.close()
