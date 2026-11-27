@@ -67,12 +67,22 @@ try {
     const count = await page.locator('[role="option"]', { hasText: 'E2E Edited Bot' }).count()
     assert.equal(count, 0, 'Deleted bot must not reappear after restart')
 
+    const editDialog = page.getByRole('dialog', { name: 'Edit bot' })
     for (let i = 0; i < 6; i += 1) {
+      const botOptions = page.locator('[role="option"]')
+      const beforeCount = await botOptions.count()
+      if (beforeCount === 0) break
       const editBtn = page.getByRole('button', { name: 'Edit bot' })
-      if ((await editBtn.count()) === 0) break
+      await editBtn.waitFor({ state: 'visible' })
       await editBtn.click()
+      await editDialog.waitFor({ state: 'visible' })
       await page.getByRole('button', { name: 'Delete' }).click()
       await page.getByRole('button', { name: 'Confirm delete' }).click()
+      await editDialog.waitFor({ state: 'hidden' })
+      await page.waitForFunction(
+        (expected) => document.querySelectorAll('[role="option"]').length === expected,
+        beforeCount - 1,
+      )
     }
     await page.waitForSelector('text=No bots yet')
   } finally {

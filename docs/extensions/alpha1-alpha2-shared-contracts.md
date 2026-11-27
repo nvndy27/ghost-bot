@@ -40,7 +40,7 @@
 | Contract | Owner / Proposer | Status | Scope & Notes |
 |---|---|---|---|
 | **Private task identity** (`taskId`, `parentTeamId`, `parentRunId`, `taskSessionId`) | Agent 1 (Alpha.1) | **Proposed** | Dedicated user-visible Private Task Chat linked to group/run; never injected into unrelated personal threads. |
-| **Active workspace panel tab** (`overview \| files \| changes \| preview \| output`) | Agent 2 proposes -> Agent 1 wires in `preferences.ts` / `App.tsx` | **Requires Agent 2 & Agent 1 Agreement** | Default `overview` preserves existing `RightPanel` + `TeamRightPanel` behavior. |
+| **Active workspace panel tab** (`overview \| files \| changes \| browser \| output`) | Agent 2 (`workspaceTabs.ts` in PR #16) -> Agent 1 wires persistence in `preferences.ts` / `App.tsx` | **Agreed in PR #16 (`WorkspaceTabId`), Persistence Pending** | Default `overview` preserves existing `RightPanel` + `TeamRightPanel` behavior; aligned to Agent 2's `WorkspaceTabId` in PR `#16`. |
 | **Workspace scope & authorization** (`botId \| taskId`, canonical `workspacePath`, `permissionMode`) | Agent 2 proposes -> Agent 1 registers IPC/routes | **Requires Agent 2 & Agent 1 Agreement** | Daemon-enforced `lstatSync`+`realpathSync` containment; `read-only` blocks writes; fail closed on missing/untrusted root. |
 | **Artifact references** (`path`, `kind`, `sessionId`, `runId`, `taskId`) | Agent 1 & Agent 2 | **Requires Agent 2 Agreement** | Stable relative paths under authorized workspace root for group summaries and Workspace Panel navigation. |
 | **Error & unavailable states** | Agent 1 & Agent 2 | **Proposed** | Explicit gated/unavailable badges and non-color-only status text; never fabricate files, diffs, quotas, or output. |
@@ -85,7 +85,7 @@
 ## 6. Upcoming Parallel Assignments (Planning Only — Not Started)
 
 - **Agent 1 — Alpha.1A (Bot & Conversation Management):** Persistent pin/unpin, sidebar ordering, search, multiple conversation navigation, provider-only sidebar labels, unread/task completion indicators, and preservation of all bot identities/names.
-- **Agent 2 — Alpha.2A (Workspace Panel Foundation):** Preserve existing Overview functionality, establish Workspace Panel tab structure (`Overview`, `Files`, `Changes`, `Preview`, `Output`), active bot/task workspace context, validated workspace authorization boundaries, and shared panel state/preferences.
+- **Agent 2 — Alpha.2A (Workspace Panel Foundation):** Preserve existing Overview functionality, establish Workspace Panel tab structure (`Overview`, `Files`, `Changes`, `Browser`, `Output`), active bot/task workspace context, validated workspace authorization boundaries, and shared panel state/preferences.
 
 ---
 
