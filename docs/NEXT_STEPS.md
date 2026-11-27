@@ -1,5 +1,29 @@
 # Next steps
 
+## Accepted release baseline — 2026-11-28
+
+PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
+
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. Alpha.4 UI acceptance requires maintainer scope approval before final candidate freeze and a single final package build and verification cycle.
+
+## Release sequence
+
+1. Complete Alpha.3 readiness using Agent 2's Alpha.3A dependency and platform assessment and the Alpha.3B capability and provider plans.
+2. Obtain maintainer approval of Alpha.4 UI acceptance scope, then record its actual verdict.
+3. Freeze one final release candidate SHA and its supported platforms, capabilities and limitations.
+4. Agent 2 builds and verifies the final packages once from that SHA, recording checksums, dependencies, artifact-specific results and remaining platform gaps.
+5. The maintainer approves the release and distribution audience after reviewing the checklist. v0.1 remains unreleased until that decision.
+
+Provider plans are proposals for later authorization. Additional live requests, credentials, runtime installation and model downloads require separate authorization. Unavailable optional providers remain visibly unavailable.
+
+## Public binary distribution
+
+Complete the applicable rights, dependency notices, artifact SBOM, secret/history review and signing/provenance requirements tracked in [open-source readiness](OPEN_SOURCE_READINESS.md). Resolve or explicitly limit the advertised platform scope using Agent 2's packaging evidence and Issue #3. Internal alpha readiness and public binary distribution have distinct approval gates.
+
+## Archived milestone handoffs
+
+The following entries preserve the plans and handoffs that preceded PR #46. Pending-review and integration instructions below describe their historical checkpoints. The accepted release baseline and current release sequence above supersede them. Use the new bounded provider plan for future acceptance.
+
 ## Unified Alpha.1 and Alpha.2 acceptance
 
 Review the exact unified Draft PR head and its integrated offline evidence. Agent 2 owns the focused independent verdict and the hosted Chromium sandbox prerequisite. The maintainer owns visual approval of the Group composer and Workspace tabs. Required CI must pass on the reviewed head. Keep the executable packaging harness for fresh Alpha.3 artifacts after scope is agreed.
