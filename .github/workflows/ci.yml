@@ -45,9 +45,11 @@ jobs:
       - name: Build desktop and worker fixtures
         id: build
         run: pnpm build
+      # Browser/daemon integration fixtures are resource-intensive; serialize test files
+      # on hosted runners. Keep every test and production RPC deadline unchanged.
       - name: Root offline tests
         timeout-minutes: 12
-        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m node --test --test-timeout=120000 --test-concurrency=2 --test-reporter=tap tests/*.test.ts
+        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m node --test --test-timeout=120000 --test-concurrency=1 --test-reporter=tap tests/*.test.ts
       - name: Workspace offline tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 12
