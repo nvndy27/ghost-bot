@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -66,7 +66,7 @@ test('Alpha.2C.2 WorkspaceFilesService: atomic create, no-clobber rename, and qu
       (err: unknown) => err instanceof DaemonError && err.code === 'FILE_EXISTS',
     )
 
-    // No-clobber rename rejects existing target, succeeds on absent target
+    // WRITE-03: rename is fail-closed gated with WORKSPACE_RENAME_GATED (501)
     await assert.rejects(
       () =>
         service.renameEntry({
@@ -74,33 +74,27 @@ test('Alpha.2C.2 WorkspaceFilesService: atomic create, no-clobber rename, and qu
           workspaceId: ctx.workspaceId!,
           authGeneration: ctx.authGeneration!,
           fromPath: 'notes/new.txt',
-          toPath: 'existing.txt',
+          toPath: 'notes/renamed.txt',
           expectedRevision: fileRes.revision!,
         }),
-      (err: unknown) => err instanceof DaemonError && err.code === 'FILE_EXISTS',
+      (err: unknown) => err instanceof DaemonError && err.code === 'WORKSPACE_RENAME_GATED' && err.statusCode === 501,
     )
+    assert.equal(await readFile(join(ws, 'notes', 'new.txt'), 'utf8'), 'hello\n')
 
-    const renamed = await service.renameEntry({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      fromPath: 'notes/new.txt',
-      toPath: 'notes/renamed.txt',
-      expectedRevision: fileRes.revision!,
-    })
-    assert.equal(await readFile(join(ws, 'notes', 'renamed.txt'), 'utf8'), 'hello\n')
-
-    // Quarantined delete moves file to .ghost-bot-trash (hidden from listing)
+    // WRITE-04: Quarantined delete moves file to .ghost-bot-trash (hidden from listing) & returns quarantinePath
     const deleted = await service.deleteFile({
       botId: 'bot-w',
       workspaceId: ctx.workspaceId,
       authGeneration: ctx.authGeneration,
-      relativePath: 'notes/renamed.txt',
-      expectedRevision: renamed.revision,
+      relativePath: 'notes/new.txt',
+      expectedRevision: fileRes.revision!,
     })
     assert.equal(deleted.quarantined, true)
+    assert.ok(deleted.quarantinePath?.startsWith('.ghost-bot-trash/'))
     const trashEntries = await readdir(join(ws, '.ghost-bot-trash'))
     assert.equal(trashEntries.length, 1)
+    const trashStat = await stat(join(ws, '.ghost-bot-trash'))
+    assert.equal(trashStat.mode & 0o077, 0)
     const listedRoot = await service.listDirectory({
       botId: 'bot-w',
       workspaceId: ctx.workspaceId,
@@ -108,6 +102,54 @@ test('Alpha.2C.2 WorkspaceFilesService: atomic create, no-clobber rename, and qu
       relativePath: '',
     })
     assert.equal(listedRoot.entries.some((e) => e.name === '.ghost-bot-trash'), false)
+
+    // WRITE-04: Unsafe .ghost-bot-trash permissions (0o777) fail closed
+    await writeFile(join(ws, 'notes', 'keep.txt'), 'keep\n', 'utf8')
+    const keepOpened = await service.readFile({
+      botId: 'bot-w',
+      workspaceId: ctx.workspaceId,
+      authGeneration: ctx.authGeneration,
+      relativePath: 'notes/keep.txt',
+    })
+    await chmod(join(ws, '.ghost-bot-trash'), 0o777)
+    await assert.rejects(
+      () =>
+        service.deleteFile({
+          botId: 'bot-w',
+          workspaceId: ctx.workspaceId!,
+          authGeneration: ctx.authGeneration!,
+          relativePath: 'notes/keep.txt',
+          expectedRevision: keepOpened.revision,
+        }),
+      (err: unknown) =>
+        err instanceof DaemonError && err.code === 'QUARANTINE_UNSAFE_PERMISSIONS' && err.statusCode === 403,
+    )
+    assert.equal(await readFile(join(ws, 'notes', 'keep.txt'), 'utf8'), 'keep\n')
+    await chmod(join(ws, '.ghost-bot-trash'), 0o700)
+
+    // WRITE-01: Write grant revocation serialized via writeGrantChecker + withOwnerMutationBarrier
+    let writeAllowed = true
+    service.setWriteGrantChecker(() => {
+      if (!writeAllowed) {
+        throw new DaemonError('WORKSPACE_WRITE_UNAUTHORIZED', 'Write grant revoked', { statusCode: 403 })
+      }
+    })
+    await service.withOwnerMutationBarrier('bot-w', async () => {
+      writeAllowed = false
+    })
+    await assert.rejects(
+      () =>
+        service.createEntry({
+          botId: 'bot-w',
+          workspaceId: ctx.workspaceId!,
+          authGeneration: ctx.authGeneration!,
+          relativePath: 'notes/revoked.txt',
+          kind: 'file',
+          content: 'blocked',
+        }),
+      (err: unknown) =>
+        err instanceof DaemonError && err.code === 'WORKSPACE_WRITE_UNAUTHORIZED' && err.statusCode === 403,
+    )
   } finally {
     db.close()
     await rm(root, { recursive: true, force: true })
@@ -236,14 +278,11 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
     )
     assert.equal(await readFile(join(ws, 'created.txt'), 'utf8'), 'updated-content\n')
 
-    // Rename
-    await page.getByTestId('editor-rename-btn').click()
-    await page.getByTestId('editor-rename-input').fill('renamed.txt')
-    await page.getByTestId('editor-rename-confirm-btn').click()
-    await page.waitForSelector('[data-testid="workspace-tree-entry-renamed.txt"]')
+    // WRITE-03: Rename button is gated/removed from editor toolbar
+    assert.equal(await page.getByTestId('editor-rename-btn').count(), 0)
 
     // External modification triggers conflict & preserves dirty draft
-    await writeFile(join(ws, 'renamed.txt'), 'external-change\n', 'utf8')
+    await writeFile(join(ws, 'created.txt'), 'external-change\n', 'utf8')
     await textarea.fill('dirty-draft\n')
     await page.getByTestId('editor-save-btn').click()
     await page.waitForSelector('[data-testid="editor-conflict-banner"]')
@@ -259,7 +298,7 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
     await page.getByTestId('editor-delete-btn').click()
     await page.getByTestId('editor-delete-confirm-btn').click()
     await page.waitForFunction(
-      () => !document.querySelector('[data-testid="workspace-tree-entry-renamed.txt"]'),
+      () => !document.querySelector('[data-testid="workspace-tree-entry-created.txt"]'),
     )
 
     // Revoke write access and verify mutation fails closed

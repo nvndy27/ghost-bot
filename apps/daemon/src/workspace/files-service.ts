@@ -74,9 +74,18 @@ export interface AuthorizedWorkspace {
 export class WorkspaceFilesService {
   private readonly db: DatabaseHandle
   private readonly fileLocks = new Map<string, Promise<unknown>>()
+  private writeGrantChecker: ((auth: AuthorizedWorkspace) => void) | null = null
 
   constructor(db: DatabaseHandle) {
     this.db = db
+  }
+
+  setWriteGrantChecker(checker: (auth: AuthorizedWorkspace) => void): void {
+    this.writeGrantChecker = checker
+  }
+
+  async withOwnerMutationBarrier<T>(ownerId: string, fn: () => Promise<T> | T): Promise<T> {
+    return this.withFileLock(`owner-grant::${ownerId}`, async () => fn())
   }
 
   async resolveContext(rawInput: unknown): Promise<WorkspaceContextResponse> {
@@ -286,25 +295,9 @@ export class WorkspaceFilesService {
             if (hooks?.onBeforeCommit) {
               await hooks.onBeforeCommit()
             }
-            // Linearize authorization revalidation right before atomic rename commit.
-            const rechecked = await this.authorizeWorkspace(input)
-            if (!rechecked.canWrite) {
-              throw new DaemonError(
-                'WORKSPACE_READ_ONLY',
-                `Workspace became read-only ('${rechecked.permissionMode}') during save`,
-                { statusCode: 403 },
-              )
-            }
-            if (
-              rechecked.workspaceId !== auth.workspaceId ||
-              rechecked.authGeneration !== auth.authGeneration
-            ) {
-              throw new DaemonError(
-                'WORKSPACE_CONTEXT_MISMATCH',
-                'Workspace authorization changed during save; aborting commit',
-                { statusCode: 409 },
-              )
-            }
+            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
+              await this.assertMutationStillAuthorized(input, auth)
+            })
           },
         },
       )
@@ -341,7 +334,9 @@ export class WorkspaceFilesService {
           injectWriteError: hooks?.injectWriteError,
           onBeforeCommit: async () => {
             if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
-            await this.assertMutationStillAuthorized(input, auth)
+            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
+              await this.assertMutationStillAuthorized(input, auth)
+            })
           },
         },
       )
@@ -357,40 +352,16 @@ export class WorkspaceFilesService {
 
   async renameEntry(
     rawInput: unknown,
-    hooks?: SaveHookOptions,
+    _hooks?: SaveHookOptions,
   ): Promise<WorkspaceRenameEntryResponse> {
-    const input = WorkspaceRenameEntryInputSchema.parse(rawInput)
-    const fromNorm = normalizeWorkspaceRelativePath(input.fromPath, false).join('/')
-    const toNorm = normalizeWorkspaceRelativePath(input.toPath, false).join('/')
-    const preAuth = await this.authorizeMutationTarget(input)
-    const lockKeys = [
-      `${preAuth.canonicalRoot}/${fromNorm}`,
-      `${preAuth.canonicalRoot}/${toNorm}`,
-    ].sort()
-
-    return this.withMultiFileLock(lockKeys, async () => {
-      const auth = await this.authorizeMutationTarget(input)
-      const res = await renameContainedFile(
-        auth.canonicalRoot,
-        auth.rootDev,
-        auth.rootIno,
-        fromNorm,
-        toNorm,
-        input.expectedRevision,
-        {
-          onBeforeCommit: async () => {
-            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
-            await this.assertMutationStillAuthorized(input, auth)
-          },
-        },
-      )
-      return {
-        workspaceId: auth.workspaceId,
-        fromPath: res.normalizedFromPath,
-        toPath: res.normalizedToPath,
-        revision: res.revision,
-      }
-    })
+    WorkspaceRenameEntryInputSchema.parse(rawInput)
+    const res = await renameContainedFile('', 0, 0, '', '', '')
+    return {
+      workspaceId: '',
+      fromPath: res.normalizedFromPath,
+      toPath: res.normalizedToPath,
+      revision: res.revision,
+    }
   }
 
   async deleteFile(
@@ -413,7 +384,9 @@ export class WorkspaceFilesService {
         {
           onBeforeCommit: async () => {
             if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
-            await this.assertMutationStillAuthorized(input, auth)
+            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
+              await this.assertMutationStillAuthorized(input, auth)
+            })
           },
         },
       )
@@ -421,6 +394,7 @@ export class WorkspaceFilesService {
         workspaceId: auth.workspaceId,
         relativePath: res.normalizedRelativePath,
         quarantined: res.quarantined,
+        quarantinePath: res.quarantinePath,
       }
     })
   }
@@ -453,6 +427,7 @@ export class WorkspaceFilesService {
         { statusCode: 403 },
       )
     }
+    this.writeGrantChecker?.(auth)
     return auth
   }
 
@@ -478,6 +453,7 @@ export class WorkspaceFilesService {
         { statusCode: 409 },
       )
     }
+    this.writeGrantChecker?.(rechecked)
   }
 
   private async withMultiFileLock<T>(keys: string[], fn: () => Promise<T>): Promise<T> {

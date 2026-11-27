@@ -190,6 +190,7 @@ export const WorkspaceDeleteFileResponseSchema = z.object({
   workspaceId: z.string(),
   relativePath: z.string(),
   quarantined: z.boolean(),
+  quarantinePath: z.string().optional(),
 })
 
 export type WorkspaceCreateEntryResponse = z.infer<typeof WorkspaceCreateEntryResponseSchema>

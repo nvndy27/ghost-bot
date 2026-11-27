@@ -387,6 +387,20 @@ export class GhostBotDaemon {
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
     this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
+    this.workspaceFilesService.setWriteGrantChecker((auth) => {
+      if (auth.ownerKind !== 'bot') {
+        throw new DaemonError(
+          'WORKSPACE_WRITE_UNAUTHORIZED',
+          'Group and task workspace writes remain gated',
+          { statusCode: 403 },
+        )
+      }
+      this.assertActiveWriteGrant({
+        botId: auth.ownerId,
+        workspaceId: auth.workspaceId,
+        authGeneration: auth.authGeneration,
+      })
+    })
     this.workspaceDiscovery = new WorkspaceDiscoveryOperations(
       this.workspaceFilesService,
       (input) => this.requireDiscoveryGrant(input),
@@ -1949,7 +1963,11 @@ export class GhostBotDaemon {
         }
         if (req.method === 'POST' && url.pathname === '/workspace/revoke-write') {
           const { botId } = await readWorkspaceRequest(req, WorkspaceSelectorIpcSchema)
-          if (botId) this.workspaceWriteGrants.delete(botId)
+          if (botId) {
+            await this.workspaceFilesService.withOwnerMutationBarrier(botId, () => {
+              this.workspaceWriteGrants.delete(botId)
+            })
+          }
           sendJson(res, 200, true)
           return
         }

@@ -249,19 +249,6 @@ export function WorkspaceCodeEditor({
               >
                 {activeTab.saving ? 'Saving...' : 'Save'}
               </button>
-              {!activeTab.readOnly && onRenameFile && (
-                <button
-                  type="button"
-                  className="gb-workspace-icon-btn"
-                  onClick={() => {
-                    setRenamingPath(activeTab.relativePath)
-                    setRenameTarget(activeTab.relativePath)
-                  }}
-                  data-testid="editor-rename-btn"
-                >
-                  Rename
-                </button>
-              )}
               {!activeTab.readOnly && onDeleteFile && (
                 <button
                   type="button"
