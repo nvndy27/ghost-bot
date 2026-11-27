@@ -133,10 +133,15 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const initialWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     const resizeHandle = page.getByRole('separator', { name: 'Resize right workspace panel' })
     await resizeHandle.focus()
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('ArrowLeft')
+    for (const steps of [1, 2]) {
+      await resizeHandle.press('ArrowLeft')
+      const expectedWidth = Math.min(420, initialWidth + 16 * steps)
+      await page.waitForFunction((width) => {
+        const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
+        return panel?.getBoundingClientRect().width === width
+      }, expectedWidth)
+    }
     const resizedWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
-    assert.ok(resizedWidth > initialWidth, `Expected right panel width to increase on ArrowLeft (${initialWidth} -> ${resizedWidth})`)
 
     // 6. Maximize and restore (button + Escape)
     const maxBtn = page.getByTestId('workspace-maximize-btn')
