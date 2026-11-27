@@ -120,12 +120,15 @@ export class WorkspaceFilesService {
     }
   }
 
-  async previewFile(rawInput: unknown): Promise<WorkspacePreviewResult> {
+  async previewFile(rawInput: unknown, signal?: AbortSignal): Promise<WorkspacePreviewResult> {
     const input = WorkspacePreviewInputSchema.parse(rawInput)
+    signal?.throwIfAborted()
     const workspace = await this.validateDiscoveryWorkspace(input)
-    const preview = await previewAuthorizedWorkspaceFile(workspace, input.relativePath)
+    const preview = await previewAuthorizedWorkspaceFile(workspace, input.relativePath, input.page, signal)
     await this.validateDiscoveryWorkspace(input)
+    signal?.throwIfAborted()
     return {
+      operationId: input.operationId,
       workspaceId: input.workspaceId,
       authGeneration: input.authGeneration,
       relativePath: input.relativePath,

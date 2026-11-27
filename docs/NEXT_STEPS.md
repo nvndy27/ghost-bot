@@ -5,7 +5,7 @@
 1. Review the history-preserving integration candidate on `integration/alpha2ab-shared-wiring`. Coordinate disposition of draft PRs #16 and #18 with their owner.
 2. Agent 2 reviews the read contract and the focused Electron acceptance. A native directory confirmation grants daemon-lifetime read access for the persisted personal bot root identity. List/read validate both workspace ID and the grant’s authorization generation. Updating or restoring a workspace or changing its permission requires fresh confirmation. Group access requires an explicit authorized task scope. The saved tab is a UI preference.
 3. Keep save disabled until the write boundary can prevent external revision and staged-entry races and can enforce the intended approval and task scope. Define the artifact reference contract when authorized task scope is available.
-4. Alpha.2C.1 has a separate authorized feature branch. Agent 1 reviews the search, preview, cancellation and composer interface handoff and wires shared boundaries. Complete an isolated PDF preview path and validate actual Electron search, preview and draft insertion before Alpha.2C.1 acceptance.
+4. Alpha.2C.1 has a separate authorized feature branch. Agent 1 reviews the search, preview, cancellation and composer interface handoff and wires shared boundaries. Wire the isolated PDF page renderer through the same guarded preview route. Validate actual Electron search, cancellation, previews and draft insertion on the refreshed convergence baseline before Alpha.2C.1 acceptance.
 
 ## Alpha.0B — Integrated Native Chat Release Candidate (Historical Handoff)
 

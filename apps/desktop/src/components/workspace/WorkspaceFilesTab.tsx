@@ -64,6 +64,10 @@ export function WorkspaceFilesTab({
   const activeKeyRef = useRef<string | null>(null)
   useEffect(() => {
     activeKeyRef.current = contextKey
+  useEffect(() => {
+    activeKeyRef.current = contextKey
+    return () => { activeKeyRef.current = '' }
+  }, [contextKey])
     return () => {
       activeKeyRef.current = null
     }
@@ -368,6 +372,24 @@ export function WorkspaceFilesTab({
   }
 
 
+  async function requireCurrentAccess() {
+    if (!access || activeKeyRef.current !== contextKey) {
+      throw new Error('The originating workspace is no longer active.')
+    }
+    const context = await transport!.resolveContext({ botId: access.botId })
+    const latest = store.getActiveWorkspaceState(contextKey)
+    if (activeKeyRef.current !== contextKey || latest?.workspaceId !== access.workspaceId ||
+        latest.contextInfo.authGeneration !== access.authGeneration) {
+      throw new Error('The originating workspace is no longer active.')
+    }
+    if (!context.authorized || context.workspaceId !== access.workspaceId ||
+        context.authGeneration !== access.authGeneration) {
+      void refreshContextAndRoot()
+      throw new Error('Workspace authorization changed. Refresh the workspace and try again.')
+    }
+    return access
+  }
+
   return (
     <div className="gb-files-tab" data-testid="workspace-files-tab">
       <div className="gb-files-meta-bar">
@@ -385,7 +407,10 @@ export function WorkspaceFilesTab({
 
       {visible && access && (discovery ? (
         <WorkspaceSearch key={accessKey} access={access} transport={discovery}
-          onOpenResult={(hit) => selectFile(hit.relativePath, hit.lineNumber)} />
+          onOpenResult={async (hit) => {
+            await requireCurrentAccess()
+            selectFile(hit.relativePath, hit.lineNumber)
+          }} />
       ) : <p className="gb-muted gb-workspace-discovery" role="status">Workspace search and preview are unavailable.</p>)}
       {visible && access && discovery && currentState.activePath &&
           /\.(?:md|markdown|svg)$/i.test(currentState.activePath) && (
@@ -415,7 +440,10 @@ export function WorkspaceFilesTab({
           tabs={currentState.tabs}
           jumpTo={jumpTo}
           onSendSelection={access && onAddSelectionToDraft
-            ? (relativePath, text) => onAddSelectionToDraft({ ...access, relativePath, text })
+            ? async (relativePath, text) => {
+              const current = await requireCurrentAccess()
+              await onAddSelectionToDraft({ ...current, relativePath, text })
+            }
             : undefined}
           activePath={currentState.activePath}
           loadingFilePath={loadingFilePath}

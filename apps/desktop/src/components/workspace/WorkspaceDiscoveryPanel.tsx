@@ -12,7 +12,7 @@ import type {
 interface Props {
   access: PersonalWorkspaceAccess
   transport: WorkspaceDiscoveryTransport
-  onOpenResult: (hit: WorkspaceSearchHit) => void
+  onOpenResult: (hit: WorkspaceSearchHit) => Promise<void>
 }
 
 type SearchResult = Awaited<ReturnType<WorkspaceDiscoveryTransport['searchWorkspaceFiles']>>
@@ -29,7 +29,7 @@ export function WorkspaceSearch({ access, transport, onOpenResult }: Props) {
     const operationId = active.current
     active.current = null
     if (operationId) {
-      void transport.cancelWorkspaceSearch({ botId, workspaceId, authGeneration, operationId }).catch(() => {})
+      void transport.cancelWorkspaceDiscovery({ botId, workspaceId, authGeneration, operationId }).catch(() => {})
     }
   }, [botId, workspaceId, authGeneration, transport])
 
@@ -38,7 +38,7 @@ export function WorkspaceSearch({ access, transport, onOpenResult }: Props) {
     if (!operationId) return
     active.current = null
     setStatus('Search cancelled.')
-    void transport.cancelWorkspaceSearch({ ...access, operationId }).catch(() => {})
+    void transport.cancelWorkspaceDiscovery({ ...access, operationId }).catch(() => {})
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -96,7 +96,12 @@ export function WorkspaceSearch({ access, transport, onOpenResult }: Props) {
         <ul className="gb-workspace-search-results">
           {result.results.map((hit) => (
             <li key={`${hit.relativePath}:${hit.lineNumber ?? ''}`}>
-              <button type="button" onClick={() => onOpenResult(hit)}>
+              <button type="button" onClick={() => {
+                void onOpenResult(hit).catch((err: unknown) => {
+                  setResult(null)
+                  setStatus(err instanceof Error ? err.message : 'Could not open search result.')
+                })
+              }}>
                 <strong>{hit.relativePath}{hit.lineNumber === null ? '' : `:${hit.lineNumber}`}</strong>
                 {hit.line !== null && <code>{hit.line}</code>}
               </button>
@@ -128,10 +133,19 @@ function PreviewContent({ preview, relativePath }: { preview: WorkspacePreviewPa
     const svg = sanitizeCustomSvg(preview.text)
     return svg.ok ? <img src={svg.dataUrl} alt={relativePath} /> : <p role="status">Unsafe or unsupported SVG.</p>
   }
-  if (preview.kind === 'image') {
-    return <img src={`data:${preview.mime};base64,${preview.base64}`} alt={relativePath} />
+  if (preview.kind === 'image' || preview.kind === 'pdf') {
+    const mime = preview.kind === 'pdf' ? 'image/png' : preview.mime
+    return <RasterPreview src={`data:${mime};base64,${preview.base64}`}
+      label={preview.kind === 'pdf' ? `${relativePath}, page ${preview.page}` : relativePath} />
   }
   return null
+}
+
+function RasterPreview({ src, label }: { src: string; label: string }) {
+  const [failed, setFailed] = useState(false)
+  return failed
+    ? <p role="status">Unable to decode the preview image.</p>
+    : <img src={src} alt={label} onError={() => setFailed(true)} />
 }
 
 export function WorkspacePreview({ access, transport, relativePath, onClose }: {
@@ -140,30 +154,57 @@ export function WorkspacePreview({ access, transport, relativePath, onClose }: {
   relativePath: string
   onClose: () => void
 }) {
+  const [page, setPage] = useState(1)
   const [preview, setPreview] = useState<WorkspacePreviewPayload | null>(null)
   const [status, setStatus] = useState('Loading preview…')
   const { botId, workspaceId, authGeneration } = access
   useEffect(() => {
     let current = true
-    void transport.previewWorkspaceFile({ botId, workspaceId, authGeneration, relativePath }).then((result) => {
+    let pending = true
+    const operationId = crypto.randomUUID()
+    const input = { botId, workspaceId, authGeneration, operationId }
+    void transport.previewWorkspaceFile({ ...input, relativePath, page }).then((result) => {
       if (!current) return
       if (result.workspaceId !== workspaceId || result.authGeneration !== authGeneration ||
-          result.relativePath !== relativePath) {
+          result.operationId !== operationId || result.relativePath !== relativePath) {
         setStatus('Workspace authorization changed. Refresh the workspace and try again.')
         return
       }
       setPreview(result.preview)
     }).catch((err: unknown) => {
       if (current) setStatus(err instanceof Error ? err.message : 'Could not load preview.')
-    })
-    return () => { current = false }
-  }, [botId, workspaceId, authGeneration, relativePath, transport])
+    }).finally(() => { pending = false })
+    return () => {
+      current = false
+      if (pending) void transport.cancelWorkspaceDiscovery(input).catch(() => {})
+    }
+  }, [botId, workspaceId, authGeneration, relativePath, page, transport])
 
-  return <section className="gb-workspace-preview" aria-label="File preview">
+  function turnPage(nextPage: number) {
+    setPreview(null)
+    setStatus('Loading preview…')
+    setPage(nextPage)
+  }
+
+  return <section className="gb-workspace-preview" aria-label="File preview"
+    onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+      }
+    }}>
     <div className="gb-workspace-discovery-controls">
       <strong>{relativePath}</strong>
       <button type="button" className="gb-workspace-icon-btn" onClick={onClose}>Close preview</button>
     </div>
-    {preview ? <PreviewContent preview={preview} relativePath={relativePath} /> : <p role="status">{status}</p>}
+    {preview?.kind === 'pdf' && <div className="gb-workspace-discovery-controls">
+      <button type="button" className="gb-workspace-icon-btn" disabled={preview.page === 1}
+        onClick={() => turnPage(preview.page - 1)}>Previous page</button>
+      <span>Page {preview.page} of {preview.pageCount}</span>
+      <button type="button" className="gb-workspace-icon-btn" disabled={preview.page === preview.pageCount}
+        onClick={() => turnPage(preview.page + 1)}>Next page</button>
+    </div>}
+    {preview ? <PreviewContent key={page} preview={preview} relativePath={relativePath} />
+      : <p role="status">{status}</p>}
   </section>
 }

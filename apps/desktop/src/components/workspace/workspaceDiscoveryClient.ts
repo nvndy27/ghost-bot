@@ -13,12 +13,13 @@ export interface WorkspaceSearchHit {
 export type WorkspacePreviewPayload =
   | { kind: 'markdown' | 'svg'; text: string }
   | { kind: 'image'; mime: 'image/png' | 'image/gif'; base64: string }
+  | { kind: 'pdf'; page: number; pageCount: number; base64: string }
   | { kind: 'unavailable'; reason: string }
 
-type SearchOperation = PersonalWorkspaceAccess & { operationId: string }
+type DiscoveryOperation = PersonalWorkspaceAccess & { operationId: string }
 
 export interface WorkspaceDiscoveryTransport {
-  searchWorkspaceFiles(input: SearchOperation & { mode: 'filename' | 'content'; query: string }): Promise<{
+  searchWorkspaceFiles(input: DiscoveryOperation & { mode: 'filename' | 'content'; query: string }): Promise<{
     workspaceId: string
     authGeneration: string
     operationId: string
@@ -26,8 +27,9 @@ export interface WorkspaceDiscoveryTransport {
     truncated: boolean
     scannedFiles: number
   }>
-  cancelWorkspaceSearch(input: SearchOperation): Promise<boolean>
-  previewWorkspaceFile(input: PersonalWorkspaceAccess & { relativePath: string }): Promise<{
+  cancelWorkspaceDiscovery(input: DiscoveryOperation): Promise<boolean>
+  previewWorkspaceFile(input: DiscoveryOperation & { relativePath: string; page: number }): Promise<{
+    operationId: string
     workspaceId: string
     authGeneration: string
     relativePath: string
@@ -42,12 +44,12 @@ export function getWorkspaceDiscoveryTransport(): WorkspaceDiscoveryTransport | 
   const bridge = (window as { ghostBot?: Partial<WorkspaceDiscoveryTransport> }).ghostBot
   if (
     typeof bridge?.searchWorkspaceFiles !== 'function' ||
-    typeof bridge.cancelWorkspaceSearch !== 'function' ||
+    typeof bridge.cancelWorkspaceDiscovery !== 'function' ||
     typeof bridge.previewWorkspaceFile !== 'function'
   ) return null
   return {
     searchWorkspaceFiles: bridge.searchWorkspaceFiles.bind(bridge),
-    cancelWorkspaceSearch: bridge.cancelWorkspaceSearch.bind(bridge),
+    cancelWorkspaceDiscovery: bridge.cancelWorkspaceDiscovery.bind(bridge),
     previewWorkspaceFile: bridge.previewWorkspaceFile.bind(bridge),
   }
 }

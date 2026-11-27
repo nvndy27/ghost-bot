@@ -9,6 +9,8 @@ import {
   readContainedTextFile,
 } from './containment.ts'
 import { DISCOVERY_LIMITS, type WorkspacePreviewPayload, type WorkspaceSearchHit } from './discovery-contracts.ts'
+import { rasterizePdfPage } from './pdf-rasterizer.ts'
+import { isBoundedRaster } from './raster-bounds.ts'
 import type { AuthorizedWorkspace } from './files-service.ts'
 
 const SKIPPED_ENTRY_ERRORS = new Set([
@@ -116,38 +118,16 @@ export async function searchAuthorizedWorkspace(
   return { results, scannedFiles, truncated }
 }
 
-function imageMime(bytes: Buffer, extension: string): 'image/png' | 'image/gif' | null {
-  let width: number
-  let height: number
-  let mime: 'image/png' | 'image/gif'
-  if (extension === '.png' && bytes.length >= 33 &&
-      bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
-      bytes.readUInt32BE(8) === 13 && bytes.toString('ascii', 12, 16) === 'IHDR') {
-    width = bytes.readUInt32BE(16)
-    height = bytes.readUInt32BE(20)
-    mime = 'image/png'
-  } else if (extension === '.gif' && bytes.length >= 14 &&
-             ['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) {
-    width = bytes.readUInt16LE(6)
-    height = bytes.readUInt16LE(8)
-    mime = 'image/gif'
-  } else {
-    return null
-  }
-
-  return width > 0 && height > 0 && width * height <= 4_000_000 ? mime : null
-}
-
 export async function previewAuthorizedWorkspaceFile(
   workspace: AuthorizedWorkspace,
   relativePath: string,
+  page: number,
+  signal?: AbortSignal,
 ): Promise<WorkspacePreviewPayload> {
+  signal?.throwIfAborted()
   normalizeWorkspaceRelativePath(relativePath, false)
   const extension = extname(relativePath).toLowerCase()
-  if (extension === '.pdf') {
-    return { kind: 'unavailable', reason: 'PDF preview requires an isolated page rasterizer.' }
-  }
-  if (!['.md', '.markdown', '.svg', '.png', '.gif'].includes(extension)) {
+  if (!['.md', '.markdown', '.svg', '.png', '.gif', '.pdf'].includes(extension)) {
     return { kind: 'unavailable', reason: 'Preview is unavailable for this file type.' }
   }
 
@@ -155,6 +135,17 @@ export async function previewAuthorizedWorkspaceFile(
     workspace.canonicalRoot, workspace.rootDev, workspace.rootIno, relativePath,
     extension === '.svg' ? DISCOVERY_LIMITS.maxTextBytes : DISCOVERY_LIMITS.maxPreviewBytes,
   )
+  signal?.throwIfAborted()
+  if (extension === '.pdf') {
+    try {
+      return { kind: 'pdf', ...await rasterizePdfPage(bytes, page, signal) }
+    } catch (err) {
+      if (err instanceof DaemonError && err.code === 'PDF_PREVIEW_UNAVAILABLE') {
+        return { kind: 'unavailable', reason: err.message }
+      }
+      throw err
+    }
+  }
   if (extension === '.svg' || extension === '.md' || extension === '.markdown') {
     return {
       kind: extension === '.svg' ? 'svg' : 'markdown',
@@ -162,8 +153,8 @@ export async function previewAuthorizedWorkspaceFile(
     }
   }
 
-  const mime = imageMime(bytes, extension)
-  return mime
+  const mime = extension === '.png' ? 'image/png' : 'image/gif'
+  return isBoundedRaster(bytes, mime)
     ? { kind: 'image', mime, base64: bytes.toString('base64') }
     : { kind: 'unavailable', reason: 'Unsupported or oversized image.' }
 }
