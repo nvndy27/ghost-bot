@@ -40,6 +40,7 @@ export function WorkspaceCodeEditor({
   onCloseTab,
 }: WorkspaceCodeEditorProps) {
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null)
+  const [confirmReloadPath, setConfirmReloadPath] = useState<string | null>(null)
   const highlightRef = useRef<HTMLPreElement | null>(null)
   const gutterRef = useRef<HTMLDivElement | null>(null)
 
@@ -182,7 +183,13 @@ export function WorkspaceCodeEditor({
               <button
                 type="button"
                 className="gb-workspace-icon-btn"
-                onClick={() => onReloadFile(activeTab.relativePath)}
+                onClick={() => {
+                  if (isDirty) {
+                    setConfirmReloadPath(activeTab.relativePath)
+                  } else {
+                    onReloadFile(activeTab.relativePath)
+                  }
+                }}
                 aria-label="Reload file from disk"
                 data-testid="editor-reload-btn"
               >
@@ -200,6 +207,33 @@ export function WorkspaceCodeEditor({
               </button>
             </div>
           </div>
+
+          {confirmReloadPath === activeTab.relativePath && (
+            <div className="gb-editor-banner" data-testid="editor-dirty-reload-confirm">
+              <span>Unsaved edits in {activeTab.name} will be discarded on reload.</span>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  data-testid="editor-confirm-reload-btn"
+                  onClick={() => {
+                    const target = confirmReloadPath
+                    setConfirmReloadPath(null)
+                    onReloadFile(target)
+                  }}
+                >
+                  Reload anyway
+                </button>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  onClick={() => setConfirmReloadPath(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {activeTab.conflictMessage && (
             <div className="gb-editor-banner" data-testid="editor-conflict-banner">

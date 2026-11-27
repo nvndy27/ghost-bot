@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 export const WORKSPACE_LIMITS = {
   maxDirectoryEntries: 500,
+  maxDirectoryScan: 2000,
   maxFileBytes: 1024 * 1024, // 1 MiB
   maxRelativePathLength: 512,
   maxPathDepth: 24,
@@ -12,8 +13,8 @@ export const WorkspaceSelectorSchema = z
     botId: z.string().min(1).max(128).optional(),
     teamId: z.string().min(1).max(128).optional(),
   })
-  .refine((v) => Boolean(v.botId || v.teamId), {
-    message: 'Either botId or teamId is required',
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
   })
 
 export const WorkspaceContextResponseSchema = z.object({
@@ -25,6 +26,7 @@ export const WorkspaceContextResponseSchema = z.object({
   ownerName: z.string(),
   canWrite: z.boolean(),
   permissionMode: z.string(),
+  authGeneration: z.string().nullable(),
   reason: z.string().nullable(),
 })
 
@@ -35,12 +37,16 @@ export const WorkspaceRelativePathSchema = z
   .max(WORKSPACE_LIMITS.maxRelativePathLength)
   .default('')
 
-export const WorkspaceListDirectoryInputSchema = z.object({
-  botId: z.string().min(1).max(128).optional(),
-  teamId: z.string().min(1).max(128).optional(),
-  workspaceId: z.string().min(1).max(128).optional(),
-  relativePath: WorkspaceRelativePathSchema,
-})
+export const WorkspaceListDirectoryInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    relativePath: WorkspaceRelativePathSchema,
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
 
 export const WorkspaceDirectoryEntrySchema = z.object({
   name: z.string(),
@@ -63,12 +69,16 @@ export const WorkspaceListDirectoryResponseSchema = z.object({
 
 export type WorkspaceListDirectoryResponse = z.infer<typeof WorkspaceListDirectoryResponseSchema>
 
-export const WorkspaceReadFileInputSchema = z.object({
-  botId: z.string().min(1).max(128).optional(),
-  teamId: z.string().min(1).max(128).optional(),
-  workspaceId: z.string().min(1).max(128).optional(),
-  relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
-})
+export const WorkspaceReadFileInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
 
 export const WorkspaceReadFileResponseSchema = z.object({
   workspaceId: z.string(),
@@ -83,14 +93,18 @@ export const WorkspaceReadFileResponseSchema = z.object({
 
 export type WorkspaceReadFileResponse = z.infer<typeof WorkspaceReadFileResponseSchema>
 
-export const WorkspaceSaveFileInputSchema = z.object({
-  botId: z.string().min(1).max(128).optional(),
-  teamId: z.string().min(1).max(128).optional(),
-  workspaceId: z.string().min(1).max(128),
-  relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
-  content: z.string(),
-  expectedRevision: z.string().min(1).max(256),
-})
+export const WorkspaceSaveFileInputSchema = z
+  .object({
+    botId: z.string().min(1).max(128).optional(),
+    teamId: z.string().min(1).max(128).optional(),
+    workspaceId: z.string().min(1).max(128),
+    relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
+    content: z.string().max(WORKSPACE_LIMITS.maxFileBytes),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
 
 export const WorkspaceSaveFileResponseSchema = z.object({
   workspaceId: z.string(),

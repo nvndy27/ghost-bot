@@ -7,6 +7,7 @@ export interface WorkspaceContextInfo {
   ownerName: string
   canWrite: boolean
   permissionMode: string
+  authGeneration: string | null
   reason: string | null
 }
 
@@ -54,10 +55,10 @@ export interface WorkspaceSelector {
 export interface WorkspaceFilesTransport {
   resolveContext: (selector: WorkspaceSelector) => Promise<WorkspaceContextInfo>
   listDirectory: (
-    params: WorkspaceSelector & { workspaceId?: string; relativePath: string },
+    params: WorkspaceSelector & { workspaceId: string; relativePath: string },
   ) => Promise<WorkspaceListDirectoryResult>
   readFile: (
-    params: WorkspaceSelector & { workspaceId?: string; relativePath: string },
+    params: WorkspaceSelector & { workspaceId: string; relativePath: string },
   ) => Promise<WorkspaceReadFileResult>
   saveFile: (
     params: WorkspaceSelector & {

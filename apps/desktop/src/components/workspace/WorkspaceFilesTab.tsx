@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { WorkspaceCodeEditor, type OpenEditorTab } from './WorkspaceCodeEditor.tsx'
-import { WorkspaceFileTree, type DirectoryNodeState } from './WorkspaceFileTree.tsx'
+import { WorkspaceCodeEditor } from './WorkspaceCodeEditor.tsx'
+import { WorkspaceFileTree } from './WorkspaceFileTree.tsx'
 import {
   getDefaultWorkspaceFilesTransport,
-  type WorkspaceContextInfo,
   type WorkspaceFilesTransport,
   type WorkspaceSelector,
 } from './workspaceFilesClient.ts'
+import { sharedWorkspaceFilesStore, type WorkspaceFilesStore } from './workspaceFilesStore.ts'
 import './workspace-files.css'
 
 export interface WorkspaceFilesTabProps {
@@ -17,24 +17,7 @@ export interface WorkspaceFilesTabProps {
   workspacePath?: string | null
   isMockMode: boolean
   transport?: WorkspaceFilesTransport | null
-}
-
-interface ScopedWorkspaceState {
-  contextInfo: WorkspaceContextInfo | null
-  directories: Record<string, DirectoryNodeState>
-  expandedDirs: string[]
-  tabs: OpenEditorTab[]
-  activePath: string | null
-}
-
-function emptyScopedState(): ScopedWorkspaceState {
-  return {
-    contextInfo: null,
-    directories: {},
-    expandedDirs: [],
-    tabs: [],
-    activePath: null,
-  }
+  store?: WorkspaceFilesStore
 }
 
 export function WorkspaceFilesTab({
@@ -45,49 +28,44 @@ export function WorkspaceFilesTab({
   workspacePath,
   isMockMode,
   transport: injectedTransport,
+  store = sharedWorkspaceFilesStore,
 }: WorkspaceFilesTabProps) {
   const transport = useMemo(
     () => (injectedTransport !== undefined ? injectedTransport : getDefaultWorkspaceFilesTransport()),
     [injectedTransport],
   )
 
-  const [scopedStates, setScopedStates] = useState<Record<string, ScopedWorkspaceState>>({})
+  const [, setVersion] = useState(0)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
   const [loadingFilePath, setLoadingFilePath] = useState<string | null>(null)
   const [loadFileError, setLoadFileError] = useState<string | null>(null)
 
-  const requestEpochRef = useRef(0)
   const activeKeyRef = useRef(contextKey)
   activeKeyRef.current = contextKey
+
+  useEffect(() => {
+    return store.subscribe(() => setVersion((v) => v + 1))
+  }, [store])
 
   const selector: WorkspaceSelector | null = useMemo(() => {
     if (!ownerId) return null
     return contextKind === 'team' ? { teamId: ownerId } : { botId: ownerId }
   }, [contextKind, ownerId])
 
-  const currentState = scopedStates[contextKey] ?? emptyScopedState()
-
-  const patchScopedState = useCallback(
-    (targetKey: string, updater: (prev: ScopedWorkspaceState) => ScopedWorkspaceState) => {
-      setScopedStates((prev) => ({
-        ...prev,
-        [targetKey]: updater(prev[targetKey] ?? emptyScopedState()),
-      }))
-    },
-    [],
-  )
+  const currentState = store.getActiveWorkspaceState(contextKey)
 
   const loadDirectory = useCallback(
     async (
-      targetKey: string,
+      storageKey: string,
+      targetContextKey: string,
       sel: WorkspaceSelector,
       workspaceId: string,
       relativePath: string,
-      epoch: number,
+      opId: number,
     ) => {
       if (!transport) return
-      patchScopedState(targetKey, (prev) => ({
+      store.updateWorkspace(storageKey, (prev) => ({
         ...prev,
         directories: {
           ...prev.directories,
@@ -106,8 +84,11 @@ export function WorkspaceFilesTab({
           workspaceId,
           relativePath,
         })
-        if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
-        patchScopedState(targetKey, (prev) => ({
+        if (activeKeyRef.current !== targetContextKey) return
+        const latest = store.getActiveWorkspaceState(targetContextKey)
+        if (!latest || latest.workspaceId !== res.workspaceId) return
+
+        store.updateWorkspace(storageKey, (prev) => ({
           ...prev,
           directories: {
             ...prev.directories,
@@ -120,9 +101,10 @@ export function WorkspaceFilesTab({
           },
         }))
       } catch (err) {
-        if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
+        if (activeKeyRef.current !== targetContextKey) return
+        void opId
         const message = err instanceof Error ? err.message : 'Failed to list directory'
-        patchScopedState(targetKey, (prev) => ({
+        store.updateWorkspace(storageKey, (prev) => ({
           ...prev,
           directories: {
             ...prev.directories,
@@ -136,12 +118,12 @@ export function WorkspaceFilesTab({
         }))
       }
     },
-    [patchScopedState, transport],
+    [store, transport],
   )
 
   const refreshContextAndRoot = useCallback(async () => {
-    const epoch = ++requestEpochRef.current
-    const targetKey = contextKey
+    const opId = store.nextOperationId()
+    const targetContextKey = contextKey
     setLoadFileError(null)
     setContextError(null)
 
@@ -153,79 +135,73 @@ export function WorkspaceFilesTab({
     setContextLoading(true)
     try {
       const ctx = await transport.resolveContext(selector)
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
+      if (activeKeyRef.current !== targetContextKey) return
 
-      patchScopedState(targetKey, (prev) => {
-        // If canonical workspace changed for this bot/team, clear stale cached tree/tabs so nothing leaks.
-        const workspaceChanged =
-          prev.contextInfo?.workspaceId &&
-          ctx.workspaceId &&
-          prev.contextInfo.workspaceId !== ctx.workspaceId
-        if (!ctx.authorized || workspaceChanged) {
-          return {
-            ...emptyScopedState(),
-            contextInfo: ctx,
-          }
-        }
-        return {
-          ...prev,
-          contextInfo: ctx,
-        }
-      })
-
-      if (ctx.authorized && ctx.workspaceId) {
-        await loadDirectory(targetKey, selector, ctx.workspaceId, '', epoch)
+      const wsState = store.setContextResolution(targetContextKey, ctx)
+      if (wsState && ctx.authorized && ctx.workspaceId) {
+        await loadDirectory(
+          wsState.storageKey,
+          targetContextKey,
+          selector,
+          ctx.workspaceId,
+          '',
+          opId,
+        )
       }
     } catch (err) {
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
+      if (activeKeyRef.current !== targetContextKey) return
       setContextError(err instanceof Error ? err.message : 'Failed to resolve workspace context')
     } finally {
-      if (requestEpochRef.current === epoch && activeKeyRef.current === targetKey) {
+      if (activeKeyRef.current === targetContextKey) {
         setContextLoading(false)
       }
     }
-  }, [contextKey, loadDirectory, patchScopedState, selector, transport])
+  }, [contextKey, loadDirectory, selector, store, transport])
 
   useEffect(() => {
     void refreshContextAndRoot()
   }, [refreshContextAndRoot])
 
   const handleToggleDir = (relativePath: string) => {
-    if (!selector || !currentState.contextInfo?.workspaceId) return
+    if (!selector || !currentState) return
     const isExpanded = currentState.expandedDirs.includes(relativePath)
     if (isExpanded) {
-      patchScopedState(contextKey, (prev) => ({
+      store.updateWorkspace(currentState.storageKey, (prev) => ({
         ...prev,
         expandedDirs: prev.expandedDirs.filter((d) => d !== relativePath),
       }))
       return
     }
-    patchScopedState(contextKey, (prev) => ({
+    store.updateWorkspace(currentState.storageKey, (prev) => ({
       ...prev,
       expandedDirs: [...prev.expandedDirs, relativePath],
     }))
     if (!currentState.directories[relativePath]) {
       void loadDirectory(
+        currentState.storageKey,
         contextKey,
         selector,
-        currentState.contextInfo.workspaceId,
+        currentState.workspaceId,
         relativePath,
-        requestEpochRef.current,
+        store.nextOperationId(),
       )
     }
   }
 
   const openOrReloadFile = async (relativePath: string, forceReload: boolean) => {
-    if (!transport || !selector || !currentState.contextInfo?.workspaceId) return
+    if (!transport || !selector || !currentState) return
     const existing = currentState.tabs.find((t) => t.relativePath === relativePath)
     if (existing && !forceReload) {
-      patchScopedState(contextKey, (prev) => ({ ...prev, activePath: relativePath }))
+      store.updateWorkspace(currentState.storageKey, (prev) => ({
+        ...prev,
+        activePath: relativePath,
+      }))
       return
     }
 
-    const epoch = requestEpochRef.current
-    const targetKey = contextKey
-    const targetWorkspaceId = currentState.contextInfo.workspaceId
+    const targetContextKey = contextKey
+    const targetStorageKey = currentState.storageKey
+    const targetWorkspaceId = currentState.workspaceId
     setLoadingFilePath(relativePath)
     setLoadFileError(null)
 
@@ -235,103 +211,32 @@ export function WorkspaceFilesTab({
         workspaceId: targetWorkspaceId,
         relativePath,
       })
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
+      if (activeKeyRef.current !== targetContextKey) return
+      const latest = store.getActiveWorkspaceState(targetContextKey)
+      if (!latest || latest.workspaceId !== res.workspaceId) return
 
-      patchScopedState(targetKey, (prev) => {
-        if (prev.contextInfo?.workspaceId !== res.workspaceId) return prev
-        const nextTab: OpenEditorTab = {
-          relativePath: res.relativePath,
-          name: res.name,
-          savedContent: res.content,
-          draftContent: res.content,
-          revision: res.revision,
-          readOnly: res.readOnly,
-          language: res.language,
-          saving: false,
-          conflictMessage: null,
-          errorMessage: null,
-        }
-        const exists = prev.tabs.some((t) => t.relativePath === res.relativePath)
-        return {
-          ...prev,
-          activePath: res.relativePath,
-          tabs: exists
-            ? prev.tabs.map((t) => (t.relativePath === res.relativePath ? nextTab : t))
-            : [...prev.tabs, nextTab],
-        }
+      const outcome = store.openOrUpdateTab(targetStorageKey, {
+        relativePath: res.relativePath,
+        name: res.name,
+        savedContent: res.content,
+        draftContent: res.content,
+        revision: res.revision,
+        readOnly: res.readOnly,
+        language: res.language,
+        saving: false,
+        conflictMessage: null,
+        errorMessage: null,
       })
+      if (!outcome.ok) {
+        setLoadFileError(outcome.reason)
+      }
     } catch (err) {
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
+      if (activeKeyRef.current !== targetContextKey) return
       setLoadFileError(err instanceof Error ? err.message : 'Failed to open file')
     } finally {
-      if (requestEpochRef.current === epoch && activeKeyRef.current === targetKey) {
+      if (activeKeyRef.current === targetContextKey) {
         setLoadingFilePath(null)
       }
-    }
-  }
-
-  const handleSaveFile = async (relativePath: string) => {
-    if (!transport || !selector || !currentState.contextInfo?.workspaceId) return
-    const tab = currentState.tabs.find((t) => t.relativePath === relativePath)
-    if (!tab || tab.readOnly || tab.saving) return
-
-    const targetKey = contextKey
-    const targetWorkspaceId = currentState.contextInfo.workspaceId
-    const epoch = requestEpochRef.current
-
-    patchScopedState(targetKey, (prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((t) =>
-        t.relativePath === relativePath
-          ? { ...t, saving: true, conflictMessage: null, errorMessage: null }
-          : t,
-      ),
-    }))
-
-    try {
-      const res = await transport.saveFile({
-        ...selector,
-        workspaceId: targetWorkspaceId,
-        relativePath,
-        content: tab.draftContent,
-        expectedRevision: tab.revision,
-      })
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
-
-      patchScopedState(targetKey, (prev) => ({
-        ...prev,
-        tabs: prev.tabs.map((t) =>
-          t.relativePath === relativePath
-            ? {
-                ...t,
-                savedContent: tab.draftContent,
-                revision: res.revision,
-                saving: false,
-                conflictMessage: null,
-                errorMessage: null,
-              }
-            : t,
-        ),
-      }))
-    } catch (err) {
-      if (requestEpochRef.current !== epoch || activeKeyRef.current !== targetKey) return
-      const message = err instanceof Error ? err.message : 'Failed to save file'
-      const isConflict =
-        message.toLowerCase().includes('modified on disk') ||
-        message.toLowerCase().includes('conflict')
-      patchScopedState(targetKey, (prev) => ({
-        ...prev,
-        tabs: prev.tabs.map((t) =>
-          t.relativePath === relativePath
-            ? {
-                ...t,
-                saving: false,
-                conflictMessage: isConflict ? message : null,
-                errorMessage: isConflict ? null : message,
-              }
-            : t,
-        ),
-      }))
     }
   }
 
@@ -367,7 +272,7 @@ export function WorkspaceFilesTab({
     )
   }
 
-  if (contextLoading && !currentState.contextInfo) {
+  if (contextLoading && !currentState) {
     return (
       <div className="gb-muted" style={{ padding: '12px', fontSize: '12.5px' }}>
         Resolving authorized workspace...
@@ -375,7 +280,7 @@ export function WorkspaceFilesTab({
     )
   }
 
-  if (contextError || !currentState.contextInfo || !currentState.contextInfo.authorized) {
+  if (contextError || !currentState || !currentState.contextInfo.authorized) {
     return (
       <section className="gb-workspace-placeholder" data-testid="workspace-files-unavailable">
         <div className="gb-workspace-placeholder-head">
@@ -384,7 +289,7 @@ export function WorkspaceFilesTab({
         </div>
         <p className="gb-muted" style={{ margin: 0, fontSize: '12.5px' }}>
           {contextError ??
-            currentState.contextInfo?.reason ??
+            currentState?.contextInfo.reason ??
             'No authorized workspace is configured for this context.'}
         </p>
       </section>
@@ -425,20 +330,26 @@ export function WorkspaceFilesTab({
           loadingFilePath={loadingFilePath}
           loadError={loadFileError}
           onSelectTab={(path) =>
-            patchScopedState(contextKey, (prev) => ({ ...prev, activePath: path }))
+            store.updateWorkspace(currentState.storageKey, (prev) => ({
+              ...prev,
+              activePath: path,
+            }))
           }
           onChangeContent={(path, nextContent) =>
-            patchScopedState(contextKey, (prev) => ({
+            store.updateWorkspace(currentState.storageKey, (prev) => ({
               ...prev,
               tabs: prev.tabs.map((t) =>
                 t.relativePath === path ? { ...t, draftContent: nextContent } : t,
               ),
             }))
           }
-          onSaveFile={(path) => void handleSaveFile(path)}
+          onSaveFile={(path) => {
+            if (!selector) return
+            void store.saveTab(transport, selector, currentState.storageKey, path)
+          }}
           onReloadFile={(path) => void openOrReloadFile(path, true)}
           onDismissConflict={(path) =>
-            patchScopedState(contextKey, (prev) => ({
+            store.updateWorkspace(currentState.storageKey, (prev) => ({
               ...prev,
               tabs: prev.tabs.map((t) =>
                 t.relativePath === path ? { ...t, conflictMessage: null } : t,
@@ -446,7 +357,7 @@ export function WorkspaceFilesTab({
             }))
           }
           onCloseTab={(path) =>
-            patchScopedState(contextKey, (prev) => {
+            store.updateWorkspace(currentState.storageKey, (prev) => {
               const remaining = prev.tabs.filter((t) => t.relativePath !== path)
               const nextActive =
                 prev.activePath === path

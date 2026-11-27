@@ -1,8 +1,17 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { constants as fsConstants, lstat, open, readdir, realpath, stat } from 'node:fs/promises'
+import {
+  chmod,
+  constants as fsConstants,
+  lstat,
+  open,
+  opendir,
+  rename,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
-import { isAbsolute, join, posix } from 'node:path'
+import { isAbsolute, posix } from 'node:path'
 import { DaemonError } from '../errors.ts'
 import { WORKSPACE_LIMITS, type WorkspaceDirectoryEntry } from './contracts.ts'
 
@@ -58,12 +67,51 @@ const BINARY_EXTENSIONS = new Set([
   '.avi',
 ])
 
+export interface SaveHookOptions {
+  onBeforeCommit?: () => Promise<void> | void
+  injectWriteError?: () => void
+}
+
+export async function assertDescriptorContainmentSupported(): Promise<void> {
+  if (process.platform !== 'linux') {
+    throw new DaemonError(
+      'CONTAINMENT_UNSUPPORTED',
+      `Descriptor-relative /proc/self/fd containment requires Linux (current: ${process.platform})`,
+      { statusCode: 503 },
+    )
+  }
+  const st = await stat('/proc/self/fd').catch(() => null)
+  if (!st || !st.isDirectory()) {
+    throw new DaemonError(
+      'CONTAINMENT_UNSUPPORTED',
+      'Linux /proc/self/fd descriptor containment is unavailable',
+      { statusCode: 503 },
+    )
+  }
+}
+
+function procFdChildPath(dirFd: number, singleChildName: string): string {
+  if (
+    singleChildName.length === 0 ||
+    singleChildName === '.' ||
+    singleChildName === '..' ||
+    singleChildName.includes('/') ||
+    singleChildName.includes('\0')
+  ) {
+    throw new DaemonError('INVALID_PATH', 'Invalid single path component', { statusCode: 400 })
+  }
+  return `/proc/self/fd/${dirFd}/${singleChildName}`
+}
+
 export function isSensitiveSegment(name: string): boolean {
   const lower = name.toLowerCase()
   if (SENSITIVE_DIR_NAMES.has(lower)) return true
   if (SENSITIVE_EXACT_NAMES.has(lower)) return true
   if (lower.startsWith('.env.')) return true
-  if (lower.startsWith('secret') && (lower.endsWith('.json') || lower.endsWith('.yaml') || lower.endsWith('.yml'))) {
+  if (
+    lower.startsWith('secret') &&
+    (lower.endsWith('.json') || lower.endsWith('.yaml') || lower.endsWith('.yml'))
+  ) {
     return true
   }
   const dot = lower.lastIndexOf('.')
@@ -131,35 +179,42 @@ export function normalizeWorkspaceRelativePath(raw: string, allowEmpty: boolean)
   if (isAbsolute(raw) || raw.startsWith('/')) {
     throw new DaemonError('INVALID_PATH', 'Absolute paths are not allowed', { statusCode: 400 })
   }
-  const trimmed = raw.trim()
-  if (trimmed.length === 0) {
+  if (raw.length === 0) {
     if (allowEmpty) return []
     throw new DaemonError('INVALID_PATH', 'Workspace-relative path is required', { statusCode: 400 })
   }
-  const normalized = posix.normalize(trimmed)
-  if (normalized === '.' || normalized === './') {
+  if (raw.trim().length === 0) {
+    throw new DaemonError('INVALID_PATH', 'Whitespace-only path is not allowed', {
+      statusCode: 400,
+    })
+  }
+
+  // Reject raw traversal segments BEFORE normalization so 'a/../b' never passes silently.
+  const rawParts = raw.split('/')
+  for (const part of rawParts) {
+    if (part === '..' || part === '.') {
+      throw new DaemonError('PATH_TRAVERSAL_REJECTED', 'Raw traversal segment is not allowed', {
+        statusCode: 403,
+      })
+    }
+  }
+
+  const segments = rawParts.filter((s) => s.length > 0)
+  if (segments.length === 0) {
     if (allowEmpty) return []
     throw new DaemonError('INVALID_PATH', 'Workspace-relative file path is required', {
       statusCode: 400,
     })
   }
-  if (normalized === '..' || normalized.startsWith('../') || posix.isAbsolute(normalized)) {
-    throw new DaemonError('PATH_TRAVERSAL_REJECTED', 'Path traversal is not allowed', {
-      statusCode: 403,
-    })
-  }
-  const segments = normalized.split('/').filter((s) => s.length > 0 && s !== '.')
   if (segments.length > WORKSPACE_LIMITS.maxPathDepth) {
     throw new DaemonError('INVALID_PATH', 'Path exceeds maximum directory depth', {
       statusCode: 400,
     })
   }
+  if (posix.isAbsolute(segments.join('/'))) {
+    throw new DaemonError('PATH_TRAVERSAL_REJECTED', 'Absolute path rejected', { statusCode: 403 })
+  }
   for (const seg of segments) {
-    if (seg === '..' || seg === '.') {
-      throw new DaemonError('PATH_TRAVERSAL_REJECTED', 'Path traversal segment rejected', {
-        statusCode: 403,
-      })
-    }
     if (isSensitiveSegment(seg)) {
       throw new DaemonError('SENSITIVE_FILE_BLOCKED', `Access to sensitive path '${seg}' is blocked`, {
         statusCode: 403,
@@ -169,8 +224,17 @@ export function normalizeWorkspaceRelativePath(raw: string, allowEmpty: boolean)
   return segments
 }
 
-export function computeWorkspaceId(canonicalRoot: string): string {
-  return createHash('sha256').update(canonicalRoot, 'utf8').digest('hex').slice(0, 24)
+export function computeWorkspaceId(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  ownerKind: 'bot' | 'team',
+  ownerId: string,
+): string {
+  return createHash('sha256')
+    .update(`${canonicalRoot}:${rootDev}:${rootIno}:${ownerKind}:${ownerId}`, 'utf8')
+    .digest('hex')
+    .slice(0, 24)
 }
 
 export function computeRevisionToken(st: Stats, bytes: Buffer): string {
@@ -194,12 +258,19 @@ function assertRegularFileStats(st: Stats, label: string): void {
       statusCode: 400,
     })
   }
+  if (st.nlink > 1) {
+    throw new DaemonError(
+      'HARDLINK_REJECTED',
+      `Hard-linked file '${label}' (nlink=${st.nlink}) is rejected by workspace containment policy`,
+      { statusCode: 403 },
+    )
+  }
 }
 
-function assertTextBuffer(buf: Buffer, relativePath: string): string {
+export function assertValidUtf8Text(buf: Buffer, label: string): string {
   for (let i = 0; i < buf.length; i += 1) {
     if (buf[i] === 0) {
-      throw new DaemonError('UNSUPPORTED_BINARY_FILE', `Binary file '${relativePath}' cannot be opened`, {
+      throw new DaemonError('UNSUPPORTED_BINARY_FILE', `Binary/NUL content rejected for '${label}'`, {
         statusCode: 415,
       })
     }
@@ -208,145 +279,193 @@ function assertTextBuffer(buf: Buffer, relativePath: string): string {
   try {
     return decoder.decode(buf)
   } catch {
-    throw new DaemonError('UNSUPPORTED_BINARY_FILE', `Non-UTF-8 file '${relativePath}' cannot be opened`, {
+    throw new DaemonError('UNSUPPORTED_BINARY_FILE', `Non-UTF-8 content rejected for '${label}'`, {
       statusCode: 415,
     })
   }
 }
 
-async function openDirectoryNoFollow(
-  dirPath: string,
-  expectedCanonicalPrefix?: string,
-): Promise<{ handle: FileHandle; stats: Stats }> {
+async function openRootDirectoryFd(
+  canonicalRoot: string,
+  expectedDev: number,
+  expectedIno: number,
+): Promise<FileHandle> {
+  await assertDescriptorContainmentSupported()
   const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
   const oDirectory = typeof fsConstants.O_DIRECTORY === 'number' ? fsConstants.O_DIRECTORY : 0
-  const flags = fsConstants.O_RDONLY | oDirectory | oNoFollow
+  const handle = await open(canonicalRoot, fsConstants.O_RDONLY | oDirectory | oNoFollow).catch(
+    (err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      throw new DaemonError(
+        code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'WORKSPACE_UNAVAILABLE',
+        `Failed to open workspace root safely: ${code ?? 'unknown'}`,
+        { statusCode: code === 'ELOOP' ? 403 : 404 },
+      )
+    },
+  )
 
-  const lstatRes = await lstat(dirPath).catch(() => null)
-  if (!lstatRes) {
-    throw new DaemonError('PATH_NOT_FOUND', 'Workspace path does not exist', { statusCode: 404 })
-  }
-  if (lstatRes.isSymbolicLink()) {
-    throw new DaemonError('SYMLINK_REJECTED', 'Directory symlink rejected', { statusCode: 403 })
-  }
-  if (!lstatRes.isDirectory()) {
-    throw new DaemonError('NOT_A_DIRECTORY', 'Expected a directory', { statusCode: 400 })
-  }
-
-  let handle: FileHandle
   try {
-    handle = await open(dirPath, flags)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code
-    if (code === 'ELOOP') {
-      throw new DaemonError('SYMLINK_REJECTED', 'Directory symlink rejected', { statusCode: 403 })
+    const st = await handle.stat()
+    if (!st.isDirectory()) {
+      throw new DaemonError('WORKSPACE_UNAVAILABLE', 'Workspace root is not a directory', {
+        statusCode: 404,
+      })
     }
-    throw new DaemonError('WORKSPACE_OPEN_FAILED', `Failed to open directory safely: ${code ?? 'unknown'}`, {
-      statusCode: 403,
-    })
-  }
-
-  try {
-    const fstatRes = await handle.stat()
-    if (!fstatRes.isDirectory() || fstatRes.dev !== lstatRes.dev || fstatRes.ino !== lstatRes.ino) {
-      throw new DaemonError('TOCTOU_DETECTED', 'Directory changed during containment verification', {
+    if (st.dev !== expectedDev || st.ino !== expectedIno) {
+      throw new DaemonError('ROOT_IDENTITY_CHANGED', 'Workspace root identity changed on disk', {
         statusCode: 409,
       })
     }
-    if (expectedCanonicalPrefix) {
-      const resolved = await realpath(dirPath)
-      if (resolved !== expectedCanonicalPrefix && !resolved.startsWith(`${expectedCanonicalPrefix}/`)) {
-        throw new DaemonError('WORKSPACE_ESCAPE_REJECTED', 'Resolved directory escaped workspace root', {
-          statusCode: 403,
-        })
-      }
-    }
-    return { handle, stats: fstatRes }
+    return handle
   } catch (err) {
     await handle.close().catch(() => {})
     throw err
   }
 }
 
-export async function walkContainedDirectory(
-  canonicalRoot: string,
-  segments: string[],
-): Promise<{ dirPath: string; dirHandle: FileHandle }> {
-  const rootStat = await stat(canonicalRoot).catch(() => null)
-  if (!rootStat || !rootStat.isDirectory()) {
-    throw new DaemonError('WORKSPACE_UNAVAILABLE', 'Authorized workspace root is unavailable', {
-      statusCode: 404,
-    })
-  }
-  let currentPath = canonicalRoot
-  let current = await openDirectoryNoFollow(currentPath, canonicalRoot)
+async function openChildDirectoryFd(
+  parentHandle: FileHandle,
+  seg: string,
+  rootDev: number,
+): Promise<FileHandle> {
+  const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
+  const oDirectory = typeof fsConstants.O_DIRECTORY === 'number' ? fsConstants.O_DIRECTORY : 0
+  const childFdPath = procFdChildPath(parentHandle.fd, seg)
+
+  const handle = await open(childFdPath, fsConstants.O_RDONLY | oDirectory | oNoFollow).catch(
+    async (err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'ELOOP') {
+        throw new DaemonError('SYMLINK_REJECTED', `Directory symlink rejected at '${seg}'`, {
+          statusCode: 403,
+        })
+      }
+      if (code === 'ENOENT') {
+        throw new DaemonError('PATH_NOT_FOUND', `Directory '${seg}' does not exist`, {
+          statusCode: 404,
+        })
+      }
+      if (code === 'ENOTDIR') {
+        const st = await lstat(childFdPath).catch(() => null)
+        if (st?.isSymbolicLink()) {
+          throw new DaemonError('SYMLINK_REJECTED', `Directory symlink rejected at '${seg}'`, {
+            statusCode: 403,
+          })
+        }
+        throw new DaemonError('NOT_A_DIRECTORY', `'${seg}' is not a directory`, {
+          statusCode: 400,
+        })
+      }
+      throw new DaemonError('WORKSPACE_OPEN_FAILED', `Failed to open '${seg}': ${code ?? 'unknown'}`, {
+        statusCode: 403,
+      })
+    },
+  )
 
   try {
-    for (const seg of segments) {
-      const nextPath = join(currentPath, seg)
-      const next = await openDirectoryNoFollow(nextPath, canonicalRoot)
-      await current.handle.close().catch(() => {})
-      current = next
-      currentPath = nextPath
+    const st = await handle.stat()
+    if (!st.isDirectory()) {
+      throw new DaemonError('NOT_A_DIRECTORY', `'${seg}' is not a directory`, { statusCode: 400 })
     }
-    return { dirPath: currentPath, dirHandle: current.handle }
+    if (st.dev !== rootDev) {
+      throw new DaemonError(
+        'MOUNT_BOUNDARY_REJECTED',
+        `Directory '${seg}' crosses filesystem mount boundary`,
+        { statusCode: 403 },
+      )
+    }
+    return handle
   } catch (err) {
-    await current.handle.close().catch(() => {})
+    await handle.close().catch(() => {})
+    throw err
+  }
+}
+
+export async function walkContainedDirectoryFd(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  segments: string[],
+): Promise<FileHandle> {
+  let current = await openRootDirectoryFd(canonicalRoot, rootDev, rootIno)
+  try {
+    for (const seg of segments) {
+      const next = await openChildDirectoryFd(current, seg, rootDev)
+      await current.close().catch(() => {})
+      current = next
+    }
+    return current
+  } catch (err) {
+    await current.close().catch(() => {})
     throw err
   }
 }
 
 export async function listContainedDirectory(
   canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
   relativePath: string,
-): Promise<{ entries: WorkspaceDirectoryEntry[]; truncated: boolean; totalScanned: number; normalizedRelativePath: string }> {
+): Promise<{
+  entries: WorkspaceDirectoryEntry[]
+  truncated: boolean
+  totalScanned: number
+  normalizedRelativePath: string
+}> {
   const segments = normalizeWorkspaceRelativePath(relativePath, true)
-  const { dirPath, dirHandle } = await walkContainedDirectory(canonicalRoot, segments)
+  const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, segments)
 
   try {
-    const dirents = await readdir(dirPath, { withFileTypes: true })
-    const sorted = [...dirents].sort((a, b) => {
-      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-
+    const dir = await opendir(`/proc/self/fd/${dirHandle.fd}`)
     const entries: WorkspaceDirectoryEntry[] = []
     let truncated = false
+    let totalScanned = 0
 
-    for (const entry of sorted) {
-      if (entry.isSymbolicLink()) {
-        // Never expose or traverse symlinked entries in the workspace tree.
-        continue
+    try {
+      for await (const entry of dir) {
+        totalScanned += 1
+        if (totalScanned > WORKSPACE_LIMITS.maxDirectoryScan) {
+          truncated = true
+          break
+        }
+        if (entry.isSymbolicLink()) continue
+        if (!entry.isDirectory() && !entry.isFile()) continue
+        if (isSensitiveSegment(entry.name)) continue
+
+        if (entries.length >= WORKSPACE_LIMITS.maxDirectoryEntries) {
+          truncated = true
+          break
+        }
+
+        const entryRel = segments.length > 0 ? `${segments.join('/')}/${entry.name}` : entry.name
+        let sizeBytes: number | null = null
+        if (entry.isFile()) {
+          const st = await lstat(procFdChildPath(dirHandle.fd, entry.name)).catch(() => null)
+          if (!st || st.isSymbolicLink() || !st.isFile() || st.nlink > 1 || st.dev !== rootDev) {
+            continue
+          }
+          sizeBytes = st.size
+        }
+        entries.push({
+          name: entry.name,
+          relativePath: entryRel,
+          kind: entry.isDirectory() ? 'directory' : 'file',
+          sizeBytes,
+        })
       }
-      if (!entry.isDirectory() && !entry.isFile()) {
-        continue
-      }
-      if (isSensitiveSegment(entry.name)) {
-        continue
-      }
-      if (entries.length >= WORKSPACE_LIMITS.maxDirectoryEntries) {
-        truncated = true
-        break
-      }
-      const entryRel = segments.length > 0 ? `${segments.join('/')}/${entry.name}` : entry.name
-      let sizeBytes: number | null = null
-      if (entry.isFile()) {
-        const st = await lstat(join(dirPath, entry.name)).catch(() => null)
-        if (!st || st.isSymbolicLink() || !st.isFile()) continue
-        sizeBytes = st.size
-      }
-      entries.push({
-        name: entry.name,
-        relativePath: entryRel,
-        kind: entry.isDirectory() ? 'directory' : 'file',
-        sizeBytes,
-      })
+    } finally {
+      await dir.close().catch(() => {})
     }
+
+    entries.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
 
     return {
       entries,
       truncated,
-      totalScanned: sorted.length,
+      totalScanned,
       normalizedRelativePath: segments.join('/'),
     }
   } finally {
@@ -354,10 +473,30 @@ export async function listContainedDirectory(
   }
 }
 
+async function readExactFromHandle(handle: FileHandle, expectedSize: number): Promise<Buffer> {
+  if (expectedSize === 0) return Buffer.alloc(0)
+  const buf = Buffer.allocUnsafe(expectedSize)
+  let offset = 0
+  while (offset < expectedSize) {
+    const { bytesRead } = await handle.read(buf, offset, expectedSize - offset, offset)
+    if (bytesRead === 0) break
+    offset += bytesRead
+  }
+  return buf.subarray(0, offset)
+}
+
 export async function readContainedTextFile(
   canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
   relativePath: string,
-): Promise<{ content: string; revision: string; sizeBytes: number; name: string; normalizedRelativePath: string }> {
+): Promise<{
+  content: string
+  revision: string
+  sizeBytes: number
+  name: string
+  normalizedRelativePath: string
+}> {
   const segments = normalizeWorkspaceRelativePath(relativePath, false)
   const fileName = segments[segments.length - 1]
   if (isBlockedBinaryExtension(fileName)) {
@@ -367,8 +506,8 @@ export async function readContainedTextFile(
   }
 
   const parentSegments = segments.slice(0, -1)
-  const { dirPath, dirHandle } = await walkContainedDirectory(canonicalRoot, parentSegments)
-  const targetPath = join(dirPath, fileName)
+  const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parentSegments)
+  const childPath = procFdChildPath(dirHandle.fd, fileName)
 
   const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
   const oNonBlock = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0
@@ -376,18 +515,15 @@ export async function readContainedTextFile(
 
   let fileHandle: FileHandle | null = null
   try {
-    const preLstat = await lstat(targetPath).catch(() => null)
-    if (!preLstat) {
-      throw new DaemonError('FILE_NOT_FOUND', 'Requested file does not exist', { statusCode: 404 })
-    }
-    assertRegularFileStats(preLstat, fileName)
-
     try {
-      fileHandle = await open(targetPath, flags)
+      fileHandle = await open(childPath, flags)
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code === 'ELOOP') {
         throw new DaemonError('SYMLINK_REJECTED', 'Symlink target rejected', { statusCode: 403 })
+      }
+      if (code === 'ENOENT') {
+        throw new DaemonError('FILE_NOT_FOUND', 'Requested file does not exist', { statusCode: 404 })
       }
       throw new DaemonError('FILE_OPEN_FAILED', `Failed to open file: ${code ?? 'unknown'}`, {
         statusCode: 403,
@@ -396,9 +532,9 @@ export async function readContainedTextFile(
 
     const st = await fileHandle.stat()
     assertRegularFileStats(st, fileName)
-    if (st.dev !== preLstat.dev || st.ino !== preLstat.ino) {
-      throw new DaemonError('TOCTOU_DETECTED', 'File changed during open verification', {
-        statusCode: 409,
+    if (st.dev !== rootDev) {
+      throw new DaemonError('MOUNT_BOUNDARY_REJECTED', 'File crosses mount boundary', {
+        statusCode: 403,
       })
     }
     if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
@@ -409,15 +545,8 @@ export async function readContainedTextFile(
       )
     }
 
-    const buf = Buffer.allocUnsafe(st.size)
-    let offset = 0
-    while (offset < st.size) {
-      const { bytesRead } = await fileHandle.read(buf, offset, st.size - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    const exactBuf = buf.subarray(0, offset)
-    const content = assertTextBuffer(exactBuf, segments.join('/'))
+    const exactBuf = await readExactFromHandle(fileHandle, st.size)
+    const content = assertValidUtf8Text(exactBuf, segments.join('/'))
     const revision = computeRevisionToken(st, exactBuf)
 
     return {
@@ -437,10 +566,18 @@ export async function readContainedTextFile(
 
 export async function saveContainedTextFile(
   canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
   relativePath: string,
   newContent: string,
   expectedRevision: string,
-): Promise<{ revision: string; sizeBytes: number; normalizedRelativePath: string; savedAt: string }> {
+  hooks?: SaveHookOptions,
+): Promise<{
+  revision: string
+  sizeBytes: number
+  normalizedRelativePath: string
+  savedAt: string
+}> {
   const segments = normalizeWorkspaceRelativePath(relativePath, false)
   const fileName = segments[segments.length - 1]
   if (isBlockedBinaryExtension(fileName)) {
@@ -457,43 +594,40 @@ export async function saveContainedTextFile(
       { statusCode: 413 },
     )
   }
+  assertValidUtf8Text(nextBytes, segments.join('/'))
 
   const parentSegments = segments.slice(0, -1)
-  const { dirPath, dirHandle } = await walkContainedDirectory(canonicalRoot, parentSegments)
-  const targetPath = join(dirPath, fileName)
+  const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parentSegments)
+  const targetChildPath = procFdChildPath(dirHandle.fd, fileName)
 
   const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
   const oNonBlock = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0
-  const flags = fsConstants.O_RDWR | oNoFollow | oNonBlock
 
-  let fileHandle: FileHandle | null = null
+  let readHandle: FileHandle | null = null
+  let tmpHandle: FileHandle | null = null
+  let tmpName: string | null = null
+
   try {
-    const preLstat = await lstat(targetPath).catch(() => null)
-    if (!preLstat) {
-      throw new DaemonError('FILE_NOT_FOUND', 'Target file does not exist', { statusCode: 404 })
-    }
-    assertRegularFileStats(preLstat, fileName)
-
     try {
-      fileHandle = await open(targetPath, flags)
+      readHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code === 'ELOOP') {
         throw new DaemonError('SYMLINK_REJECTED', 'Symlink target rejected', { statusCode: 403 })
       }
-      if (code === 'EACCES' || code === 'EROFS') {
-        throw new DaemonError('FILE_READ_ONLY', 'File is read-only on disk', { statusCode: 403 })
+      if (code === 'ENOENT') {
+        throw new DaemonError('FILE_NOT_FOUND', 'Target file does not exist', { statusCode: 404 })
       }
-      throw new DaemonError('FILE_OPEN_FAILED', `Failed to open file for writing: ${code ?? 'unknown'}`, {
+      throw new DaemonError('FILE_OPEN_FAILED', `Failed to open file: ${code ?? 'unknown'}`, {
         statusCode: 403,
       })
     }
 
-    const st = await fileHandle.stat()
+    const st = await readHandle.stat()
     assertRegularFileStats(st, fileName)
-    if (st.dev !== preLstat.dev || st.ino !== preLstat.ino) {
-      throw new DaemonError('TOCTOU_DETECTED', 'File changed during save verification', {
-        statusCode: 409,
+    if (st.dev !== rootDev) {
+      throw new DaemonError('MOUNT_BOUNDARY_REJECTED', 'File crosses mount boundary', {
+        statusCode: 403,
       })
     }
     if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
@@ -501,16 +635,15 @@ export async function saveContainedTextFile(
         statusCode: 413,
       })
     }
-
-    const currentBuf = Buffer.allocUnsafe(st.size)
-    let offset = 0
-    while (offset < st.size) {
-      const { bytesRead } = await fileHandle.read(currentBuf, offset, st.size - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
+    if ((st.mode & 0o222) === 0) {
+      throw new DaemonError('FILE_READ_ONLY', 'File is read-only on disk', { statusCode: 403 })
     }
-    const exactCurrent = currentBuf.subarray(0, offset)
-    const currentRevision = computeRevisionToken(st, exactCurrent)
+
+    const currentBuf = await readExactFromHandle(readHandle, st.size)
+    const currentRevision = computeRevisionToken(st, currentBuf)
+    await readHandle.close().catch(() => {})
+    readHandle = null
+
     if (currentRevision !== expectedRevision) {
       throw new DaemonError(
         'FILE_CONFLICT',
@@ -519,30 +652,76 @@ export async function saveContainedTextFile(
       )
     }
 
-    await fileHandle.truncate(0)
+    const origMode = st.mode & 0o777
+    tmpName = `.ghost-tmp-${randomUUID()}`
+    const tmpChildPath = procFdChildPath(dirHandle.fd, tmpName)
+
+    tmpHandle = await open(
+      tmpChildPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | oNoFollow,
+      origMode,
+    ).catch((err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'EACCES' || code === 'EROFS') {
+        throw new DaemonError('FILE_READ_ONLY', 'Workspace directory is read-only', {
+          statusCode: 403,
+        })
+      }
+      throw new DaemonError('FILE_WRITE_FAILED', `Failed to stage temp file: ${code ?? 'unknown'}`, {
+        statusCode: 500,
+      })
+    })
+
     let written = 0
     while (written < nextBytes.length) {
-      const res = await fileHandle.write(nextBytes, written, nextBytes.length - written, written)
+      if (hooks?.injectWriteError) {
+        hooks.injectWriteError()
+      }
+      const res = await tmpHandle.write(nextBytes, written, nextBytes.length - written, written)
       if (res.bytesWritten === 0) {
-        throw new DaemonError('FILE_WRITE_INCOMPLETE', 'Incomplete write while saving file', {
+        throw new DaemonError('FILE_WRITE_INCOMPLETE', 'Incomplete write while staging file', {
           statusCode: 500,
         })
       }
       written += res.bytesWritten
     }
-    await fileHandle.sync()
+    await chmod(tmpChildPath, origMode).catch(() => {})
+    await tmpHandle.sync()
+    await tmpHandle.close()
+    tmpHandle = null
 
-    const updatedStat = await fileHandle.stat()
-    const newRevision = computeRevisionToken(updatedStat, nextBytes)
-    return {
-      revision: newRevision,
-      sizeBytes: nextBytes.length,
-      normalizedRelativePath: segments.join('/'),
-      savedAt: new Date().toISOString(),
+    if (hooks?.onBeforeCommit) {
+      await hooks.onBeforeCommit()
+    }
+
+    // Atomic replacement inside the pinned directory descriptor; never truncates the live file first.
+    await rename(tmpChildPath, targetChildPath)
+    tmpName = null
+    await dirHandle.sync().catch(() => {})
+
+    const verifyHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
+    try {
+      const updatedStat = await verifyHandle.stat()
+      const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
+      const newRevision = computeRevisionToken(updatedStat, verifyBytes)
+      return {
+        revision: newRevision,
+        sizeBytes: verifyBytes.length,
+        normalizedRelativePath: segments.join('/'),
+        savedAt: new Date().toISOString(),
+      }
+    } finally {
+      await verifyHandle.close().catch(() => {})
     }
   } finally {
-    if (fileHandle) {
-      await fileHandle.close().catch(() => {})
+    if (readHandle) {
+      await readHandle.close().catch(() => {})
+    }
+    if (tmpHandle) {
+      await tmpHandle.close().catch(() => {})
+    }
+    if (tmpName) {
+      await unlink(procFdChildPath(dirHandle.fd, tmpName)).catch(() => {})
     }
     await dirHandle.close().catch(() => {})
   }

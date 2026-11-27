@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, link as fsLink, mkdir, mkdtemp, readFile, rename as fsRename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -8,6 +8,7 @@ import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
 import { DaemonError } from '../apps/daemon/src/errors.ts'
 import { WORKSPACE_LIMITS } from '../apps/daemon/src/workspace/contracts.ts'
 import { WorkspaceFilesService } from '../apps/daemon/src/workspace/files-service.ts'
+import { WorkspaceFilesStore, WORKSPACE_STORE_LIMITS } from '../apps/desktop/src/components/workspace/workspaceFilesStore.ts'
 
 async function createTempDaemonAndWorkspaces() {
   const root = await mkdtemp(join(tmpdir(), 'ghost-bot-alpha2b-'))
@@ -203,9 +204,12 @@ test('Alpha.2B security boundaries: traversal, symlinks, special files, binary, 
     assert.equal(manyRes.truncated, true)
 
     // Read-only bot permission & OS read-only file
+    const roCtx = await ctx.service.resolveContext({ botId: 'bot-ro' })
+    assert.ok(roCtx.workspaceId)
+    assert.equal(roCtx.canWrite, false)
     const roFile = await ctx.service.readFile({
       botId: 'bot-ro',
-      workspaceId: ws1Ctx.workspaceId!,
+      workspaceId: roCtx.workspaceId,
       relativePath: 'README.md',
     })
     assert.equal(roFile.readOnly, true)
@@ -213,7 +217,7 @@ test('Alpha.2B security boundaries: traversal, symlinks, special files, binary, 
       () =>
         ctx.service.saveFile({
           botId: 'bot-ro',
-          workspaceId: ws1Ctx.workspaceId!,
+          workspaceId: roCtx.workspaceId!,
           relativePath: 'README.md',
           content: 'mutated',
           expectedRevision: roFile.revision,
@@ -271,4 +275,270 @@ test('Alpha.2B security boundaries: traversal, symlinks, special files, binary, 
   } finally {
     await ctx.cleanup()
   }
+})
+
+test('Alpha.2B.1 A2B-FS-01: hard-link rejection, root identity replacement, and ancestor containment', async () => {
+  const ctx = await createTempDaemonAndWorkspaces()
+  try {
+    const ws1Ctx = await ctx.service.resolveContext({ botId: 'bot-ws1' })
+    assert.ok(ws1Ctx.workspaceId)
+
+    // Hard-link policy: hard-linking an outside file into workspace must be rejected
+    await fsLink(join(ctx.outside, 'secret.txt'), join(ctx.ws1, 'hardlink-secret.txt'))
+    await assert.rejects(
+      () =>
+        ctx.service.readFile({
+          botId: 'bot-ws1',
+          workspaceId: ws1Ctx.workspaceId!,
+          relativePath: 'hardlink-secret.txt',
+        }),
+      (err: unknown) => err instanceof DaemonError && err.code === 'HARDLINK_REJECTED',
+    )
+
+    // Root identity replacement at the exact same pathname must invalidate stale workspaceId
+    const swappedDir = join(ctx.root, 'ws1-replacement')
+    await mkdir(swappedDir, { recursive: true })
+    await writeFile(join(swappedDir, 'README.md'), '# Replaced root\n', 'utf8')
+    await fsRename(ctx.ws1, join(ctx.root, 'ws1-old'))
+    await fsRename(swappedDir, ctx.ws1)
+
+    await assert.rejects(
+      () =>
+        ctx.service.readFile({
+          botId: 'bot-ws1',
+          workspaceId: ws1Ctx.workspaceId!,
+          relativePath: 'README.md',
+        }),
+      (err: unknown) => err instanceof DaemonError && err.code === 'WORKSPACE_CONTEXT_MISMATCH',
+    )
+
+    // Restore ws1 for cleanup
+    await fsRename(ctx.ws1, swappedDir)
+    await fsRename(join(ctx.root, 'ws1-old'), ctx.ws1)
+  } finally {
+    await ctx.cleanup()
+  }
+})
+
+test('Alpha.2B.1 A2B-FS-02 & A2B-AUTH-01: concurrent saves, injected write error, and mid-save revocation', async () => {
+  const ctx = await createTempDaemonAndWorkspaces()
+  try {
+    const ws1Ctx = await ctx.service.resolveContext({ botId: 'bot-ws1' })
+    assert.ok(ws1Ctx.workspaceId)
+
+    const initial = await ctx.service.readFile({
+      botId: 'bot-ws1',
+      workspaceId: ws1Ctx.workspaceId,
+      relativePath: 'README.md',
+    })
+
+    // 1. Injected write failure must preserve original file and leave zero temp files
+    await assert.rejects(
+      () =>
+        ctx.service.saveFile(
+          {
+            botId: 'bot-ws1',
+            workspaceId: ws1Ctx.workspaceId!,
+            relativePath: 'README.md',
+            content: 'corrupted-partial',
+            expectedRevision: initial.revision,
+          },
+          {
+            injectWriteError: () => {
+              throw new Error('Injected disk I/O failure')
+            },
+          },
+        ),
+      (err: unknown) => err instanceof Error && err.message.includes('Injected disk I/O failure'),
+    )
+    assert.equal(await readFile(join(ctx.ws1, 'README.md'), 'utf8'), '# Workspace 1\n')
+
+    // 2. Concurrent saves with same expectedRevision: serialized; one succeeds, second gets FILE_CONFLICT
+    const results = await Promise.allSettled([
+      ctx.service.saveFile({
+        botId: 'bot-ws1',
+        workspaceId: ws1Ctx.workspaceId,
+        relativePath: 'README.md',
+        content: '# Concurrent A\n',
+        expectedRevision: initial.revision,
+      }),
+      ctx.service.saveFile({
+        botId: 'bot-ws1',
+        workspaceId: ws1Ctx.workspaceId,
+        relativePath: 'README.md',
+        content: '# Concurrent B\n',
+        expectedRevision: initial.revision,
+      }),
+    ])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+    assert.equal(fulfilled.length, 1)
+    assert.equal(rejected.length, 1)
+    assert.ok(
+      rejected[0].reason instanceof DaemonError && rejected[0].reason.code === 'FILE_CONFLICT',
+    )
+
+    // 3. Permission downgrade during save (onBeforeCommit barrier) aborts commit safely
+    const beforeRevoke = await ctx.service.readFile({
+      botId: 'bot-ws1',
+      workspaceId: ws1Ctx.workspaceId,
+      relativePath: 'README.md',
+    })
+    await assert.rejects(
+      () =>
+        ctx.service.saveFile(
+          {
+            botId: 'bot-ws1',
+            workspaceId: ws1Ctx.workspaceId!,
+            relativePath: 'README.md',
+            content: '# Should not commit\n',
+            expectedRevision: beforeRevoke.revision,
+          },
+          {
+            onBeforeCommit: () => {
+              ctx.db.sqlite
+                .prepare("UPDATE agents SET permission_mode = 'read-only' WHERE id = ?")
+                .run('bot-ws1')
+            },
+          },
+        ),
+      (err: unknown) => err instanceof DaemonError && err.code === 'WORKSPACE_READ_ONLY',
+    )
+    assert.equal(await readFile(join(ctx.ws1, 'README.md'), 'utf8'), '# Concurrent A\n')
+
+    // 4. Exactly one selector required (both botId and teamId rejected)
+    await assert.rejects(
+      () => ctx.service.resolveContext({ botId: 'bot-ws1', teamId: 'team-1' }),
+    )
+  } finally {
+    await ctx.cleanup()
+  }
+})
+
+test('Alpha.2B.1 A2B-FS-03: raw traversal segments rejected & whitespace filenames supported', async () => {
+  const ctx = await createTempDaemonAndWorkspaces()
+  try {
+    const ws1Ctx = await ctx.service.resolveContext({ botId: 'bot-ws1' })
+    assert.ok(ws1Ctx.workspaceId)
+
+    await mkdir(join(ctx.ws1, 'my notes'), { recursive: true })
+    await writeFile(join(ctx.ws1, 'my notes', 'hello world.txt'), 'notes\n', 'utf8')
+
+    const note = await ctx.service.readFile({
+      botId: 'bot-ws1',
+      workspaceId: ws1Ctx.workspaceId,
+      relativePath: 'my notes/hello world.txt',
+    })
+    assert.equal(note.content, 'notes\n')
+
+    await assert.rejects(
+      () =>
+        ctx.service.readFile({
+          botId: 'bot-ws1',
+          workspaceId: ws1Ctx.workspaceId!,
+          relativePath: 'src/../README.md',
+        }),
+      (err: unknown) => err instanceof DaemonError && err.code === 'PATH_TRAVERSAL_REJECTED',
+    )
+  } finally {
+    await ctx.cleanup()
+  }
+})
+
+test('Alpha.2B.1 A2B-UI-01 & A2B-UI-02: store preserves unsaved buffers across collapse & reconciles in-flight saves', async () => {
+  const store = new WorkspaceFilesStore()
+  const ws1State = store.setContextResolution('bot:bot-1', {
+    authorized: true,
+    workspaceId: 'ws-id-1',
+    canonicalRoot: '/tmp/ws1',
+    ownerKind: 'bot',
+    ownerId: 'bot-1',
+    ownerName: 'Bot 1',
+    canWrite: true,
+    permissionMode: 'workspace',
+    authGeneration: 'gen-1',
+    reason: null,
+  })
+  assert.ok(ws1State)
+
+  store.openOrUpdateTab(ws1State.storageKey, {
+    relativePath: 'README.md',
+    name: 'README.md',
+    savedContent: 'orig',
+    draftContent: 'unsaved-edit',
+    revision: 'rev-1',
+    readOnly: false,
+    language: 'markdown',
+    saving: false,
+    conflictMessage: null,
+    errorMessage: null,
+  })
+
+  // Simulated panel collapse/unmount + remount still retains unsaved buffer
+  const restored = store.getActiveWorkspaceState('bot:bot-1')
+  assert.equal(restored?.tabs[0]?.draftContent, 'unsaved-edit')
+
+  // In-flight save reconciles against originating workspace even if context switches mid-flight
+  let resolveSave!: (v: {
+    workspaceId: string
+    relativePath: string
+    revision: string
+    sizeBytes: number
+    savedAt: string
+  }) => void
+  const savePromise = store.saveTab(
+    {
+      resolveContext: async () => ws1State.contextInfo,
+      listDirectory: async () => {
+        throw new Error('unused')
+      },
+      readFile: async () => {
+        throw new Error('unused')
+      },
+      saveFile: () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    },
+    { botId: 'bot-1' },
+    ws1State.storageKey,
+    'README.md',
+  )
+
+  // User switches to bot-2 while save is in flight
+  store.setContextResolution('bot:bot-2', {
+    authorized: true,
+    workspaceId: 'ws-id-2',
+    canonicalRoot: '/tmp/ws2',
+    ownerKind: 'bot',
+    ownerId: 'bot-2',
+    ownerName: 'Bot 2',
+    canWrite: true,
+    permissionMode: 'workspace',
+    authGeneration: 'gen-2',
+    reason: null,
+  })
+
+  resolveSave({
+    workspaceId: 'ws-id-1',
+    relativePath: 'README.md',
+    revision: 'rev-2',
+    sizeBytes: 12,
+    savedAt: new Date().toISOString(),
+  })
+  await savePromise
+
+  const afterSaveWs1 = store.getActiveWorkspaceState('bot:bot-1')
+  assert.equal(afterSaveWs1?.tabs[0]?.saving, false)
+  assert.equal(afterSaveWs1?.tabs[0]?.revision, 'rev-2')
+  assert.equal(afterSaveWs1?.tabs[0]?.savedContent, 'unsaved-edit')
+
+  // Permission downgrade marks open tabs readOnly
+  store.setContextResolution('bot:bot-1', {
+    ...ws1State.contextInfo,
+    canWrite: false,
+    permissionMode: 'read-only',
+  })
+  assert.equal(store.getActiveWorkspaceState('bot:bot-1')?.tabs[0]?.readOnly, true)
+  assert.equal(WORKSPACE_STORE_LIMITS.maxRetainedWorkspaces, 6)
 })
