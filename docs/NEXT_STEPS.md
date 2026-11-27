@@ -11,7 +11,24 @@
 - Review the Apache-2.0 license and attribution change through a scoped PR. Coordinate merging with the active Alpha integration branches. Verify GitHub license detection on the default branch after merge.
 - Before public binary distribution, complete dependency/asset-rights and secret/history review; confirm contributor licensing authority and required third-party notices. Existing Alpha assignments and acceptance gates are unchanged.
 
-## Alpha.0B — Integrated Native Chat Release Candidate (Offline RC Ready)
+## Shared baseline maintainer review
+
+Review the [convergence candidate and Alpha.2C proposal](extensions/alpha-shared-convergence.md) and the [Alpha.1B contract](extensions/alpha1b-group-membership-model-routing-contract.md). The maintainer approved Alpha.1B and read-only Git inspection. The shared baseline awaits Agent 2 acceptance of the reconciliation and passing required checks. The read-only Git proposal can be reviewed while write authorization and race protections remain open.
+
+## Alpha.1A — Draft review
+
+Review the Alpha.1A branch against accepted UI.1 main. Shared wiring is available in the separate convergence draft for maintainer review. Keep Group task indicators and Private Task Chats scoped to Alpha.1D.
+
+## Alpha.2A–B — Shared Workspace Integration (Draft Review)
+
+1. Review the history-preserving integration candidate on `integration/alpha2ab-shared-wiring`. Coordinate disposition of draft PRs #16 and #18 with their owner.
+2. Agent 2 reviews the read contract and the focused Electron acceptance. A native directory confirmation grants daemon-lifetime read access for the persisted personal bot root identity. List/read validate both workspace ID and the grant’s authorization generation. Updating or restoring a workspace or changing its permission requires fresh confirmation. Group access requires an explicit authorized task scope. The saved tab is a UI preference.
+3. Keep save disabled until the write boundary can prevent external revision and staged-entry races and can enforce the intended approval and task scope. Define the artifact reference contract when authorized task scope is available.
+4. The approved read-only Alpha.2C Git scope awaits the accepted shared main SHA. Its scope is separate from the write boundary above.
+
+## Alpha.0B — Integrated Native Chat Release Candidate (Historical Handoff)
+
+Alpha.0 accepted for scoped internal personal Codex Chat in PR #15. The steps below record the original handoff.
 
 1. Agent 2 performs independent security review and Fedora GNOME / Ubuntu AppImage + RPM packaging smoke verification on `integration/alpha0-native-chat-rc`.
 2. Owner reviews and authorizes the bounded live acceptance procedure (`<= 3` prompts on Codex CLI `0.172.0` ChatGPT `plus` profile; optional bounded second-provider check) in `docs/extensions/alpha0b-integrated-native-chat-rc.md`.

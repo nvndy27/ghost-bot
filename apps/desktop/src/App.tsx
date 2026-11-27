@@ -17,6 +17,7 @@ import type {
   RuntimeSnapshot,
   SessionInspectionResponse,
   SessionRecord,
+  SidebarOrganization,
   TeamRecordDto,
   UpdateBotInput,
   UpdateTeamIpcInput,
@@ -30,7 +31,7 @@ import { ChatHeader } from './components/ChatHeader.tsx'
 import { ComputerUseLiveViewerModal } from './components/ComputerUseLiveViewerModal.tsx'
 import { ScopedTerminalModal } from './components/ScopedTerminalModal.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
-import { LeftSidebar } from './components/LeftSidebar.tsx'
+import { LeftSidebar, orderSidebarItems } from './components/LeftSidebar.tsx'
 import { MessageList } from './components/MessageList.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { SettingsModal } from './components/SettingsModal.tsx'
@@ -58,12 +59,24 @@ declare global {
 
 const DEFAULT_APP_SETTINGS: AppSettings = AppSettingsSchema.parse({})
 
+async function listBotConversations(bridge: GhostBotBridge, agentId: string) {
+  const limit = 100
+  const first = await bridge.listSessions({ agentId, limit })
+  const sessions = new Map(first.sessions.map((session) => [session.id, session]))
+  for (let offset = limit; offset < first.total; offset += limit) {
+    const page = await bridge.listSessions({ agentId, limit, offset })
+    for (const session of page.sessions) sessions.set(session.id, session)
+  }
+  return { ...first, sessions: [...sessions.values()] }
+}
+
 function recordToWorkspaceBot(rec: BotRecord): WorkspaceBot {
   return {
     id: rec.id,
     name: rec.name,
     description: rec.description,
     runtimeId: rec.runtimeId,
+    updatedAt: rec.updatedAt,
     statusLabel: 'Ready',
     avatarStatus: 'idle',
     avatar: rec.avatar,
@@ -196,10 +209,22 @@ export function App() {
   const [teamRunError, setTeamRunError] = useState<string | null>(null)
   const [startingTeamRun, setStartingTeamRun] = useState(false)
   const [cancellingTeamRun, setCancellingTeamRun] = useState(false)
+  const [sidebarOrg, setSidebarOrg] = useState<SidebarOrganization>({
+    pinnedBotIds: [],
+    botOrder: [],
+    pinnedTeamIds: [],
+    teamOrder: [],
+  })
   const teamRequestSeqRef = useRef(0)
   const activeTeam = teams.find((t) => t.id === activeTeamId) ?? null
   const activeBotSessions = activeBot ? (sessionsByBot[activeBot.id] ?? []) : []
   const activeSessionId = activeBot ? (activeSessionByBot[activeBot.id] ?? null) : null
+  const activeBotIdRef = useRef<string | null>(activeBotId)
+  const activeSessionIdRef = useRef<string | null>(activeSessionId)
+  const activeTeamIdRef = useRef<string | null>(activeTeamId)
+  activeBotIdRef.current = activeBotId
+  activeSessionIdRef.current = activeSessionId
+  activeTeamIdRef.current = activeTeamId
   const activeSessionRun = activeSessionId ? (activeRunBySession[activeSessionId] ?? null) : null
   const activeSessionInspection = activeSessionId
     ? (inspectionBySession[activeSessionId] ?? null)
@@ -234,19 +259,42 @@ export function App() {
       bridge.listBots(),
       bridge.migrateLocalSettings(legacy),
       bridge.getRuntimeSnapshot(false),
+      bridge.getSidebarOrganization().catch(() => ({
+        pinnedBotIds: [],
+        botOrder: [],
+        pinnedTeamIds: [],
+        teamOrder: [],
+      })),
     ])
-      .then(([daemonHealth, providerList, botsRes, loadedSettings, snap]) => {
+      .then(([daemonHealth, providerList, botsRes, loadedSettings, snap, org]) => {
         setHealth(daemonHealth)
         setProviders(providerList)
         setBots(botsRes.bots.map(recordToWorkspaceBot))
         setSettings(loadedSettings)
         setRuntimeSnapshot(snap)
+        setSidebarOrg(org)
         setActiveBotId(
           loadedSettings.general.launchBehavior === 'restore'
             ? (botsRes.activeBotId ?? botsRes.bots[0]?.id ?? null)
             : (botsRes.bots[0]?.id ?? null),
         )
         setBotsLoaded(true)
+        for (const b of botsRes.bots) {
+          void listBotConversations(bridge, b.id)
+            .then((sessRes) => {
+              setSessionsByBot((prev) => ({
+                ...prev,
+                [b.id]: prev[b.id] ?? sessRes.sessions,
+              }))
+              if (sessRes.activeSessionId) {
+                setActiveSessionByBot((prev) => ({
+                  ...prev,
+                  [b.id]: prev[b.id] ?? sessRes.activeSessionId,
+                }))
+              }
+            })
+            .catch(() => {})
+        }
         bridge
           .listTeams()
           .then((res) => {
@@ -456,8 +504,15 @@ export function App() {
         if (TERMINAL_RUN_STATUSES.has(latestRun.status)) {
           stopPollingRun(run.id)
           await refreshSessionMessages(sessionId, latestRun)
+          const isCurrentlyViewed =
+            !activeTeamIdRef.current &&
+            activeBotIdRef.current === botId &&
+            activeSessionIdRef.current === sessionId
+          if (isCurrentlyViewed) {
+            await bridge.markSessionRead(sessionId).catch(() => undefined)
+          }
           const [sessRes, insp] = await Promise.all([
-            bridge.listSessions({ agentId: botId }),
+            listBotConversations(bridge, botId),
             bridge.inspectSession(sessionId),
           ])
           setSessionsByBot((prev) => ({ ...prev, [botId]: sessRes.sessions }))
@@ -484,7 +539,7 @@ export function App() {
     let cancelled = false
     const syncSessions = async () => {
       try {
-        let listRes = await bridge.listSessions({ agentId: activeBotId })
+        let listRes = await listBotConversations(bridge, activeBotId)
         if (cancelled) return
 
         if (listRes.sessions.length === 0) {
@@ -861,11 +916,21 @@ export function App() {
     setActiveTeamId(null)
     setActiveBotId(id)
     const bridge = window.ghostBot
-    if (bridge) {
-      void bridge.setActiveBot(id).catch((err: unknown) => {
-        setBannerError(err instanceof Error ? err.message : 'Failed to persist active bot')
-      })
-    }
+    if (!bridge) return
+    void (async () => {
+      await bridge.setActiveBot(id)
+      const sessionId = activeSessionByBot[id] ?? (await bridge.listSessions({ agentId: id })).activeSessionId
+      if (!sessionId) return
+      const { lastReadAt } = await bridge.markSessionRead(sessionId)
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [id]: (prev[id] ?? []).map((session) =>
+          session.id === sessionId ? { ...session, unread: false, lastReadAt } : session,
+        ),
+      }))
+    })().catch((err: unknown) => {
+      setBannerError(err instanceof Error ? err.message : 'Failed to open bot conversation')
+    })
   }
 
   const updateActiveBotInline = (patch: Partial<WorkspaceBot>) => {
@@ -891,9 +956,15 @@ export function App() {
         ipcPatch.permission = patch.permission
       }
       if (Object.keys(ipcPatch).length > 0) {
-        void bridge.updateBot({ id: targetId, patch: ipcPatch }).catch((err: unknown) => {
-          setBannerError(err instanceof Error ? err.message : 'Failed to save bot setting')
-        })
+        void bridge.updateBot({ id: targetId, patch: ipcPatch })
+          .then((updated) => setBots((prev) => prev.map((bot) =>
+            bot.id === updated.id && (!bot.updatedAt || bot.updatedAt < updated.updatedAt)
+              ? { ...bot, updatedAt: updated.updatedAt }
+              : bot,
+          )))
+          .catch((err: unknown) => {
+            setBannerError(err instanceof Error ? err.message : 'Failed to save bot setting')
+          })
       }
     }
   }
@@ -965,6 +1036,16 @@ export function App() {
       const res = await bridge.deleteBot(id)
       setBots((prev) => prev.filter((b) => b.id !== res.deletedId))
       setActiveBotId(res.activeBotId)
+      setSessionsByBot((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      setSidebarOrg((prev) => ({
+        ...prev,
+        pinnedBotIds: prev.pinnedBotIds.filter((bid) => bid !== id),
+        botOrder: prev.botOrder.filter((bid) => bid !== id),
+      }))
       return
     }
     setBots((prev) => {
@@ -1057,6 +1138,12 @@ export function App() {
     try {
       await bridge.setActiveSession({ agentId: activeBot.id, sessionId })
       setActiveSessionByBot((prev) => ({ ...prev, [activeBot.id]: sessionId }))
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [activeBot.id]: (prev[activeBot.id] ?? []).map((s) =>
+          s.id === sessionId ? { ...s, unread: false } : s,
+        ),
+      }))
       const msgRes = await bridge.listMessages({ sessionId, limit: 200 })
       const sess = (sessionsByBot[activeBot.id] ?? []).find((s) => s.id === sessionId)
       let activeRun: RunRecord | null = null
@@ -1074,6 +1161,139 @@ export function App() {
     } catch (err) {
       setBannerError(err instanceof Error ? err.message : 'Failed to switch conversation')
     }
+  }
+
+  const handleRenameSession = async (sessionId: string, title: string) => {
+    const bridge = window.ghostBot
+    if (!activeBot || !bridge) return
+    try {
+      const updated = await bridge.renameSession({ sessionId, title })
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [activeBot.id]: (prev[activeBot.id] ?? []).map((s) =>
+          s.id === updated.id ? { ...s, ...updated } : s,
+        ),
+      }))
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to rename conversation')
+    }
+  }
+
+  const handleArchiveSession = async (sessionId: string) => {
+    const bridge = window.ghostBot
+    if (!activeBot || !bridge) return
+    const targetBotId = activeBot.id
+    try {
+      await bridge.archiveSession(sessionId)
+      let listRes = await listBotConversations(bridge, targetBotId)
+      if (listRes.sessions.length === 0) {
+        const created = await bridge.createSession({
+          agentId: targetBotId,
+          title: 'New conversation',
+        })
+        listRes = {
+          sessions: [created],
+          activeSessionId: created.id,
+          total: 1,
+        }
+      }
+      const nextSessionId = listRes.activeSessionId ?? listRes.sessions[0]?.id ?? null
+      setSessionsByBot((prev) => ({ ...prev, [targetBotId]: listRes.sessions }))
+      setActiveSessionByBot((prev) => ({ ...prev, [targetBotId]: nextSessionId }))
+      if (nextSessionId) {
+        const msgRes = await bridge.listMessages({ sessionId: nextSessionId, limit: 200 })
+        setMessagesBySession((prev) => ({
+          ...prev,
+          [nextSessionId]: msgRes.messages.map((m) => persistedToChatMessage(m, null)),
+        }))
+      }
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to archive conversation')
+    }
+  }
+
+  const handleMarkSessionRead = async (sessionId: string) => {
+    const bridge = window.ghostBot
+    if (!activeBot || !bridge) return
+    try {
+      const res = await bridge.markSessionRead(sessionId)
+      setSessionsByBot((prev) => ({
+        ...prev,
+        [activeBot.id]: (prev[activeBot.id] ?? []).map((s) =>
+          s.id === sessionId ? { ...s, unread: false, lastReadAt: res.lastReadAt } : s,
+        ),
+      }))
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to mark conversation as read')
+    }
+  }
+
+  const persistSidebarOrganization = async (next: SidebarOrganization) => {
+    setSidebarOrg(next)
+    const bridge = window.ghostBot
+    if (!bridge) return
+    try {
+      const saved = await bridge.updateSidebarOrganization(next)
+      setSidebarOrg(saved)
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : 'Failed to save sidebar order')
+    }
+  }
+
+  const handleTogglePinBot = (botId: string) => {
+    const isPinned = sidebarOrg.pinnedBotIds.includes(botId)
+    const pinnedBotIds = isPinned
+      ? sidebarOrg.pinnedBotIds.filter((id) => id !== botId)
+      : [botId, ...sidebarOrg.pinnedBotIds.filter((id) => id !== botId)]
+    void persistSidebarOrganization({ ...sidebarOrg, pinnedBotIds })
+  }
+
+  const handleMoveBot = (botId: string, direction: 'up' | 'down') => {
+    const ordered = orderSidebarItems(bots, sidebarOrg.pinnedBotIds, sidebarOrg.botOrder).map(
+      (b) => b.id,
+    )
+    const idx = ordered.indexOf(botId)
+    if (idx < 0) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= ordered.length) return
+    const pinnedSet = new Set(sidebarOrg.pinnedBotIds)
+    if (pinnedSet.has(ordered[idx]) !== pinnedSet.has(ordered[targetIdx])) return
+    const nextOrder = [...ordered]
+    ;[nextOrder[idx], nextOrder[targetIdx]] = [nextOrder[targetIdx], nextOrder[idx]]
+    const nextPinnedOrder = nextOrder.filter((id) => pinnedSet.has(id))
+    void persistSidebarOrganization({
+      ...sidebarOrg,
+      pinnedBotIds: nextPinnedOrder,
+      botOrder: nextOrder,
+    })
+  }
+
+  const handleTogglePinTeam = (teamId: string) => {
+    const isPinned = sidebarOrg.pinnedTeamIds.includes(teamId)
+    const pinnedTeamIds = isPinned
+      ? sidebarOrg.pinnedTeamIds.filter((id) => id !== teamId)
+      : [teamId, ...sidebarOrg.pinnedTeamIds.filter((id) => id !== teamId)]
+    void persistSidebarOrganization({ ...sidebarOrg, pinnedTeamIds })
+  }
+
+  const handleMoveTeam = (teamId: string, direction: 'up' | 'down') => {
+    const ordered = orderSidebarItems(teams, sidebarOrg.pinnedTeamIds, sidebarOrg.teamOrder).map(
+      (t) => t.id,
+    )
+    const idx = ordered.indexOf(teamId)
+    if (idx < 0) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= ordered.length) return
+    const pinnedSet = new Set(sidebarOrg.pinnedTeamIds)
+    if (pinnedSet.has(ordered[idx]) !== pinnedSet.has(ordered[targetIdx])) return
+    const nextOrder = [...ordered]
+    ;[nextOrder[idx], nextOrder[targetIdx]] = [nextOrder[targetIdx], nextOrder[idx]]
+    const nextPinnedOrder = nextOrder.filter((id) => pinnedSet.has(id))
+    void persistSidebarOrganization({
+      ...sidebarOrg,
+      pinnedTeamIds: nextPinnedOrder,
+      teamOrder: nextOrder,
+    })
   }
 
   const handleStopStream = () => {
@@ -1308,6 +1528,14 @@ export function App() {
           m.role === 'assistant' && Boolean(m.tools && m.tools.length > 0),
       )?.tools ?? []
 
+  const unreadCountByBot: Record<string, number> = {}
+  for (const [bId, sessList] of Object.entries(sessionsByBot)) {
+    const count = sessList.filter(
+      (s) => s.unread && !(!activeTeam && activeBot?.id === bId && activeSessionId === s.id),
+    ).length
+    if (count > 0) unreadCountByBot[bId] = count
+  }
+
   return (
     <div className="gb-shell">
       {!prefs.leftCollapsed && (
@@ -1318,12 +1546,18 @@ export function App() {
             activeBotId={activeTeam ? null : (activeBot?.id ?? null)}
             teams={teams}
             activeTeamId={activeTeam?.id ?? null}
+            organization={sidebarOrg}
+            unreadCountByBot={unreadCountByBot}
             teamsLoading={hasBridge && !teamsLoaded}
             teamsError={teamsError}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             onSelectBot={handleSelectBot}
             onSelectTeam={handleSelectTeam}
+            onTogglePinBot={handleTogglePinBot}
+            onMoveBot={handleMoveBot}
+            onTogglePinTeam={handleTogglePinTeam}
+            onMoveTeam={handleMoveTeam}
             onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
             onCreateTeam={() => setTeamEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -1381,6 +1615,11 @@ export function App() {
               activeSessionId={hasBridge ? activeSessionId : undefined}
               onSelectSession={hasBridge ? (sid) => void handleSelectSession(sid) : undefined}
               onNewChat={hasBridge ? () => void handleNewChat() : undefined}
+              onRenameSession={
+                hasBridge ? (sid, title) => handleRenameSession(sid, title) : undefined
+              }
+              onArchiveSession={hasBridge ? (sid) => handleArchiveSession(sid) : undefined}
+              onMarkSessionRead={hasBridge ? (sid) => handleMarkSessionRead(sid) : undefined}
               onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
               onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
               onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
@@ -1555,6 +1794,9 @@ export function App() {
           />
           {activeTeam ? (
             <TeamRightPanel
+              key={activeTeam.id}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               team={activeTeam}
               bots={bots}
@@ -1568,6 +1810,9 @@ export function App() {
             />
           ) : (
             <RightPanel
+              key={JSON.stringify([activeBot?.id, activeBot?.updatedAt, activeBot?.workspacePath, activeBot?.permission])}
+              activeTab={prefs.workspaceTab}
+              onTabChange={(workspaceTab) => updateAppearance({ workspaceTab })}
               width={prefs.rightWidth}
               bot={activeBot}
               activeTasks={latestTools}

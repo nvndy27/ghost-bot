@@ -1,8 +1,21 @@
-import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
-import { PanelLeft, Plus, Search, Settings, UsersRound } from 'lucide-react'
+import type { SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import { formatProviderLabel } from '@ghost-bot/shared-types/runtime'
+import {
+  ChevronDown,
+  ChevronUp,
+  PanelLeft,
+  Pin,
+  Plus,
+  Search,
+  Settings,
+  UsersRound,
+} from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
+import { orderSidebarItems } from '../state/sidebarOrder.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+
+export { orderSidebarItems }
 
 export interface LeftSidebarProps {
   width: number
@@ -10,12 +23,18 @@ export interface LeftSidebarProps {
   activeBotId: string | null
   teams: TeamRecordDto[]
   activeTeamId: string | null
+  organization?: SidebarOrganization
+  unreadCountByBot?: Record<string, number>
   teamsLoading?: boolean
   teamsError?: string | null
   searchQuery: string
   onSearchChange: (value: string) => void
   onSelectBot: (botId: string) => void
   onSelectTeam: (teamId: string) => void
+  onTogglePinBot?: (botId: string) => void
+  onMoveBot?: (botId: string, direction: 'up' | 'down') => void
+  onTogglePinTeam?: (teamId: string) => void
+  onMoveTeam?: (teamId: string, direction: 'up' | 'down') => void
   onCreateBot: () => void
   onCreateTeam: () => void
   onOpenSettings: () => void
@@ -29,21 +48,50 @@ export function LeftSidebar({
   activeBotId,
   teams,
   activeTeamId,
+  organization,
+  unreadCountByBot = {},
   teamsLoading = false,
   teamsError = null,
   searchQuery,
   onSearchChange,
   onSelectBot,
   onSelectTeam,
+  onTogglePinBot,
+  onMoveBot,
+  onTogglePinTeam,
+  onMoveTeam,
   onCreateBot,
   onCreateTeam,
   onOpenSettings,
   onCollapse,
   isMockMode,
 }: LeftSidebarProps) {
-  const filtered = bots.filter((b) =>
-    b.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+  const pinnedBotSet = new Set(organization?.pinnedBotIds ?? [])
+  const pinnedTeamSet = new Set(organization?.pinnedTeamIds ?? [])
+
+  const orderedBots = orderSidebarItems(
+    bots,
+    organization?.pinnedBotIds ?? [],
+    organization?.botOrder ?? [],
   )
+  const orderedTeams = orderSidebarItems(
+    teams,
+    organization?.pinnedTeamIds ?? [],
+    organization?.teamOrder ?? [],
+  )
+
+  const q = searchQuery.trim().toLowerCase()
+  const filteredBots = q
+    ? orderedBots.filter(
+        (b) =>
+          b.name.toLowerCase().includes(q) ||
+          formatProviderLabel(b.runtimeId).toLowerCase().includes(q),
+      )
+    : orderedBots
+
+  const filteredTeams = q
+    ? orderedTeams.filter((t) => t.name.toLowerCase().includes(q))
+    : orderedTeams
 
   return (
     <aside
@@ -75,34 +123,96 @@ export function LeftSidebar({
           type="search"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search bots"
+          placeholder="Search bots & teams"
           aria-label="Search bots"
         />
       </div>
 
       <div className="gb-bot-list" role="listbox" aria-label="Bots">
-        {filtered.length === 0 ? (
+        {filteredBots.length === 0 ? (
           <p className="gb-muted" style={{ fontSize: '12.5px', padding: '8px 6px', margin: 0 }}>
             No matching bots.
           </p>
         ) : (
-          filtered.map((bot) => {
+          filteredBots.map((bot, idx) => {
             const active = bot.id === activeBotId
+            const isPinned = pinnedBotSet.has(bot.id)
+            const unreadCount = unreadCountByBot[bot.id] ?? 0
+            const providerLabel = formatProviderLabel(bot.runtimeId)
+            const canReorder = !q && Boolean(onMoveBot)
+            const groupSamePinnedPrev = idx > 0 && pinnedBotSet.has(filteredBots[idx - 1].id) === isPinned
+            const groupSamePinnedNext =
+              idx < filteredBots.length - 1 && pinnedBotSet.has(filteredBots[idx + 1].id) === isPinned
+
             return (
-              <button
+              <div
                 key={bot.id}
-                type="button"
-                role="option"
-                aria-selected={active}
-                className={`gb-bot-item${active ? ' active' : ''}`}
-                onClick={() => onSelectBot(bot.id)}
+                className={`gb-sidebar-row${isPinned ? ' pinned' : ''}`}
+                data-bot-id={bot.id}
               >
-                <BotAvatar config={bot.avatar} status={bot.avatarStatus} size={32} />
-                <span className="gb-bot-meta">
-                  <span className="gb-bot-name">{bot.name}</span>
-                  <span className="gb-bot-status">{bot.statusLabel}</span>
-                </span>
-              </button>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`gb-bot-item${active ? ' active' : ''}`}
+                  onClick={() => onSelectBot(bot.id)}
+                >
+                  <BotAvatar config={bot.avatar} status={bot.avatarStatus} size={32} />
+                  <span className="gb-bot-meta">
+                    <span className="gb-bot-name">{bot.name}</span>
+                    <span className="gb-bot-status">{providerLabel}</span>
+                  </span>
+                  {unreadCount > 0 && (
+                    <span
+                      className="gb-unread-pill"
+                      aria-label={`${unreadCount} unread conversation${unreadCount === 1 ? '' : 's'}`}
+                      title={`${unreadCount} unread`}
+                    >
+                      {unreadCount}
+                    </span>
+                  )}
+                </button>
+                {(onTogglePinBot || onMoveBot) && (
+                  <div className="gb-row-actions">
+                    {canReorder && (
+                      <>
+                        <button
+                          type="button"
+                          className="gb-row-action-btn"
+                          aria-label={`Move ${bot.name} up`}
+                          title="Move up"
+                          disabled={!groupSamePinnedPrev}
+                          onClick={() => onMoveBot?.(bot.id, 'up')}
+                        >
+                          <ChevronUp size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="gb-row-action-btn"
+                          aria-label={`Move ${bot.name} down`}
+                          title="Move down"
+                          disabled={!groupSamePinnedNext}
+                          onClick={() => onMoveBot?.(bot.id, 'down')}
+                        >
+                          <ChevronDown size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                        </button>
+                      </>
+                    )}
+                    {onTogglePinBot && (
+                      <button
+                        type="button"
+                        className="gb-row-action-btn"
+                        aria-label={isPinned ? `Unpin ${bot.name}` : `Pin ${bot.name}`}
+                        aria-pressed={isPinned}
+                        title={isPinned ? 'Unpin bot' : 'Pin bot'}
+                        onClick={() => onTogglePinBot(bot.id)}
+                      >
+                        <Pin size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )
           })
         )}
@@ -135,42 +245,98 @@ export function LeftSidebar({
           <div style={{ color: 'var(--gb-danger)', fontSize: 12, padding: '4px 8px' }}>
             {teamsError}
           </div>
-        ) : teams.length === 0 ? (
+        ) : filteredTeams.length === 0 ? (
           <div className="gb-muted" style={{ fontSize: 12, padding: '4px 8px' }}>
-            No teams yet
+            {q ? 'No matching teams' : 'No teams yet'}
           </div>
         ) : (
-          teams.map((team) => {
+          filteredTeams.map((team, idx) => {
             const isActive = team.id === activeTeamId
+            const isPinned = pinnedTeamSet.has(team.id)
+            const canReorder = !q && Boolean(onMoveTeam)
+            const groupSamePinnedPrev = idx > 0 && pinnedTeamSet.has(filteredTeams[idx - 1].id) === isPinned
+            const groupSamePinnedNext =
+              idx < filteredTeams.length - 1 && pinnedTeamSet.has(filteredTeams[idx + 1].id) === isPinned
+
             return (
-              <button
+              <div
                 key={team.id}
-                type="button"
-                className={`gb-team-item${isActive ? ' active' : ''}`}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  background: isActive ? 'var(--gb-surface-elevated)' : 'transparent',
-                  border: isActive ? '1px solid var(--gb-border)' : '1px solid transparent',
-                  cursor: 'pointer',
-                  font: 'inherit',
-                  color: 'inherit',
-                }}
-                onClick={() => onSelectTeam(team.id)}
+                className={`gb-sidebar-row${isPinned ? ' pinned' : ''}`}
+                data-team-id={team.id}
               >
-                <span
-                  className="gb-icon-inline"
-                  style={{ minWidth: 0, overflow: 'hidden', gap: '7px' }}
+                <button
+                  type="button"
+                  className={`gb-team-item${isActive ? ' active' : ''}`}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    background: isActive ? 'var(--gb-surface-elevated)' : 'transparent',
+                    border: isActive ? '1px solid var(--gb-border)' : '1px solid transparent',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    color: 'inherit',
+                  }}
+                  onClick={() => onSelectTeam(team.id)}
                 >
-                  <UsersRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--gb-muted)' }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {team.name}
+                  <span
+                    className="gb-icon-inline"
+                    style={{ minWidth: 0, overflow: 'hidden', gap: '7px' }}
+                  >
+                    <UsersRound
+                      size={ICON_SIZE.sm}
+                      strokeWidth={ICON_STROKE}
+                      aria-hidden="true"
+                      style={{ flexShrink: 0, color: 'var(--gb-muted)' }}
+                    />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {team.name}
+                    </span>
                   </span>
-                </span>
-                <span className="gb-badge">
-                  {isMockMode ? `${team.memberBotIds.length} mock` : `${team.memberBotIds.length}`}
-                </span>
-              </button>
+                  <span className="gb-badge">
+                    {isMockMode ? `${team.memberBotIds.length} mock` : `${team.memberBotIds.length}`}
+                  </span>
+                </button>
+                {(onTogglePinTeam || onMoveTeam) && (
+                  <div className="gb-row-actions">
+                    {canReorder && (
+                      <>
+                        <button
+                          type="button"
+                          className="gb-row-action-btn"
+                          aria-label={`Move ${team.name} up`}
+                          title="Move up"
+                          disabled={!groupSamePinnedPrev}
+                          onClick={() => onMoveTeam?.(team.id, 'up')}
+                        >
+                          <ChevronUp size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="gb-row-action-btn"
+                          aria-label={`Move ${team.name} down`}
+                          title="Move down"
+                          disabled={!groupSamePinnedNext}
+                          onClick={() => onMoveTeam?.(team.id, 'down')}
+                        >
+                          <ChevronDown size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                        </button>
+                      </>
+                    )}
+                    {onTogglePinTeam && (
+                      <button
+                        type="button"
+                        className="gb-row-action-btn"
+                        aria-label={isPinned ? `Unpin ${team.name}` : `Pin ${team.name}`}
+                        aria-pressed={isPinned}
+                        title={isPinned ? 'Unpin team' : 'Pin team'}
+                        onClick={() => onTogglePinTeam(team.id)}
+                      >
+                        <Pin size={12} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )
           })
         )}
@@ -184,7 +350,12 @@ export function LeftSidebar({
         onClick={onOpenSettings}
         aria-label="Open Settings"
       >
-        <Settings size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ color: 'var(--gb-muted)', flexShrink: 0 }} />
+        <Settings
+          size={ICON_SIZE.md}
+          strokeWidth={ICON_STROKE}
+          aria-hidden="true"
+          style={{ color: 'var(--gb-muted)', flexShrink: 0 }}
+        />
         <span>Settings</span>
       </button>
     </aside>

@@ -22,14 +22,22 @@ function requestSocket(
   socketPath: string,
   path: string,
   token?: string,
+  payload?: unknown,
 ): Promise<{ status: number; body: unknown }> {
+  const encoded = payload === undefined ? undefined : JSON.stringify(payload)
   return new Promise((resolve, reject) => {
     const req = httpRequest(
       {
         socketPath,
         path,
-        method: 'GET',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        method: encoded === undefined ? 'GET' : 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(encoded === undefined ? {} : {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(encoded),
+          }),
+        },
       },
       (res) => {
         const chunks: Buffer[] = []
@@ -43,7 +51,7 @@ function requestSocket(
       },
     )
     req.on('error', reject)
-    req.end()
+    req.end(encoded)
   })
 }
 
@@ -75,6 +83,12 @@ test('daemon rejects weak authToken and unauthenticated requests', async () => {
     assert.ok(Array.isArray(providers.body))
     const first = ProviderSummarySchema.parse(providers.body[0])
     assert.equal(first.status, 'mock')
+
+    const grant = { botId: 'bot-fixture', workspaceId: 'fixture', selectedRoot: dir }
+    assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', undefined, grant)).status, 401)
+    assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', token, grant)).status, 403)
+    assert.equal((await requestSocket(socketPath, '/workspace/context', token, { ...grant, canWrite: true })).status, 400)
+    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {})).status, 403)
 
     const notFound = await requestSocket(socketPath, '/unknown', token)
     assert.equal(notFound.status, 404)

@@ -1,5 +1,27 @@
 # Progress log
 
+## Shared baseline convergence
+
+**Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Agent 2 accepted the implementation at `78d0822` and requested targeted acceptance after bringing in current main. The reconciliation preserves both documentation histories and the newer main changes. See the [combined evidence](extensions/alpha-shared-convergence.md).
+
+## Alpha.1A — Bot and Conversation Management
+
+**Tested** on post-UI.1 main. Continued from `290d956` and fixed legacy workspace path handling for provider edits, explicit bot navigation read state and conversation paging. Focused tests passed 3/3, database and Teams regressions 8/8, and the offline two-launch Electron scenario passed. Zero live inference. See [Alpha.1A scope and evidence](extensions/alpha1a-bot-conversation-management.md).
+
+## Alpha.2A–B — Shared Workspace Integration
+
+The integration branch preserves the merge at `d3dc3c3`. The reconciliation follow-up binds native read grants to the bot, workspace identity, and current authorization generation. A workspace or permission change clears the grant. The staged save service checks the pinned inode, staged entry metadata, and bytes before rename. Regression coverage includes restoring a prior root, replacing the stage entry, and modifying staged bytes without changing their length. See the coordination handoff for the exact tested revision and acceptance results.
+
+The integration candidate joins the accepted UI.1 baseline `3ce8c3f6f7dcc925461010dab1ffa0f729562e00` with PR #18 at `9a0e07ec3e20cd036785b256f81d77d258f3f8a2`, which already includes PR #16 at `821d5d1a0a64d3b14c4f5d9757be3fc0d91d1c8b`.
+
+| State | Evidence |
+|---|---|
+| Tested | Personal Chat and Group Chat share the Workspace Panel shell. Overview preserves UI.1 icon controls and Team Activity. The daemon settings record persists the selected tab across contexts and restart. |
+| Tested | Real Electron IPC and authenticated daemon routes listed and opened a temporary file after native directory confirmation. The test supplied the dialog result from the Electron main test process. It verified rejection of a different selected root, renderer permission claims, absolute file paths, save attempts, stale workspace context and group access. It also checked editor content, read-only state, restart and shutdown. |
+| Tested | Workspace lint, shared-types and desktop typecheck, daemon and desktop builds passed. The focused daemon IPC, workspace service and Electron test run passed 13/13. The service tests exercised stale revisions and authorization changes during isolated saves. Zero live model inference. |
+| Blocked | File writes remain disabled at the daemon route. Staged-descriptor, directory-entry and byte checks narrow the pre-rename race. An external writer can still alter the target revision or staged directory entry before rename. Ask Approval and group/task write authority also need an approved binding. |
+| Implemented | The integration adds no migration or dependency. Alpha.1A continued in its separate worktree and is tracked independently in PR #20. |
+
 ## Open-source readiness — dual license and CI
 
 Owner approved MIT OR Apache-2.0 and repository health automation. Added MIT text, dual-license metadata and contributor terms, CI, CodeQL, Dependabot, OpenSSF Scorecard, SPDX dependency-graph SBOM export and community templates. First workflow results pending; no certification or test pass is claimed. Existing milestones unchanged.

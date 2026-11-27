@@ -1,3 +1,4 @@
+import type { WorkspaceTabId } from '@ghost-bot/shared-types/ipc'
 import type { AvatarConfig } from '@ghost-bot/avatar/presets'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 
@@ -18,6 +19,7 @@ export interface UiPreferences {
   rightWidth: number
   leftCollapsed: boolean
   rightCollapsed: boolean
+  workspaceTab: WorkspaceTabId
   reducedMotion: boolean
 }
 
@@ -70,6 +72,7 @@ export interface WorkspaceBot {
   name: string
   description?: string
   runtimeId?: string
+  updatedAt?: string
   statusLabel: string
   avatarStatus: AvatarStatus
   avatar: AvatarConfig

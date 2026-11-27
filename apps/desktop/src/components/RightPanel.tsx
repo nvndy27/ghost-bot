@@ -3,11 +3,9 @@ import {
   CalendarClock,
   ChartNoAxesColumn,
   Check,
-  FolderOpen,
   ListTodo,
   Loader2,
   Monitor,
-  PanelRight,
   Plug,
   RefreshCw,
   Terminal,
@@ -15,6 +13,9 @@ import {
 import { MOCK_ROUTINES, MOCK_TOOLS } from '../data/mockWorkspace.ts'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { WorkspacePanelShell } from './WorkspacePanelShell.tsx'
+import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
+import type { WorkspaceTabId } from './workspace/workspaceTabs.ts'
 
 export interface RightPanelProps {
   width: number
@@ -24,6 +25,9 @@ export interface RightPanelProps {
   isMockMode: boolean
   routines?: RoutineRecordDto[]
   unreadRoutineNotifications?: number
+  activeTab?: WorkspaceTabId
+  onTabChange?: (tab: WorkspaceTabId) => void
+  filesTransport?: WorkspaceFilesTransport | null
   onOpenRoutines?: () => void
   onOpenComputerUse?: () => void
   onOpenTerminal?: () => void
@@ -40,6 +44,9 @@ export function RightPanel({
   isMockMode,
   routines,
   unreadRoutineNotifications = 0,
+  activeTab,
+  onTabChange,
+  filesTransport,
   onOpenRoutines,
   onOpenComputerUse,
   onOpenTerminal,
@@ -47,34 +54,8 @@ export function RightPanel({
   onReconnectRuntime,
   onCollapse,
 }: RightPanelProps) {
-  return (
-    <aside
-      className="gb-right-panel"
-      style={{ width: `${width}px` }}
-      aria-label="Bot workspace panel"
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: '12px',
-        }}
-      >
-        <strong className="gb-icon-inline" style={{ fontSize: '14px' }}>
-          <FolderOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" style={{ color: 'var(--gb-muted)' }} />
-          <span>Bot workspace</span>
-        </strong>
-        <IconButton
-          label="Collapse workspace panel"
-          onClick={onCollapse}
-          active
-          pressed
-        >
-          <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        </IconButton>
-      </div>
-
+  const overviewContent = (
+    <>
       <div className="gb-screen-mock" aria-hidden="true">
         <div className="gb-screen-bar">
           <span>● ● ●</span>
@@ -97,7 +78,11 @@ export function RightPanel({
           <span>Live computer</span>
         </div>
         <small className="gb-muted">
-          {onOpenComputerUse ? 'Isolated browser · ready' : isMockMode ? 'Mock preview · unavailable' : 'Unavailable'}
+          {onOpenComputerUse
+            ? 'Isolated browser · ready'
+            : isMockMode
+              ? 'Mock preview · unavailable'
+              : 'Unavailable'}
         </small>
         {onOpenComputerUse && (
           <div style={{ marginTop: 6 }}>
@@ -215,7 +200,12 @@ export function RightPanel({
           MOCK_TOOLS.map((tool) => (
             <div
               key={tool.id}
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '6px',
+              }}
             >
               <span className="gb-icon-inline" style={{ gap: '6px' }}>
                 {tool.kind === 'terminal' ? (
@@ -297,7 +287,11 @@ export function RightPanel({
                 </div>
                 {w.resetAt && (
                   <small className="gb-muted" style={{ fontSize: '10.5px' }}>
-                    Resets {new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    Resets{' '}
+                    {new Date(w.resetAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </small>
                 )}
               </div>
@@ -305,19 +299,24 @@ export function RightPanel({
             <small className="gb-muted" style={{ fontSize: '11px' }}>
               Status: {runtimeSnapshot.status === 'stale' ? 'stale' : runtimeSnapshot.usageStatus}
               {runtimeSnapshot.usageObservedAt
-                ? ` · Refreshed ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                ? ` · Refreshed ${new Date(runtimeSnapshot.usageObservedAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`
                 : ''}
             </small>
-            {runtimeSnapshot.lifecycleState && runtimeSnapshot.lifecycleState !== 'connected' && onReconnectRuntime && (
-              <button
-                type="button"
-                className="gb-btn-outline"
-                onClick={onReconnectRuntime}
-                style={{ fontSize: '11.5px', padding: '4px 8px' }}
-              >
-                Reconnect runtime
-              </button>
-            )}
+            {runtimeSnapshot.lifecycleState &&
+              runtimeSnapshot.lifecycleState !== 'connected' &&
+              onReconnectRuntime && (
+                <button
+                  type="button"
+                  className="gb-btn-outline"
+                  onClick={onReconnectRuntime}
+                  style={{ fontSize: '11.5px', padding: '4px 8px' }}
+                >
+                  Reconnect runtime
+                </button>
+              )}
           </div>
         ) : (
           <div style={{ display: 'grid', gap: '6px' }}>
@@ -339,6 +338,23 @@ export function RightPanel({
           </div>
         )}
       </div>
-    </aside>
+    </>
+  )
+
+  return (
+    <WorkspacePanelShell
+      width={width}
+      contextKey={bot ? `bot:${bot.id}` : 'bot:none'}
+      contextLabel={bot ? `${bot.name} (${bot.statusLabel})` : 'No active bot'}
+      contextKind="bot"
+      ownerId={bot?.id ?? null}
+      workspacePath={bot?.workspacePath ?? null}
+      isMockMode={isMockMode}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
+      onCollapse={onCollapse}
+      overviewContent={overviewContent}
+      filesTransport={filesTransport}
+    />
   )
 }
