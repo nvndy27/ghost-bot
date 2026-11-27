@@ -2,6 +2,7 @@ import type { RoutineRecordDto, RuntimeSnapshot } from '@ghost-bot/shared-types/
 import { MOCK_ROUTINES, MOCK_TOOLS } from '../data/mockWorkspace.ts'
 import type { ToolStep, WorkspaceBot } from '../types/workspace.ts'
 import { WorkspacePanelShell } from './WorkspacePanelShell.tsx'
+import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
 import type { WorkspaceTabId } from './workspace/workspaceTabs.ts'
 
 export interface RightPanelProps {
@@ -14,6 +15,7 @@ export interface RightPanelProps {
   unreadRoutineNotifications?: number
   activeTab?: WorkspaceTabId
   onTabChange?: (tab: WorkspaceTabId) => void
+  filesTransport?: WorkspaceFilesTransport | null
   onOpenRoutines?: () => void
   onOpenComputerUse?: () => void
   onOpenTerminal?: () => void
@@ -32,6 +34,7 @@ export function RightPanel({
   unreadRoutineNotifications = 0,
   activeTab,
   onTabChange,
+  filesTransport,
   onOpenRoutines,
   onOpenComputerUse,
   onOpenTerminal,
@@ -306,12 +309,14 @@ export function RightPanel({
       contextKey={bot ? `bot:${bot.id}` : 'bot:none'}
       contextLabel={bot ? `${bot.name} (${bot.statusLabel})` : 'No active bot'}
       contextKind="bot"
+      ownerId={bot?.id ?? null}
       workspacePath={bot?.workspacePath ?? null}
       isMockMode={isMockMode}
       activeTab={activeTab}
       onTabChange={onTabChange}
       onCollapse={onCollapse}
       overviewContent={overviewContent}
+      filesTransport={filesTransport}
     />
   )
 }

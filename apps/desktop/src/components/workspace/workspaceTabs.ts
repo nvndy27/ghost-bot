@@ -21,9 +21,9 @@ export const WORKSPACE_TABS: readonly WorkspaceTabDefinition[] = [
     id: 'files',
     label: 'Files / Editor',
     shortLabel: 'Files',
-    implemented: false,
+    implemented: true,
     milestone: 'Alpha.2B',
-    summary: 'Authorized workspace file tree and editor are not yet enabled in Alpha.2A.',
+    summary: 'Authorized workspace file tree and embedded editor.',
   },
   {
     id: 'changes',
