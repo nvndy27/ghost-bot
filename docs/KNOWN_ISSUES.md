@@ -5,6 +5,8 @@
 - Workspace file containment requires Linux with `/proc/self/fd` and fails closed without it. Save is blocked at the daemon boundary. Staged-file identity and revision checks cannot make POSIX rename conditional on an unchanged target and source entry when another process writes concurrently. Ask Approval also requires an explicit grant before the write path can be exposed.
 - Final Personal & Friends Alpha integrated packaging, platform, and remaining live acceptance gates are open.
 
+- Alpha.2C.1 search, preview and chat draft insertion require Agent 1 shared IPC and composer integration. PDF preview remains unavailable pending an isolated rasterizer.
+
 ## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.

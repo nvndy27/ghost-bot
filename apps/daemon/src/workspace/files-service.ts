@@ -24,6 +24,14 @@ import {
   type WorkspaceSaveFileResponse,
 } from './contracts.ts'
 
+import { previewAuthorizedWorkspaceFile, searchAuthorizedWorkspace } from './discovery.ts'
+import {
+  WorkspacePreviewInputSchema,
+  WorkspaceSearchInputSchema,
+  type WorkspacePreviewResult,
+  type WorkspaceSearchResult,
+} from './discovery-contracts.ts'
+
 interface AgentWorkspaceRow {
   id: string
   name: string
@@ -95,6 +103,46 @@ export class WorkspaceFilesService {
       }
       throw err
     }
+  }
+
+  async searchFiles(rawInput: unknown, signal?: AbortSignal): Promise<WorkspaceSearchResult> {
+    const input = WorkspaceSearchInputSchema.parse(rawInput)
+    signal?.throwIfAborted()
+    const workspace = await this.validateDiscoveryWorkspace(input)
+    const result = await searchAuthorizedWorkspace(workspace, input.mode, input.query, signal)
+    await this.validateDiscoveryWorkspace(input)
+    signal?.throwIfAborted()
+    return {
+      ...result,
+      workspaceId: input.workspaceId,
+      authGeneration: input.authGeneration,
+      operationId: input.operationId,
+    }
+  }
+
+  async previewFile(rawInput: unknown): Promise<WorkspacePreviewResult> {
+    const input = WorkspacePreviewInputSchema.parse(rawInput)
+    const workspace = await this.validateDiscoveryWorkspace(input)
+    const preview = await previewAuthorizedWorkspaceFile(workspace, input.relativePath)
+    await this.validateDiscoveryWorkspace(input)
+    return {
+      workspaceId: input.workspaceId,
+      authGeneration: input.authGeneration,
+      relativePath: input.relativePath,
+      preview,
+    }
+  }
+
+  private async validateDiscoveryWorkspace(input: {
+    botId: string
+    workspaceId: string
+    authGeneration: string
+  }): Promise<AuthorizedWorkspace> {
+    const workspace = await this.authorizeWorkspace({ botId: input.botId })
+    if (workspace.workspaceId !== input.workspaceId || workspace.authGeneration !== input.authGeneration) {
+      throw new DaemonError('WORKSPACE_CONTEXT_MISMATCH', 'Workspace authorization changed', { statusCode: 409 })
+    }
+    return workspace
   }
 
   async listDirectory(rawInput: unknown): Promise<WorkspaceListDirectoryResponse> {

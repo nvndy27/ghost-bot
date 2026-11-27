@@ -216,6 +216,8 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await editor.waitFor()
     assert.equal(await editor.inputValue(), 'Initial fixture\n')
 
+    await page.getByText('Workspace search and preview are unavailable.', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Add selection to chat draft' }).count(), 0)
     assert.equal(await editor.getAttribute('readonly'), '')
     assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceCodeEditor } from './WorkspaceCodeEditor.tsx'
+import { WorkspacePreview, WorkspaceSearch } from './WorkspaceDiscoveryPanel.tsx'
+import {
+  getWorkspaceDiscoveryTransport,
+  type WorkspaceDiscoveryTransport,
+  type WorkspaceDraftSelection,
+} from './workspaceDiscoveryClient.ts'
 import { WorkspaceFileTree } from './WorkspaceFileTree.tsx'
 import {
   getDefaultWorkspaceFilesTransport,
@@ -18,6 +24,9 @@ export interface WorkspaceFilesTabProps {
   isMockMode: boolean
   transport?: WorkspaceFilesTransport | null
   store?: WorkspaceFilesStore
+  visible?: boolean
+  discoveryTransport?: WorkspaceDiscoveryTransport | null
+  onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
 }
 
 export function WorkspaceFilesTab({
@@ -29,11 +38,21 @@ export function WorkspaceFilesTab({
   isMockMode,
   transport: injectedTransport,
   store = sharedWorkspaceFilesStore,
+  visible = true,
+  discoveryTransport: injectedDiscovery,
+  onAddSelectionToDraft,
 }: WorkspaceFilesTabProps) {
   const transport = useMemo(
     () => (injectedTransport !== undefined ? injectedTransport : getDefaultWorkspaceFilesTransport()),
     [injectedTransport],
   )
+
+  const discovery = useMemo(
+    () => injectedDiscovery === undefined ? getWorkspaceDiscoveryTransport() : injectedDiscovery,
+    [injectedDiscovery],
+  )
+  const [previewTarget, setPreviewTarget] = useState<{ key: string; relativePath: string } | null>(null)
+  const [jumpTo, setJumpTo] = useState<{ relativePath: string; lineNumber: number } | null>(null)
 
   const [, setVersion] = useState(0)
   const [contextLoading, setContextLoading] = useState(true)
@@ -84,17 +103,18 @@ export function WorkspaceFilesTab({
         },
       }))
 
+      const targetGeneration = store.getActiveWorkspaceState(targetContextKey)?.contextInfo.authGeneration
       try {
         const res = await transport.listDirectory({
           ...sel,
           workspaceId,
-          authGeneration:
-            store.getActiveWorkspaceState(targetContextKey)?.contextInfo.authGeneration ?? '',
+          authGeneration: targetGeneration ?? '',
           relativePath,
         })
         if (activeKeyRef.current !== targetContextKey) return
         const latest = store.getActiveWorkspaceState(targetContextKey)
-        if (!latest || latest.workspaceId !== res.workspaceId) return
+        if (!latest || latest.workspaceId !== res.workspaceId ||
+          latest.contextInfo.authGeneration !== targetGeneration) return
 
         store.updateWorkspace(storageKey, (prev) => ({
           ...prev,
@@ -212,6 +232,7 @@ export function WorkspaceFilesTab({
     const targetContextKey = contextKey
     const targetStorageKey = currentState.storageKey
     const targetWorkspaceId = currentState.workspaceId
+    const targetGeneration = currentState.contextInfo.authGeneration
     setLoadingFilePath(relativePath)
     setLoadFileError(null)
 
@@ -219,12 +240,13 @@ export function WorkspaceFilesTab({
       const res = await transport.readFile({
         ...selector,
         workspaceId: targetWorkspaceId,
-        authGeneration: currentState.contextInfo.authGeneration ?? '',
+        authGeneration: targetGeneration ?? '',
         relativePath,
       })
       if (activeKeyRef.current !== targetContextKey) return
       const latest = store.getActiveWorkspaceState(targetContextKey)
-      if (!latest || latest.workspaceId !== res.workspaceId) return
+      if (!latest || latest.workspaceId !== res.workspaceId ||
+          latest.contextInfo.authGeneration !== targetGeneration) return
 
       const outcome = store.openOrUpdateTab(targetStorageKey, {
         relativePath: res.relativePath,
@@ -329,6 +351,22 @@ export function WorkspaceFilesTab({
   }
 
   const expandedSet = new Set(currentState.expandedDirs)
+  const { authGeneration } = currentState.contextInfo
+  const access = contextKind === 'bot' && ownerId && authGeneration
+    ? { botId: ownerId, workspaceId: currentState.workspaceId, authGeneration }
+    : null
+  const accessKey = JSON.stringify(access)
+
+  function selectFile(relativePath: string, lineNumber: number | null = null) {
+    setPreviewTarget(null)
+    setJumpTo(lineNumber === null ? null : { relativePath, lineNumber })
+    if (discovery && access && /\.(?:gif|png|pdf)$/i.test(relativePath)) {
+      setPreviewTarget({ key: accessKey, relativePath })
+    } else {
+      void openOrReloadFile(relativePath, false)
+    }
+  }
+
 
   return (
     <div className="gb-files-tab" data-testid="workspace-files-tab">
@@ -345,6 +383,23 @@ export function WorkspaceFilesTab({
         </span>
       </div>
 
+      {visible && access && (discovery ? (
+        <WorkspaceSearch key={accessKey} access={access} transport={discovery}
+          onOpenResult={(hit) => selectFile(hit.relativePath, hit.lineNumber)} />
+      ) : <p className="gb-muted gb-workspace-discovery" role="status">Workspace search and preview are unavailable.</p>)}
+      {visible && access && discovery && currentState.activePath &&
+          /\.(?:md|markdown|svg)$/i.test(currentState.activePath) && (
+        <button type="button" className="gb-workspace-icon-btn"
+          onClick={() => setPreviewTarget({ key: accessKey, relativePath: currentState.activePath! })}>
+          Preview opened file
+        </button>
+      )}
+      {visible && access && discovery && previewTarget?.key === accessKey && (
+        <WorkspacePreview key={JSON.stringify([accessKey, previewTarget.relativePath])}
+          access={access} transport={discovery} relativePath={previewTarget.relativePath}
+          onClose={() => setPreviewTarget(null)} />
+      )}
+
       <div className="gb-files-layout">
         <WorkspaceFileTree
           rootPath={currentState.contextInfo.canonicalRoot ?? ''}
@@ -352,12 +407,16 @@ export function WorkspaceFilesTab({
           expandedDirs={expandedSet}
           selectedFilePath={currentState.activePath}
           onToggleDir={handleToggleDir}
-          onSelectFile={(path) => void openOrReloadFile(path, false)}
+          onSelectFile={selectFile}
           onRefresh={() => void refreshContextAndRoot()}
         />
 
         <WorkspaceCodeEditor
           tabs={currentState.tabs}
+          jumpTo={jumpTo}
+          onSendSelection={access && onAddSelectionToDraft
+            ? (relativePath, text) => onAddSelectionToDraft({ ...access, relativePath, text })
+            : undefined}
           activePath={currentState.activePath}
           loadingFilePath={loadingFilePath}
           loadError={loadFileError}

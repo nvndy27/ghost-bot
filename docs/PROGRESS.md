@@ -1,5 +1,17 @@
 # Progress log
 
+## Alpha.2C.1 — Workspace search and previews
+
+The maintainer authorized the read-only feature branch from `c91ebcba34a9308ce5e3645417f5afaacd56e472` (PR #19). Workspace-owned modules implement descriptor-relative name and text search, matching-line navigation, preview loading, Markdown text rendering, sanitized SVG and bounded PNG/GIF data, and a draft insertion callback. Search limits are 8 levels, 96 directory visits, 4,000 scanned entries, 600 files, 100 results, 64 KiB per text file and a 2.5-second cooperative deadline. An in-flight filesystem operation completes before the deadline or cancellation can be observed. Preview inputs are capped at 1 MiB, with a lower SVG limit and a raster pixel limit.
+
+Agent 1 owns shared DTOs, daemon grant checks and route registration, preload/main, and draft insertion. The workspace UI reports the integration as unavailable until those capabilities are wired. PDF remains gated for an isolated page rasterizer. Save, create, rename, delete and group filesystem access stay gated.
+
+| State | Evidence |
+|---|---|
+| Tested | Three isolated discovery tests passed. They cover filename and text results, matching lines, search bounds, cancellation, stale context, sensitive files, validated raster input and unavailable PDF. |
+| Tested | Seven scoped Electron and daemon IPC baseline checks passed, including read-only file opening and the Alpha.2C.1 unavailable UI without shared wiring. Lint, recursive typecheck and recursive build passed. |
+| Blocked | Integrated search, preview, cancellation and composer acceptance require Agent 1's shared wiring. PDF needs an isolated renderer. |
+
 ## Alpha.2A–B — Shared Workspace Integration
 
 The integration branch preserves the merge at `d3dc3c3`. The reconciliation follow-up binds native read grants to the bot, workspace identity, and current authorization generation. A workspace or permission change clears the grant. The staged save service checks the pinned inode, staged entry metadata, and bytes before rename. Regression coverage includes restoring a prior root, replacing the stage entry, and modifying staged bytes without changing their length. See the coordination handoff for the exact tested revision and acceptance results.
