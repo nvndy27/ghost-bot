@@ -70,10 +70,38 @@ export function assertLoopbackOpenAiCompatBaseUrl(rawUrl: string, expectedPath =
   return `${parsed.protocol}//${parsed.host}${expectedPath}`
 }
 
+export async function readBoundedResponseText(
+  res: Response,
+  maxBytes: number,
+  label: string,
+): Promise<string> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let totalBytes = 0
+  let out = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {})
+        throw new Error(`${label} response exceeded ${maxBytes} bytes limit`)
+      }
+      out += decoder.decode(value, { stream: true })
+    }
+    out += decoder.decode()
+    return out
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 export function assertPinnedHttpsOriginUrl(
   rawUrl: string,
   expectedOrigin: string,
-  expectedPathPrefix: string,
+  allowedExactPaths: string[],
 ): string {
   let parsed: URL
   try {
@@ -87,14 +115,17 @@ export function assertPinnedHttpsOriginUrl(
   if (parsed.username || parsed.password) {
     throw new Error('Provider URL must not embed credentials')
   }
+  if (parsed.search || parsed.hash) {
+    throw new Error('Provider URL must not contain unexpected query parameters or fragments')
+  }
   if (parsed.origin !== expectedOrigin) {
     throw new Error(
       `Provider URL must target pinned origin "${expectedOrigin}"; refused "${parsed.origin}"`,
     )
   }
-  if (!parsed.pathname.startsWith(expectedPathPrefix)) {
+  if (!allowedExactPaths.includes(parsed.pathname)) {
     throw new Error(
-      `Provider URL path must start with "${expectedPathPrefix}", got "${parsed.pathname}"`,
+      `Provider URL path "${parsed.pathname}" is not in allowlisted paths (${allowedExactPaths.join(', ')})`,
     )
   }
   return parsed.toString()
@@ -134,6 +165,7 @@ export interface OpenAiCompatRuntimeConfig {
 interface CompatSessionState {
   config: SessionConfig
   endpoint: string
+  configGeneration: number
   credentialGeneration: number
   accountRef: string
   history: Array<{ role: 'user' | 'assistant'; content: string }>
@@ -319,8 +351,8 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     return this.getAuthStatus()
   }
 
-  async listModels(options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
-    if (this.kind === 'cloud' && !options.allowNetworkDiscovery && !this.isExecutionAuthorized()) {
+  async listModels(_options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
+    if (this.kind === 'cloud' && !this.isExecutionAuthorized()) {
       return []
     }
     const headers: Record<string, string> = { ...this.extraHeaders }
@@ -343,10 +375,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     if (!res.ok) {
       throw new Error(`${this.label} /models failed with HTTP ${res.status}`)
     }
-    const raw = await res.text()
-    if (Buffer.byteLength(raw, 'utf8') > OPENAI_COMPAT_MAX_METADATA_BYTES) {
-      throw new Error(`${this.label} /models response exceeded ${OPENAI_COMPAT_MAX_METADATA_BYTES} bytes`)
-    }
+    const raw = await readBoundedResponseText(res, OPENAI_COMPAT_MAX_METADATA_BYTES, `${this.label} /models`)
     const parsed = JSON.parse(raw) as { data?: unknown }
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.data)) {
       throw new Error(`${this.label} /models returned unexpected payload`)
@@ -401,6 +430,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     this.sessions.set(id, {
       config: { ...config, modelId: validModelId },
       endpoint: this.baseUrl,
+      configGeneration: this.configGeneration,
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
       history: [],
@@ -414,6 +444,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     if (existing) {
       if (
         existing.endpoint !== this.baseUrl ||
+        existing.configGeneration !== this.configGeneration ||
         existing.credentialGeneration !== this.getCredentialGeneration() ||
         existing.accountRef !== this.getAccountRef()
       ) {
@@ -434,6 +465,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     this.sessions.set(externalId, {
       config: { ...config, modelId: validModelId },
       endpoint: this.baseUrl,
+      configGeneration: this.configGeneration,
       credentialGeneration: this.getCredentialGeneration(),
       accountRef: this.getAccountRef(),
       history: [],
@@ -466,6 +498,7 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
       uncertainLastRun: state.lastRunId ? this.uncertainRuns.has(state.lastRunId) : false,
       staleBinding:
         state.endpoint !== this.baseUrl ||
+        state.configGeneration !== this.configGeneration ||
         state.credentialGeneration !== this.getCredentialGeneration() ||
         state.accountRef !== this.getAccountRef(),
     }
@@ -482,8 +515,10 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
     const startGen = this.getCredentialGeneration()
     const startAccountRef = this.getAccountRef()
     const startEndpoint = this.baseUrl
+    const startConfigGen = this.configGeneration
     if (
       state.endpoint !== startEndpoint ||
+      state.configGeneration !== startConfigGen ||
       state.credentialGeneration !== startGen ||
       state.accountRef !== startAccountRef
     ) {
@@ -706,6 +741,10 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
       const processFrame = (rawData: string): { events: AgentEvent[]; abort: boolean } => {
         const events: AgentEvent[] = []
         if (!rawData) return { events, abort: false }
+        if (sawDoneSentinel) {
+          // Ignore/suppress frames emitted after [DONE]
+          return { events, abort: true }
+        }
         if (rawData === '[DONE]') {
           sawDoneSentinel = true
           return { events, abort: false }
@@ -919,6 +958,19 @@ export class OpenAiCompatibleRuntimeBase implements AgentRuntime {
             timestamp: new Date().toISOString(),
             code: 'OPENAI_COMPAT_CONTENT_FILTERED',
             message: `${this.label} stopped generation due to content_filter`,
+          }
+          return
+        }
+        if (finishReason !== null && finishReason !== 'stop') {
+          this.uncertainRuns.add(request.runId)
+          seq += 1
+          yield {
+            type: 'run.failed',
+            runId: request.runId,
+            seq,
+            timestamp: new Date().toISOString(),
+            code: 'OPENAI_COMPAT_UNEXPECTED_FINISH_REASON',
+            message: `${this.label} ended with unexpected finish_reason "${finishReason}"`,
           }
           return
         }

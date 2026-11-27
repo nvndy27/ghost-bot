@@ -31,6 +31,7 @@ import type {
 import type {
   AgentEvent,
   AgentRequest,
+  AgentRuntime,
   ApprovalDecision,
   ModelInfo,
   Session,
@@ -112,6 +113,7 @@ export class RuntimeRegistry {
   private reconnectInFlight: Promise<RuntimeSnapshot> | null = null
   private lifecycleState: RuntimeLifecycleState = 'disconnected'
   private stopped = false
+  private readonly persistentAdapters = new Map<string, AgentRuntime>()
 
   constructor(options: RuntimeRegistryOptions) {
     this.options = options
@@ -235,6 +237,72 @@ export class RuntimeRegistry {
       codexVersion: this.codexVersion ?? null,
       snapshot,
     }
+  }
+
+  registerPersistentAdapter(runtimeId: string, adapter: AgentRuntime): void {
+    this.persistentAdapters.set(runtimeId, adapter)
+  }
+
+  getPersistentAdapter<T extends AgentRuntime = AgentRuntime>(runtimeId: string): T | null {
+    return (this.persistentAdapters.get(runtimeId) as T | undefined) ?? null
+  }
+
+  async getUnifiedExecutionAdapter(runtimeId: string): Promise<{
+    adapter: AgentRuntime
+    generation: number
+  }> {
+    if (this.stopped) {
+      throw new DaemonError('RUNTIME_STOPPED', 'RuntimeRegistry is stopped', { statusCode: 503 })
+    }
+    const existing = this.persistentAdapters.get(runtimeId)
+    if (existing) {
+      return { adapter: existing, generation: this.generation }
+    }
+    if (runtimeId === 'openclaw') {
+      const adapter = this.options.openclawAdapter ?? new OpenClawGatewayAdapter({ timeoutMs: 2000 })
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'ollama') {
+      const adapter = this.options.ollamaAdapter ?? new OllamaLocalAdapter({ timeoutMs: 2000 })
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'claude-api') {
+      const adapter = this.options.claudeAdapter ?? new AnthropicClaudeApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'gemini-api') {
+      const adapter = this.options.geminiAdapter ?? new GoogleGeminiApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'kimi-acp') {
+      const adapter = this.options.kimiAdapter ?? new KimiAcpAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'lmstudio') {
+      const adapter = this.options.lmstudioAdapter ?? new LmStudioLocalAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'llamacpp') {
+      const adapter = this.options.llamacppAdapter ?? new LlamaCppLocalAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'openrouter') {
+      const adapter = this.options.openrouterAdapter ?? new OpenRouterApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    throw new DaemonError(
+      'RUNTIME_ADAPTER_UNAVAILABLE',
+      `No execution adapter registered for runtime "${runtimeId}"`,
+      { statusCode: 501 },
+    )
   }
 
   async getSnapshot(refresh = false): Promise<RuntimeSnapshot> {
@@ -658,6 +726,10 @@ export class RuntimeRegistry {
   }
 
   abortProviderRuns(runtimeId: 'claude-api' | 'gemini-api' | 'openrouter' | 'lmstudio' | 'llamacpp'): void {
+    const persistent = this.persistentAdapters.get(runtimeId) as
+      | { abortActiveRuns?: () => void }
+      | undefined
+    persistent?.abortActiveRuns?.()
     if (runtimeId === 'claude-api') {
       this.options.claudeAdapter?.abortActiveRuns()
     } else if (runtimeId === 'gemini-api') {
@@ -678,17 +750,23 @@ export class RuntimeRegistry {
   }): Promise<import('@ghost-bot/shared-types/ipc').LocalOpenAiCompatStatusDto> {
     const isLm = input.id === 'lmstudio'
     const defaultUrl = isLm ? DEFAULT_LMSTUDIO_BASE_URL : DEFAULT_LLAMACPP_BASE_URL
-    const adapter = isLm
-      ? (this.options.lmstudioAdapter ??
-        new LmStudioLocalAdapter({
-          baseUrl: input.baseUrl ?? defaultUrl,
-          isExecutionAuthorized: () => input.executionAuthorized,
-        }))
-      : (this.options.llamacppAdapter ??
-        new LlamaCppLocalAdapter({
-          baseUrl: input.baseUrl ?? defaultUrl,
-          isExecutionAuthorized: () => input.executionAuthorized,
-        }))
+    const persistent = this.persistentAdapters.get(input.id) as
+      | LmStudioLocalAdapter
+      | LlamaCppLocalAdapter
+      | undefined
+    const adapter =
+      persistent ??
+      (isLm
+        ? (this.options.lmstudioAdapter ??
+          new LmStudioLocalAdapter({
+            baseUrl: input.baseUrl ?? defaultUrl,
+            isExecutionAuthorized: () => input.executionAuthorized,
+          }))
+        : (this.options.llamacppAdapter ??
+          new LlamaCppLocalAdapter({
+            baseUrl: input.baseUrl ?? defaultUrl,
+            isExecutionAuthorized: () => input.executionAuthorized,
+          })))
     const avail = await adapter.checkAvailability()
     const policyBroker = new RuntimePolicyBroker()
     const readOnlyDecision = policyBroker.authorizeLocalOpenAiCompatExecution({
@@ -817,6 +895,10 @@ export class RuntimeRegistry {
     this.cachedSnapshot = null
     this.lastAccountKey = null
     await this.mock.disconnect()
+    for (const adapter of this.persistentAdapters.values()) {
+      await adapter.disconnect().catch(() => {})
+    }
+    this.persistentAdapters.clear()
     if (this.codexClient) {
       const client = this.codexClient
       this.codexClient = null

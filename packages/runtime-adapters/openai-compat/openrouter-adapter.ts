@@ -27,7 +27,11 @@ export class OpenRouterApiAdapter extends OpenAiCompatibleRuntimeBase {
       kind: 'cloud',
       baseUrl: APPROVED_OPENROUTER_BASE_URL,
       validateEndpoint: (url) =>
-        assertPinnedHttpsOriginUrl(url, APPROVED_OPENROUTER_ORIGIN, '/api/v1'),
+        assertPinnedHttpsOriginUrl(url, APPROVED_OPENROUTER_ORIGIN, [
+          '/api/v1',
+          '/api/v1/models',
+          '/api/v1/chat/completions',
+        ]),
       requiresApiKey: true,
       resolveApiKey: options.resolveApiKey,
       isExecutionAuthorized: options.isExecutionAuthorized,

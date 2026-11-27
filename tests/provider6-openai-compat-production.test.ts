@@ -29,11 +29,17 @@ test('OpenAI-compatible endpoint validators reject SSRF, non-loopback, credentia
   assert.equal(assertLoopbackOpenAiCompatBaseUrl('http://127.0.0.1:1234/v1/'), 'http://127.0.0.1:1234/v1')
 
   assert.throws(
-    () => assertPinnedHttpsOriginUrl('http://openrouter.ai/api/v1/models', APPROVED_OPENROUTER_ORIGIN, '/api/v1'),
+    () =>
+      assertPinnedHttpsOriginUrl('http://openrouter.ai/api/v1/models', APPROVED_OPENROUTER_ORIGIN, [
+        '/api/v1/models',
+      ]),
     /https:/i,
   )
   assert.throws(
-    () => assertPinnedHttpsOriginUrl('https://evil.example/api/v1/models', APPROVED_OPENROUTER_ORIGIN, '/api/v1'),
+    () =>
+      assertPinnedHttpsOriginUrl('https://evil.example/api/v1/models', APPROVED_OPENROUTER_ORIGIN, [
+        '/api/v1/models',
+      ]),
     /pinned origin/i,
   )
   assert.equal(

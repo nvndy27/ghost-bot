@@ -107,8 +107,15 @@ import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
 import { assertLoopbackOpenAiCompatBaseUrl } from '@ghost-bot/runtime-adapters/openai-compat'
-import { DEFAULT_LMSTUDIO_BASE_URL } from '@ghost-bot/runtime-adapters/lmstudio'
-import { DEFAULT_LLAMACPP_BASE_URL } from '@ghost-bot/runtime-adapters/llamacpp'
+import { DEFAULT_LMSTUDIO_BASE_URL, LmStudioLocalAdapter } from '@ghost-bot/runtime-adapters/lmstudio'
+import { DEFAULT_LLAMACPP_BASE_URL, LlamaCppLocalAdapter } from '@ghost-bot/runtime-adapters/llamacpp'
+import { OpenRouterApiAdapter } from '@ghost-bot/runtime-adapters/openrouter'
+import { AnthropicClaudeApiAdapter } from '@ghost-bot/runtime-adapters/claude'
+import { GoogleGeminiApiAdapter } from '@ghost-bot/runtime-adapters/gemini'
+import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
+import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
+import { KimiAcpAdapter } from '@ghost-bot/runtime-adapters/kimi'
+import type { AgentRuntime } from '@ghost-bot/shared-types/runtime'
 import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
@@ -124,6 +131,8 @@ export interface DaemonServerOptions {
   mcpSecretResolver?: McpSecretResolver
   mcpGracefulShutdownMs?: number
   secretStore?: SecretStore
+  /** Test-only persistent adapter overrides for offline unified execution tests. */
+  testProviderAdapters?: Record<string, AgentRuntime>
 }
 
 function constantTimeTokenMatch(headerValue: string | undefined, expectedToken: string): boolean {
@@ -293,6 +302,8 @@ export class GhostBotDaemon {
       memoryService: this.memoryService,
       knowledgeService: this.knowledgeService,
       mcpService: this.mcpService,
+      getProviderPolicyInput: (runtimeId, permission, canonicalWorkspace) =>
+        this.buildProviderPolicyInput(runtimeId, permission, canonicalWorkspace),
     })
     this.runOrchestrator.reconcileOnStartup()
     const teamsBridge = new TeamsExecutionBridge({
@@ -339,6 +350,7 @@ export class GhostBotDaemon {
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
     this.providerSecretStore = this.options.secretStore ?? createDefaultSecretStore()
+    this.registerPersistentProviderAdapters()
     this.runOrchestrator.setOnRunTerminated((runId, reason) => {
       void this.computerUseService?.revokeByRunId(runId, reason).catch(() => {})
       void this.terminalService?.revokeByRunId(runId, reason).catch(() => {})
@@ -372,6 +384,251 @@ export class GhostBotDaemon {
     const addr = server.address()
     const boundPort = typeof addr === 'object' && addr ? addr.port : port
     return { address: `http://127.0.0.1:${boundPort}` }
+  }
+
+  private registerPersistentProviderAdapters(): void {
+    const overrides = this.options.testProviderAdapters ?? {}
+    const resolveProviderKey = (providerId: string, readMeta: () => { accountRef: string }) => {
+      const store = this.providerSecretStore
+      if (!store) return null
+      const meta = readMeta()
+      return store.resolveProviderSecret({
+        ownerId: LOCAL_USER_ID,
+        providerId,
+        accountRef: meta.accountRef,
+      })
+    }
+
+    this.runtimeRegistry.registerPersistentAdapter(
+      'openclaw',
+      overrides.openclaw ?? new OpenClawGatewayAdapter({ timeoutMs: 2000 }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'ollama',
+      overrides.ollama ?? new OllamaLocalAdapter({ timeoutMs: 2000 }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'claude-api',
+      overrides['claude-api'] ??
+        new AnthropicClaudeApiAdapter({
+          resolveApiKey: () => resolveProviderKey('anthropic', () => this.readClaudeProviderMeta()),
+          isExecutionAuthorized: () => this.readClaudeProviderMeta().executionAuthorized,
+          getCredentialGeneration: () => this.readClaudeProviderMeta().credentialGeneration,
+        }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'gemini-api',
+      overrides['gemini-api'] ??
+        new GoogleGeminiApiAdapter({
+          resolveApiKey: () => resolveProviderKey('gemini', () => this.readGeminiProviderMeta()),
+          isExecutionAuthorized: () => this.readGeminiProviderMeta().executionAuthorized,
+          getCredentialGeneration: () => this.readGeminiProviderMeta().credentialGeneration,
+          getAccountRef: () => this.readGeminiProviderMeta().accountRef,
+        }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'kimi-acp',
+      overrides['kimi-acp'] ?? new KimiAcpAdapter(),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'lmstudio',
+      overrides.lmstudio ??
+        new LmStudioLocalAdapter({
+          baseUrl: this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL).baseUrl,
+          isExecutionAuthorized: () =>
+            this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL).executionAuthorized,
+        }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'llamacpp',
+      overrides.llamacpp ??
+        new LlamaCppLocalAdapter({
+          baseUrl: this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL).baseUrl,
+          isExecutionAuthorized: () =>
+            this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL).executionAuthorized,
+        }),
+    )
+    this.runtimeRegistry.registerPersistentAdapter(
+      'openrouter',
+      overrides.openrouter ??
+        new OpenRouterApiAdapter({
+          resolveApiKey: () =>
+            resolveProviderKey('openrouter', () => this.readOpenRouterProviderMeta()),
+          isExecutionAuthorized: () => this.readOpenRouterProviderMeta().executionAuthorized,
+          getCredentialGeneration: () => this.readOpenRouterProviderMeta().credentialGeneration,
+          getAccountRef: () => this.readOpenRouterProviderMeta().accountRef,
+        }),
+    )
+  }
+
+  private async buildProviderPolicyInput(
+    runtimeId: string,
+    permission: import('@ghost-bot/shared-types/runtime').PermissionMode,
+    canonicalWorkspace: string,
+  ): Promise<{
+    policyInput: import('./runtime/policy-broker.ts').PolicyAuthorizationInput
+    accountKey: string
+  }> {
+    const storeStatus = this.providerSecretStore?.getStatus() ?? {
+      available: false,
+      locked: false,
+      backend: 'unavailable' as const,
+      reason: 'Secret store unavailable',
+    }
+    if (runtimeId === 'claude-api') {
+      const meta = this.readClaudeProviderMeta()
+      const configured =
+        storeStatus.available &&
+        Boolean(
+          this.providerSecretStore?.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'anthropic',
+            accountRef: meta.accountRef,
+          }),
+        )
+      return {
+        accountKey: `claude:${meta.accountRef}:${meta.credentialGeneration}`,
+        policyInput: {
+          runtimeMode: 'claude-api',
+          codexVersion: null,
+          authMethod: 'apiKey',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          claudeExecutionAuthorized: meta.executionAuthorized,
+          claudeCredentialConfigured: configured,
+          claudeKeyringAvailable: storeStatus.available,
+          claudeEndpointVerified: true,
+        },
+      }
+    }
+    if (runtimeId === 'gemini-api') {
+      const meta = this.readGeminiProviderMeta()
+      const configured =
+        storeStatus.available &&
+        Boolean(
+          this.providerSecretStore?.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'gemini',
+            accountRef: meta.accountRef,
+          }),
+        )
+      return {
+        accountKey: `gemini:${meta.accountRef}:${meta.credentialGeneration}`,
+        policyInput: {
+          runtimeMode: 'gemini-api',
+          codexVersion: null,
+          authMethod: 'apiKey',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          geminiExecutionAuthorized: meta.executionAuthorized,
+          geminiCredentialConfigured: configured,
+          geminiKeyringAvailable: storeStatus.available,
+          geminiEndpointVerified: true,
+        },
+      }
+    }
+    if (runtimeId === 'openrouter') {
+      const meta = this.readOpenRouterProviderMeta()
+      const configured =
+        storeStatus.available &&
+        Boolean(
+          this.providerSecretStore?.existsProviderSecret({
+            ownerId: LOCAL_USER_ID,
+            providerId: 'openrouter',
+            accountRef: meta.accountRef,
+          }),
+        )
+      return {
+        accountKey: `openrouter:${meta.accountRef}:${meta.credentialGeneration}`,
+        policyInput: {
+          runtimeMode: 'openrouter',
+          codexVersion: null,
+          authMethod: 'apiKey',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          openRouterExecutionAuthorized: meta.executionAuthorized,
+          openRouterCredentialConfigured: configured,
+          openRouterKeyringAvailable: storeStatus.available,
+          openRouterEndpointVerified: true,
+        },
+      }
+    }
+    if (runtimeId === 'lmstudio' || runtimeId === 'llamacpp') {
+      const defaultUrl = runtimeId === 'lmstudio' ? DEFAULT_LMSTUDIO_BASE_URL : DEFAULT_LLAMACPP_BASE_URL
+      const meta = this.readLocalCompatMeta(runtimeId, defaultUrl)
+      const adapter = await this.runtimeRegistry.getUnifiedExecutionAdapter(runtimeId)
+      const avail = await (adapter.adapter as LmStudioLocalAdapter | LlamaCppLocalAdapter)
+        .checkAvailability()
+        .catch(() => ({ available: false }))
+      return {
+        accountKey: `${runtimeId}:${meta.baseUrl}:${meta.configGeneration}`,
+        policyInput: {
+          runtimeMode: runtimeId,
+          codexVersion: null,
+          authMethod: 'none',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          localCompatAuthorized: meta.executionAuthorized,
+          localCompatAvailable: avail.available,
+          localCompatLoopbackVerified: true,
+        },
+      }
+    }
+    if (runtimeId === 'ollama') {
+      const adapter = await this.runtimeRegistry.getUnifiedExecutionAdapter('ollama')
+      const summary = await (adapter.adapter as OllamaLocalAdapter)
+        .inspectLocalRuntime()
+        .catch(() => ({ available: false, localOnlyVerified: false }))
+      return {
+        accountKey: 'ollama:local',
+        policyInput: {
+          runtimeMode: 'ollama',
+          codexVersion: null,
+          authMethod: 'none',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          ollamaExecutionAuthorized: false,
+          ollamaAvailable: summary.available,
+          ollamaLoopbackVerified: true,
+          ollamaLocalOnlyVerified: summary.localOnlyVerified,
+        },
+      }
+    }
+    if (runtimeId === 'openclaw') {
+      return {
+        accountKey: 'openclaw:local',
+        policyInput: {
+          runtimeMode: 'openclaw',
+          codexVersion: null,
+          authMethod: 'none',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          openClawExecutionAuthorized: false,
+          openClawLoopbackVerified: false,
+          openClawSandboxVerified: false,
+        },
+      }
+    }
+    if (runtimeId === 'kimi-acp') {
+      return {
+        accountKey: 'kimi-acp:local',
+        policyInput: {
+          runtimeMode: 'kimi-acp',
+          codexVersion: null,
+          authMethod: 'none',
+          requestedPermission: permission,
+          canonicalWorkspace,
+          kimiExecutionAuthorized: false,
+          kimiCliAvailable: false,
+          kimiAcpProtocolVerified: false,
+          kimiAuthenticated: false,
+          kimiContainmentVerified: false,
+        },
+      }
+    }
+    throw new DaemonError('LIVE_INFERENCE_DISABLED', `Unsupported runtime "${runtimeId}"`, {
+      statusCode: 501,
+    })
   }
 
   private readClaudeProviderMeta(): {
@@ -543,11 +800,11 @@ export class GhostBotDaemon {
   private readLocalCompatMeta(
     id: 'lmstudio' | 'llamacpp',
     defaultBaseUrl: string,
-  ): { baseUrl: string; executionAuthorized: boolean } {
+  ): { baseUrl: string; executionAuthorized: boolean; configGeneration: number } {
     const row = this.dbHandle?.sqlite
       .prepare(`SELECT value_json FROM settings WHERE key = ?`)
       .get(`provider.${id}.v1`) as { value_json: string } | undefined
-    if (!row) return { baseUrl: defaultBaseUrl, executionAuthorized: false }
+    if (!row) return { baseUrl: defaultBaseUrl, executionAuthorized: false, configGeneration: 1 }
     try {
       const parsed = JSON.parse(row.value_json) as Record<string, unknown>
       const baseUrl =
@@ -557,15 +814,19 @@ export class GhostBotDaemon {
       return {
         baseUrl,
         executionAuthorized: parsed.executionAuthorized === true,
+        configGeneration:
+          typeof parsed.configGeneration === 'number' && Number.isInteger(parsed.configGeneration)
+            ? parsed.configGeneration
+            : 1,
       }
     } catch {
-      return { baseUrl: defaultBaseUrl, executionAuthorized: false }
+      return { baseUrl: defaultBaseUrl, executionAuthorized: false, configGeneration: 1 }
     }
   }
 
   private writeLocalCompatMeta(
     id: 'lmstudio' | 'llamacpp',
-    meta: { baseUrl: string; executionAuthorized: boolean },
+    meta: { baseUrl: string; executionAuthorized: boolean; configGeneration: number },
   ): void {
     const nowIso = new Date().toISOString()
     this.dbHandle?.sqlite
@@ -785,7 +1046,14 @@ export class GhostBotDaemon {
         const prev = this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL)
         const nextAuth =
           validatedUrl !== prev.baseUrl ? false : (parsed.data.executionAuthorized ?? prev.executionAuthorized)
-        this.writeLocalCompatMeta('lmstudio', { baseUrl: validatedUrl, executionAuthorized: nextAuth })
+        const nextGen = validatedUrl !== prev.baseUrl ? prev.configGeneration + 1 : prev.configGeneration
+        this.writeLocalCompatMeta('lmstudio', {
+          baseUrl: validatedUrl,
+          executionAuthorized: nextAuth,
+          configGeneration: nextGen,
+        })
+        const lmPersistent = this.runtimeRegistry.getPersistentAdapter<LmStudioLocalAdapter>('lmstudio')
+        lmPersistent?.updateBaseUrl(validatedUrl)
         if (validatedUrl !== prev.baseUrl || !nextAuth) {
           this.runtimeRegistry.abortProviderRuns('lmstudio')
         }
@@ -834,7 +1102,15 @@ export class GhostBotDaemon {
         const prev = this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL)
         const nextAuth =
           validatedUrl !== prev.baseUrl ? false : (parsed.data.executionAuthorized ?? prev.executionAuthorized)
-        this.writeLocalCompatMeta('llamacpp', { baseUrl: validatedUrl, executionAuthorized: nextAuth })
+        const nextGen = validatedUrl !== prev.baseUrl ? prev.configGeneration + 1 : prev.configGeneration
+        this.writeLocalCompatMeta('llamacpp', {
+          baseUrl: validatedUrl,
+          executionAuthorized: nextAuth,
+          configGeneration: nextGen,
+        })
+        const llamaPersistent =
+          this.runtimeRegistry.getPersistentAdapter<LlamaCppLocalAdapter>('llamacpp')
+        llamaPersistent?.updateBaseUrl(validatedUrl)
         if (validatedUrl !== prev.baseUrl || !nextAuth) {
           this.runtimeRegistry.abortProviderRuns('llamacpp')
         }

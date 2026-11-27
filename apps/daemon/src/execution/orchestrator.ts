@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
+import type { AgentRuntime, PermissionMode, Session, SessionConfig } from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
 import type { KnowledgeService, PreparedExecutionKnowledgeContext } from '../knowledge/service.ts'
 import type { McpService } from '../mcp/service.ts'
 import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
-import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
+import { RuntimePolicyBroker, type PolicyAuthorizationInput } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
 import { serializeMessageContent } from '../sessions/repository.ts'
 import type { SettingsRepository } from '../settings/repository.ts'
@@ -170,7 +170,26 @@ export interface RunOrchestratorOptions {
   memoryService?: MemoryService
   knowledgeService?: KnowledgeService
   mcpService?: McpService
+  getProviderPolicyInput?: (
+    runtimeId: string,
+    permission: PermissionMode,
+    canonicalWorkspace: string,
+  ) => Promise<{
+    policyInput: PolicyAuthorizationInput
+    accountKey: string
+  }>
 }
+
+const UNIFIED_PROVIDER_RUNTIMES = new Set([
+  'openclaw',
+  'ollama',
+  'claude-api',
+  'gemini-api',
+  'kimi-acp',
+  'lmstudio',
+  'llamacpp',
+  'openrouter',
+])
 
 const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
 
@@ -183,6 +202,8 @@ export class RunOrchestrator {
   private readonly memoryService?: MemoryService
   private readonly knowledgeService?: KnowledgeService
   private readonly mcpService?: McpService
+  private readonly getProviderPolicyInput?: RunOrchestratorOptions['getProviderPolicyInput']
+  private readonly activeUnifiedProcessSessions = new Set<string>()
   private onRunTerminated?: (runId: string, reason: string) => void
 
   setOnRunTerminated(handler: (runId: string, reason: string) => void): void {
@@ -200,6 +221,7 @@ export class RunOrchestrator {
     this.memoryService = options?.memoryService
     this.knowledgeService = options?.knowledgeService
     this.mcpService = options?.mcpService
+    this.getProviderPolicyInput = options?.getProviderPolicyInput
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
   }
@@ -618,11 +640,22 @@ export class RunOrchestrator {
 
     const isMockRuntime = preBot.runtime_id === 'mock' || preBot.runtime_id === 'mock-offline'
     const isCodexRuntime = preBot.runtime_id === 'codex'
+    const isUnifiedProviderRuntime = UNIFIED_PROVIDER_RUNTIMES.has(preBot.runtime_id)
 
     let codexPreflight: {
       adapter: CodexExecutionClient
       generation: number
       codexVersion: string | null
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    } | null = null
+
+    let unifiedPreflight: {
+      runtimeId: string
+      adapter: AgentRuntime
+      generation: number
       accountKey: string
       canonicalWorkspace: string
       effectiveInstructions: string
@@ -720,18 +753,88 @@ export class RunOrchestrator {
         effectiveInstructions: instructionParts.join('\n\n'),
         externalSessionId: preSession.external_session_id,
       }
-    } else if (isMockRuntime) {
-      if (preSession.runtime_id === 'codex') {
+    } else if (isUnifiedProviderRuntime) {
+      if (preSession.runtime_id !== preBot.runtime_id) {
         throw new DaemonError(
           'SESSION_RUNTIME_MISMATCH',
-          'Cannot run mock simulation in a live Codex conversation; start a New conversation.',
+          `Cannot run "${preBot.runtime_id}" in a "${preSession.runtime_id}" session; start a New conversation.`,
+          { statusCode: 409 },
+        )
+      }
+      let canonicalWorkspace = ''
+      try {
+        canonicalWorkspace = await realpath(resolve(preBot.workspace_path))
+        const st = await stat(canonicalWorkspace)
+        if (!st.isDirectory()) {
+          throw new Error('Not a directory')
+        }
+      } catch {
+        throw new DaemonError(
+          'INVALID_WORKSPACE',
+          `Bot workspace path "${preBot.workspace_path}" is missing or not a directory`,
+          { statusCode: 400 },
+        )
+      }
+      if (!this.runtimeRegistry || !this.getProviderPolicyInput) {
+        throw new DaemonError(
+          'LIVE_INFERENCE_DISABLED',
+          `Runtime "${preBot.runtime_id}" execution bridge is not configured.`,
+          { statusCode: 501 },
+        )
+      }
+      const { policyInput, accountKey } = await this.getProviderPolicyInput(
+        preBot.runtime_id,
+        preBot.permission_mode as PermissionMode,
+        canonicalWorkspace,
+      )
+      const policyDecision = this.policyBroker.authorize(policyInput)
+      if (!policyDecision.allowed) {
+        throw new DaemonError('PERMISSION_DENIED', policyDecision.reason, { statusCode: 403 })
+      }
+      const execInfo = await this.runtimeRegistry.getUnifiedExecutionAdapter(preBot.runtime_id)
+      if (
+        preSession.external_session_id &&
+        preSession.account_id &&
+        preSession.account_id !== accountKey
+      ) {
+        throw new DaemonError(
+          'ACCOUNT_MISMATCH',
+          'Conversation belongs to a different account, credential, or endpoint; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+      const instructionParts: string[] = []
+      if (preBot.instructions.trim()) instructionParts.push(preBot.instructions.trim())
+      const personalization = this.settingsRepo?.getSettings().personalization
+      if (personalization) {
+        if (personalization.defaultInstructions.trim()) {
+          instructionParts.push(personalization.defaultInstructions.trim())
+        }
+        if (personalization.responseStyle && personalization.responseStyle !== 'balanced') {
+          instructionParts.push(`Response style: ${personalization.responseStyle}`)
+        }
+      }
+      unifiedPreflight = {
+        runtimeId: preBot.runtime_id,
+        adapter: execInfo.adapter,
+        generation: execInfo.generation,
+        accountKey,
+        canonicalWorkspace,
+        effectiveInstructions: instructionParts.join('\n\n'),
+        externalSessionId: preSession.external_session_id,
+      }
+    } else if (isMockRuntime) {
+      if (preSession.runtime_id === 'codex' || UNIFIED_PROVIDER_RUNTIMES.has(preSession.runtime_id)) {
+        throw new DaemonError(
+          'SESSION_RUNTIME_MISMATCH',
+          'Cannot run mock simulation in a live provider conversation; start a New conversation.',
           { statusCode: 409 },
         )
       }
     } else {
       throw new DaemonError(
         'LIVE_INFERENCE_DISABLED',
-        `Runtime "${preBot.runtime_id}" is not supported for execution in Phase 2B.`,
+        `Runtime "${preBot.runtime_id}" is not supported for execution.`,
         { statusCode: 501 },
       )
     }
@@ -867,10 +970,14 @@ export class RunOrchestrator {
       }
 
       const isMockRuntime = bot.runtime_id === 'mock' || bot.runtime_id === 'mock-offline'
-      if (!isMockRuntime && bot.runtime_id !== 'codex') {
+      if (
+        !isMockRuntime &&
+        bot.runtime_id !== 'codex' &&
+        !UNIFIED_PROVIDER_RUNTIMES.has(bot.runtime_id)
+      ) {
         throw new DaemonError(
           'LIVE_INFERENCE_DISABLED',
-          `Live AI inference for runtime "${bot.runtime_id}" is disabled in Phase 2B.`,
+          `Live AI inference for runtime "${bot.runtime_id}" is disabled.`,
           { statusCode: 501 },
         )
       }
@@ -891,7 +998,10 @@ export class RunOrchestrator {
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode,
-        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        workspacePath:
+          codexPreflight?.canonicalWorkspace ??
+          unifiedPreflight?.canonicalWorkspace ??
+          bot.workspace_path,
         codexVersion: codexPreflight?.codexVersion ?? null,
         isMock: isMockRuntime,
       }
@@ -976,7 +1086,10 @@ export class RunOrchestrator {
         userMessageId,
         assistantMessageId,
         botName: bot.name,
-        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        workspacePath:
+          codexPreflight?.canonicalWorkspace ??
+          unifiedPreflight?.canonicalWorkspace ??
+          bot.workspace_path,
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode as PermissionMode,
@@ -995,6 +1108,24 @@ export class RunOrchestrator {
         const preflight = codexPreflight
         control.liveCancel = (rId) => preflight.adapter.cancel(rId)
         control.donePromise = this.executeCodexRun({
+          runId: txResult.run.id,
+          sessionId: input.sessionId,
+          agentId: txResult.run.agentId,
+          assistantMessageId: txResult.assistantMessageId,
+          prompt: trimmedText,
+          modelId: txResult.modelId,
+          effort: txResult.effort,
+          permission: txResult.permissionMode,
+          preflight,
+          control,
+        }).finally(() => {
+          if (control.cancelTimeout) clearTimeout(control.cancelTimeout)
+          this.activeControls.delete(txResult.run.id)
+        })
+      } else if (!txResult.isMock && unifiedPreflight) {
+        const preflight = unifiedPreflight
+        control.liveCancel = (rId) => preflight.adapter.cancel(rId)
+        control.donePromise = this.executeUnifiedProviderRun({
           runId: txResult.run.id,
           sessionId: input.sessionId,
           agentId: txResult.run.agentId,
@@ -1721,7 +1852,7 @@ export class RunOrchestrator {
 
       this.revokeApprovalsInTx(params.runId, `run_${params.terminalStatus}`, now)
 
-      const isMockMeta = row.runtime_id !== 'codex'
+      const isMockMeta = row.runtime_id !== 'codex' && !UNIFIED_PROVIDER_RUNTIMES.has(row.runtime_id)
       const contentJson = serializeMessageContent(params.accumulatedText, {
         isMock: isMockMeta,
         runtimeId: row.runtime_id,
@@ -2835,6 +2966,474 @@ export class RunOrchestrator {
           retryable: true,
         },
         eventKey: 'run.failed:codex_error',
+        eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+        eventPayload: { code: errCode, message: safeMsg },
+      })
+    } finally {
+      if (this.runtimeRegistry && !this.stopping) {
+        void this.runtimeRegistry.getSnapshot(true).catch(() => undefined)
+      }
+    }
+  }
+
+  private buildBoundedCanonicalHistory(sessionId: string, currentRunId: string): string {
+    const rows = this.dbHandle.sqlite
+      .prepare(
+        `SELECT role, content_json FROM messages
+         WHERE session_id = ? AND status = 'complete' AND (run_id IS NULL OR run_id != ?)
+         ORDER BY seq_order ASC`,
+      )
+      .all(sessionId, currentRunId) as Array<{ role: string; content_json: string }>
+
+    if (rows.length === 0) return ''
+
+    const maxMessages = 20
+    const maxBytes = 16_000
+    const selected: string[] = []
+    let totalBytes = 0
+
+    for (const row of rows.slice(-maxMessages)) {
+      if (row.role !== 'user' && row.role !== 'assistant') continue
+      let text = ''
+      try {
+        const parsed = JSON.parse(row.content_json) as { text?: unknown }
+        if (typeof parsed.text === 'string') text = parsed.text.trim()
+      } catch {
+        continue
+      }
+      if (!text) continue
+      const line = `${row.role === 'user' ? 'User' : 'Assistant'}: ${text}`
+      const bytes = Buffer.byteLength(line, 'utf8')
+      if (totalBytes + bytes > maxBytes) break
+      totalBytes += bytes
+      selected.push(line)
+    }
+
+    if (selected.length === 0) return ''
+    return `Prior conversation history (reconstructed from canonical store):\n${selected.join('\n')}`
+  }
+
+  private async executeUnifiedProviderRun(params: {
+    runId: string
+    sessionId: string
+    agentId: string
+    assistantMessageId: string
+    prompt: string
+    modelId: string
+    effort: string
+    permission: PermissionMode
+    preflight: {
+      runtimeId: string
+      adapter: AgentRuntime
+      generation: number
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    }
+    control: ActiveRunControl
+  }): Promise<void> {
+    const {
+      runId,
+      sessionId,
+      agentId,
+      assistantMessageId,
+      prompt,
+      modelId,
+      effort,
+      permission,
+      preflight,
+      control,
+    } = params
+    const { runtimeId, adapter, generation, accountKey, canonicalWorkspace, effectiveInstructions } =
+      preflight
+    const { signal } = control.abortController
+
+    let accumulatedText = ''
+    let pendingChunks = 0
+    let lastFlushAt = Date.now()
+    const flushBuffer = (force: boolean) => {
+      if (pendingChunks === 0 && !force) return
+      const nowMs = Date.now()
+      if (force || pendingChunks >= 8 || nowMs - lastFlushAt >= 60) {
+        if (accumulatedText.length > 0 || force) {
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE messages SET content_json = ?, updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              serializeMessageContent(accumulatedText, { isMock: false, runtimeId }),
+              new Date().toISOString(),
+              assistantMessageId,
+            )
+          pendingChunks = 0
+          lastFlushAt = nowMs
+        }
+      }
+    }
+
+    try {
+      this.transitionRun(runId, 'starting', {
+        eventKey: 'run.starting',
+        type: 'run.starting',
+        payload: {
+          runtimeId,
+          isMock: false,
+        },
+      })
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
+      if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
+        throw new DaemonError(
+          'RUNTIME_GENERATION_CHANGED',
+          `Runtime "${runtimeId}" generation changed before session setup; please retry.`,
+          { statusCode: 409, retryable: true },
+        )
+      }
+
+      if (!this.getProviderPolicyInput) {
+        throw new DaemonError(
+          'LIVE_INFERENCE_DISABLED',
+          `Runtime "${runtimeId}" execution bridge is not configured.`,
+          { statusCode: 501 },
+        )
+      }
+      const { policyInput: freshPolicyInput, accountKey: freshAccountKey } =
+        await this.getProviderPolicyInput(runtimeId, permission, canonicalWorkspace)
+      const freshDecision = this.policyBroker.authorize(freshPolicyInput)
+      if (!freshDecision.allowed) {
+        throw new DaemonError('PERMISSION_DENIED', freshDecision.reason, { statusCode: 403 })
+      }
+      if (freshAccountKey !== accountKey) {
+        throw new DaemonError(
+          'ACCOUNT_MISMATCH',
+          'Account, credential, or endpoint changed before dispatch; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+
+      const sessionConfig: SessionConfig = {
+        agentId,
+        accountId: accountKey,
+        modelId,
+        effort,
+        permission,
+        workspace: canonicalWorkspace,
+        instructions: effectiveInstructions,
+      }
+
+      const maybeResumable = adapter as AgentRuntime & {
+        resumeSession?: (externalId: string, config: SessionConfig) => Promise<Session>
+      }
+
+      let providerSession: Session
+      let initialExtraHistory: string | undefined
+      if (preflight.externalSessionId) {
+        if (this.activeUnifiedProcessSessions.has(sessionId)) {
+          if (typeof maybeResumable.resumeSession === 'function') {
+            providerSession = await maybeResumable.resumeSession(
+              preflight.externalSessionId,
+              sessionConfig,
+            )
+          } else {
+            providerSession = {
+              id: sessionId,
+              externalId: preflight.externalSessionId,
+              runtimeId,
+            }
+          }
+        } else {
+          // Stateless HTTP / in-memory-session provider after daemon restart:
+          // recreate/reseed adapter session with bounded canonical history.
+          const extraHistory = this.buildBoundedCanonicalHistory(sessionId, runId)
+          const seededConfig: SessionConfig = extraHistory
+            ? {
+                ...sessionConfig,
+                instructions: [sessionConfig.instructions, extraHistory].filter(Boolean).join('\n\n'),
+              }
+            : sessionConfig
+          initialExtraHistory = extraHistory || undefined
+          if (typeof maybeResumable.resumeSession === 'function') {
+            providerSession = await maybeResumable.resumeSession(
+              preflight.externalSessionId,
+              seededConfig,
+            )
+          } else {
+            providerSession = await adapter.createSession(seededConfig)
+            this.dbHandle.sqlite
+              .prepare(
+                `UPDATE sessions SET external_session_id = ?, account_id = ?, updated_at = ? WHERE id = ?`,
+              )
+              .run(providerSession.externalId, accountKey, new Date().toISOString(), sessionId)
+          }
+          this.activeUnifiedProcessSessions.add(sessionId)
+        }
+      } else {
+        providerSession = await adapter.createSession(sessionConfig)
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE sessions SET external_session_id = ?, account_id = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(providerSession.externalId, accountKey, new Date().toISOString(), sessionId)
+        this.activeUnifiedProcessSessions.add(sessionId)
+      }
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
+      this.transitionRun(runId, 'running', {
+        eventKey: 'run.started',
+        type: 'run.started',
+        payload: {
+          runtimeId,
+          externalSessionId: providerSession.externalId,
+          resumed: Boolean(preflight.externalSessionId),
+          isMock: false,
+          contextTiming: 'deferred_to_dispatch',
+        },
+      })
+
+      let sawTerminal = false
+
+      const buildPrepareReferenceContext = (extraHistory?: string) => async () => {
+        if (signal.aborted || this.stopping) {
+          throw new DaemonError('RUN_CANCELLED', 'Run cancelled before turn dispatch', {
+            statusCode: 409,
+          })
+        }
+        const latestCombined = await this.prepareCombinedContextSafely({
+          sessionId,
+          agentId,
+          runtimeId,
+          queryText: prompt,
+          isMock: false,
+        })
+        if (signal.aborted || this.stopping) {
+          throw new DaemonError('RUN_CANCELLED', 'Run cancelled during context preparation', {
+            statusCode: 409,
+          })
+        }
+        this.eventStore.appendEvent(runId, {
+          eventKey: 'run.context_prepared',
+          type: 'run.context_prepared',
+          payload: {
+            memoryContext: {
+              status: latestCombined.memory.status,
+              mechanism: latestCombined.memory.mechanism,
+              count: latestCombined.memory.selectedCount,
+              totalBytes: latestCombined.memory.totalBytes,
+              truncated: latestCombined.memory.truncated,
+            },
+            knowledgeContext: {
+              status: latestCombined.knowledge.status,
+              mechanism: latestCombined.knowledge.mechanism,
+              documents: latestCombined.knowledge.selectedDocuments,
+              chunks: latestCombined.knowledge.selectedChunks,
+              totalBytes: latestCombined.knowledge.totalBytes,
+              truncated: latestCombined.knowledge.truncated,
+              attachedSources: latestCombined.attachedSources,
+            },
+            combinedContextBytes: latestCombined.totalBytes,
+          },
+        })
+        if (extraHistory && latestCombined.envelopeJson) {
+          return `${extraHistory}\n\n${latestCombined.envelopeJson}`
+        }
+        return extraHistory || latestCombined.envelopeJson || undefined
+      }
+
+      const consumeAdapterStream = async (activeSession: Session, extraHistory?: string) => {
+        for await (const ev of adapter.run({
+          runId,
+          session: activeSession,
+          text: prompt,
+          prepareReferenceContext: buildPrepareReferenceContext(extraHistory),
+        })) {
+          if (
+            this.runtimeRegistry &&
+            this.runtimeRegistry.getGeneration() !== generation
+          ) {
+            throw new DaemonError(
+              'RUNTIME_GENERATION_CHANGED',
+              `Runtime "${runtimeId}" generation changed during execution`,
+              { statusCode: 409, retryable: true },
+            )
+          }
+
+          if (ev.type === 'message.delta') {
+            accumulatedText += ev.text
+            pendingChunks += 1
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'message.delta',
+              payload: { delta: ev.text },
+              timestamp: ev.timestamp,
+            })
+            flushBuffer(false)
+          } else if (ev.type === 'tool.started') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'tool.started',
+              payload: {
+                toolCallId: ev.callId,
+                toolName: ev.tool,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'tool.completed') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'tool.completed',
+              payload: {
+                toolCallId: ev.callId,
+                toolName: ev.tool,
+                summary: ev.summary,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'usage.updated') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'usage.updated',
+              payload: {
+                inputTokens: ev.usage.inputTokens ?? null,
+                outputTokens: ev.usage.outputTokens ?? null,
+                isMock: false,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'run.completed') {
+            sawTerminal = true
+            this.clearQuarantineForSession(sessionId)
+            flushBuffer(true)
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'completed',
+              messageStatus: 'complete',
+              accumulatedText,
+              eventKey: 'run.completed',
+              eventType: 'run.completed',
+              eventPayload: { assistantMessageId, isMock: false },
+            })
+            break
+          } else if (ev.type === 'run.cancelled') {
+            sawTerminal = true
+            this.clearQuarantineForSession(sessionId)
+            flushBuffer(true)
+            const cancelledText =
+              accumulatedText.trim().length > 0
+                ? `${accumulatedText}\n\n[Cancelled]`
+                : '[Run cancelled]'
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'cancelled',
+              messageStatus: 'cancelled',
+              accumulatedText: cancelledText,
+              eventKey: 'run.cancelled',
+              eventType: 'run.cancelled',
+              eventPayload: { reason: 'user_cancelled' },
+            })
+            break
+          } else if (ev.type === 'run.failed') {
+            sawTerminal = true
+            if (/UNKNOWN_TERMINATION|DISCONNECTED|UNCERTAIN/i.test(ev.code)) {
+              this.addQuarantine(sessionId)
+            }
+            flushBuffer(true)
+            const safeMsg = redactSecrets(ev.message)
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'failed',
+              messageStatus: 'failed',
+              accumulatedText,
+              error: {
+                code: ev.code,
+                message: safeMsg,
+                retryable: true,
+              },
+              eventKey: 'run.failed',
+              eventType: 'run.failed',
+              eventPayload: { code: ev.code, message: safeMsg },
+            })
+            break
+          }
+        }
+      }
+
+      await consumeAdapterStream(providerSession, initialExtraHistory)
+
+      if (!sawTerminal) {
+        flushBuffer(true)
+        this.addQuarantine(sessionId)
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'failed',
+          messageStatus: this.stopping ? 'interrupted' : 'failed',
+          accumulatedText,
+          error: {
+            code: 'RUNTIME_DISCONNECTED',
+            message: `Runtime "${runtimeId}" stream ended before reporting a terminal event.`,
+            retryable: true,
+          },
+          eventKey: 'run.failed:stream_eof',
+          eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+          eventPayload: { reason: 'stream_ended_without_terminal_event' },
+        })
+      }
+    } catch (err) {
+      flushBuffer(true)
+      const safeMsg = redactSecrets(err instanceof Error ? err.message : String(err))
+      const errCode = err instanceof DaemonError ? err.code : 'PROVIDER_EXECUTION_ERROR'
+      if (signal.aborted && !this.stopping) {
+        this.addQuarantine(sessionId)
+      }
+      this.finalizeRun({
+        runId,
+        sessionId,
+        assistantMessageId,
+        terminalStatus: this.stopping ? 'interrupted' : 'failed',
+        messageStatus: this.stopping ? 'interrupted' : 'failed',
+        accumulatedText,
+        error: {
+          code: errCode,
+          message: safeMsg,
+          retryable: true,
+        },
+        eventKey: 'run.failed:provider_error',
         eventType: this.stopping ? 'run.interrupted' : 'run.failed',
         eventPayload: { code: errCode, message: safeMsg },
       })

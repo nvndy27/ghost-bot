@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readBoundedResponseText } from '../openai-compat/openai-compatible-transport.ts'
 import type {
   AgentEvent,
   AgentRequest,
@@ -223,8 +224,8 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
     return this.getAuthStatus()
   }
 
-  async listModels(options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
-    if (!options.allowNetworkDiscovery && !this.isExecutionAuthorized()) {
+  async listModels(_options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
+    if (!this.isExecutionAuthorized()) {
       return []
     }
     const apiKey = this.resolveApiKey()?.trim()
@@ -259,10 +260,7 @@ export class GoogleGeminiApiAdapter implements AgentRuntime {
       if (!res.ok) {
         throw new Error(`Gemini /v1beta/models failed with HTTP ${res.status}`)
       }
-      const raw = await res.text()
-      if (Buffer.byteLength(raw, 'utf8') > GEMINI_MAX_METADATA_BYTES) {
-        throw new Error(`Gemini /v1beta/models response exceeded ${GEMINI_MAX_METADATA_BYTES} bytes limit`)
-      }
+      const raw = await readBoundedResponseText(res, GEMINI_MAX_METADATA_BYTES, 'Gemini /v1beta/models')
       const parsed = JSON.parse(raw) as { models?: unknown; nextPageToken?: unknown }
       const items = Array.isArray(parsed?.models) ? parsed.models : []
       for (const item of items) {

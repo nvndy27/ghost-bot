@@ -1,5 +1,15 @@
 # Progress log
 
+## Provider.7 — Unified Multi-Provider Execution Integration
+
+2026-11-27. Branched `feat/provider7-unified-execution` from `5d57c39` (`feat/provider6-openai-compatible`). Resolved the HTTP 501 `LIVE_INFERENCE_DISABLED` execution gap in `RunOrchestrator`, `RuntimeRegistry`, and `DaemonServer` across `openclaw`, `ollama`, `claude-api`, `gemini-api`, `kimi-acp`, `lmstudio`, `llamacpp`, and `openrouter` while preserving Codex and fail-closed `RuntimePolicyBroker` gating, and closed the targeted Provider.6 residual checks with zero live inference or paid API spend. See [Provider.7 report](extensions/provider7-unified-execution.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added persistent adapter ownership (`RuntimeRegistry.registerPersistentAdapter`, `getPersistentAdapter`, `getUnifiedExecutionAdapter`, `stop()` disconnect), `DaemonServer.registerPersistentProviderAdapters()` + `buildProviderPolicyInput()` + `configGeneration` tracking on `/lmstudio/config` & `/llamacpp/config`, and `RunOrchestrator.executeUnifiedProviderRun()` (pre-dispatch `RuntimePolicyBroker.authorize` revalidation, canonical `messages` history reconstruction on restart, streaming/cancellation, and uncertain-outcome quarantine without automatic replay). |
+| Implemented | Closed Provider.6 residuals: `readBoundedResponseText()` incremental metadata byte limits (`openai-compatible-transport.ts`, `anthropic-claude-api.ts`, `google-gemini-api.ts`), exact path/query/fragment enforcement in `assertPinnedHttpsOriginUrl()`, removal of `allowNetworkDiscovery` unauthenticated bypass for cloud adapters, `configGeneration` in `CompatSessionState` (`A -> B -> A` invalidation), post-`[DONE]` frame suppression, and unexpected `finish_reason` rejection. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider7-unified-execution.test.ts`, 3 consecutive full-workspace regression runs (**232/232** per run: `root` 139/139, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts (`verify-provider7-unified-execution-desktop.mjs` + 15 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
 ## Provider.6 — Shared OpenAI-Compatible Runtime Integration
 
 2026-11-27. Branched `feat/provider6-openai-compatible` from `d13e686` (`feat/provider5-kimi-acp`). Implemented shared OpenAI-compatible transport (`OpenAiCompatibleRuntimeBase`) and three provider runtimes (`lmstudio`, `llamacpp`, `openrouter`), `RuntimePolicyBroker` gates, daemon routes, Electron IPC, and Desktop Settings/`BotEditorModal` UI with zero live inference or paid API spend. See [Provider.6 report](extensions/provider6-openai-compatible.md).

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readBoundedResponseText } from '../openai-compat/openai-compatible-transport.ts'
 import type {
   AgentEvent,
   AgentRequest,
@@ -203,8 +204,8 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
     return this.getAuthStatus()
   }
 
-  async listModels(options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
-    if (!options.allowNetworkDiscovery && !this.isExecutionAuthorized()) {
+  async listModels(_options: { allowNetworkDiscovery?: boolean } = {}): Promise<ModelInfo[]> {
+    if (!this.isExecutionAuthorized()) {
       return []
     }
     const apiKey = this.resolveApiKey()?.trim()
@@ -227,10 +228,7 @@ export class AnthropicClaudeApiAdapter implements AgentRuntime {
     if (!res.ok) {
       throw new Error(`Anthropic /v1/models failed with HTTP ${res.status}`)
     }
-    const raw = await res.text()
-    if (Buffer.byteLength(raw, 'utf8') > CLAUDE_MAX_METADATA_BYTES) {
-      throw new Error(`Anthropic /v1/models response exceeded ${CLAUDE_MAX_METADATA_BYTES} bytes limit`)
-    }
+    const raw = await readBoundedResponseText(res, CLAUDE_MAX_METADATA_BYTES, 'Anthropic /v1/models')
     const parsed = JSON.parse(raw) as { data?: unknown }
     const items = Array.isArray(parsed?.data) ? parsed.data : []
     const out: ModelInfo[] = []

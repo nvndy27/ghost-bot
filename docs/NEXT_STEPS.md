@@ -1,5 +1,10 @@
 # Next steps
 
+## Provider.7 — Unified Multi-Provider Execution Integration (Completed Offline / Live Spend Gated)
+
+1. Proceed to **Agent 2 Cross-Provider Security Audit & Main Integration** (or Phase 6 Packaging/Release Candidate sign-off) once stacked PRs #6–#12 are reviewed.
+2. When explicitly authorized, run bounded live inference checks against installed local runtimes (Ollama / LM Studio / llama.cpp / Kimi CLI) or explicit opt-in cloud API keys per `docs/extensions/provider7-unified-execution.md`.
+
 ## Provider.6 — Shared OpenAI-Compatible Runtime Integration (Completed Offline / Execution Gated)
 
 1. When explicitly authorized, test live loopback inference against LM Studio or `llama-server` or bounded 2-request live OpenRouter verification per `docs/extensions/provider6-openai-compatible.md`.
