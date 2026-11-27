@@ -60,6 +60,27 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [runtimeId, setRuntimeId] = useState<
+    | 'mock-offline'
+    | 'codex'
+    | 'openclaw'
+    | 'ollama'
+    | 'claude-api'
+    | 'gemini-api'
+    | 'kimi-acp'
+    | 'lmstudio'
+    | 'llamacpp'
+    | 'openrouter'
+  >('mock-offline')
+  const [ollamaStatus, setOllamaStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
+  >(null)
+  const [claudeStatus, setClaudeStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
+  >(null)
+  const [geminiStatus, setGeminiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').GeminiStatusDto | null
+  >(null)
   const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
   const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
   const [permission, setPermission] = useState<'read-only' | 'ask-approval' | 'workspace'>(
@@ -76,10 +97,41 @@ export function BotEditorModal({
 
   useEffect(() => {
     if (!open) return
+    if (window.ghostBot?.getOllamaStatus) {
+      void window.ghostBot
+        .getOllamaStatus()
+        .then(setOllamaStatus)
+        .catch(() => setOllamaStatus(null))
+    }
+    if (window.ghostBot?.getClaudeStatus) {
+      void window.ghostBot
+        .getClaudeStatus()
+        .then(setClaudeStatus)
+        .catch(() => setClaudeStatus(null))
+    }
+    if (window.ghostBot?.getGeminiStatus) {
+      void window.ghostBot
+        .getGeminiStatus()
+        .then(setGeminiStatus)
+        .catch(() => setGeminiStatus(null))
+    }
     if (mode === 'edit' && initialBot) {
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
       setInstructions(initialBot.instructions)
+      setRuntimeId(
+        initialBot.runtimeId === 'codex' ||
+          initialBot.runtimeId === 'openclaw' ||
+          initialBot.runtimeId === 'ollama' ||
+          initialBot.runtimeId === 'claude-api' ||
+          initialBot.runtimeId === 'gemini-api' ||
+          initialBot.runtimeId === 'kimi-acp' ||
+          initialBot.runtimeId === 'lmstudio' ||
+          initialBot.runtimeId === 'llamacpp' ||
+          initialBot.runtimeId === 'openrouter'
+          ? initialBot.runtimeId
+          : 'mock-offline',
+      )
       setModelId(initialBot.modelId)
       setEffort(
         initialBot.effort === 'low' || initialBot.effort === 'high' ? initialBot.effort : 'medium',
@@ -190,7 +242,7 @@ export function BotEditorModal({
           description: description.trim(),
           instructions: instructions.trim(),
           avatar,
-          runtimeId: 'mock-offline',
+          runtimeId,
           modelId,
           effort,
           workspacePath: workspacePath.trim(),
@@ -204,6 +256,7 @@ export function BotEditorModal({
             description: description.trim(),
             instructions: instructions.trim(),
             avatar,
+            runtimeId,
             modelId,
             effort,
             workspacePath: workspacePath.trim(),
@@ -508,37 +561,172 @@ export function BotEditorModal({
             />
           </label>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>Model (mock)</span>
+              <span>Runtime</span>
               <select
+                data-testid="bot-runtime-select"
+                value={runtimeId}
+                onChange={(e) => {
+                  const next = e.target.value as
+                    | 'mock-offline'
+                    | 'codex'
+                    | 'openclaw'
+                    | 'ollama'
+                    | 'claude-api'
+                    | 'gemini-api'
+                    | 'kimi-acp'
+                    | 'lmstudio'
+                    | 'llamacpp'
+                    | 'openrouter'
+                  setDirty(true)
+                  setRuntimeId(next)
+                  if (next === 'ollama') {
+                    setPermission('read-only')
+                    if (ollamaStatus && ollamaStatus.models.length > 0) {
+                      setModelId(ollamaStatus.models[0].id)
+                    }
+                  } else if (next === 'claude-api') {
+                    setPermission('read-only')
+                    if (claudeStatus && claudeStatus.models.length > 0) {
+                      setModelId(claudeStatus.models[0].id)
+                    }
+                  } else if (next === 'gemini-api') {
+                    setPermission('read-only')
+                    if (geminiStatus && geminiStatus.models.length > 0) {
+                      setModelId(geminiStatus.models[0].id)
+                    }
+                  } else if (
+                    next === 'kimi-acp' ||
+                    next === 'lmstudio' ||
+                    next === 'llamacpp' ||
+                    next === 'openrouter'
+                  ) {
+                    setPermission('read-only')
+                  }
+                }}
+              >
+                <option value="mock-offline">Mock Offline</option>
+                <option value="codex">Codex (ChatGPT)</option>
+                <option value="openclaw">OpenClaw Gateway</option>
+                <option value="ollama">Ollama Local</option>
+                <option value="claude-api">Anthropic Claude API (API-key billed)</option>
+                <option value="gemini-api">Google Gemini API (API key)</option>
+                <option value="kimi-acp">Kimi Code ACP</option>
+                <option value="lmstudio">LM Studio (Local)</option>
+                <option value="llamacpp">llama.cpp Server (Local)</option>
+                <option value="openrouter">OpenRouter API (API-key billed)</option>
+              </select>
+            </label>
+
+            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
+              <span>
+                {runtimeId === 'ollama'
+                  ? 'Model (Ollama)'
+                  : runtimeId === 'claude-api'
+                    ? 'Model (Claude API)'
+                    : runtimeId === 'gemini-api'
+                      ? 'Model (Gemini API)'
+                      : 'Model (mock)'}
+              </span>
+              <select
+                data-testid="bot-model-select"
                 value={modelId}
                 onChange={(e) => {
                   setDirty(true)
                   setModelId(e.target.value)
                 }}
               >
-                {MOCK_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
+                {runtimeId === 'ollama' ? (
+                  ollamaStatus && ollamaStatus.models.length > 0 ? (
+                    ollamaStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                        {m.parameterSize ? ` (${m.parameterSize})` : ''}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {ollamaStatus?.available
+                        ? 'No local Ollama models installed'
+                        : 'Ollama unavailable (127.0.0.1:11434)'}
+                    </option>
+                  )
+                ) : runtimeId === 'claude-api' ? (
+                  claudeStatus && claudeStatus.models.length > 0 ? (
+                    claudeStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {claudeStatus?.credentialConfigured
+                        ? 'API-billed model discovery requires explicit opt-in'
+                        : 'Configure Anthropic API key in Settings'}
+                    </option>
+                  )
+                ) : runtimeId === 'gemini-api' ? (
+                  geminiStatus && geminiStatus.models.length > 0 ? (
+                    geminiStatus.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={modelId}>
+                      {geminiStatus?.credentialConfigured
+                        ? 'API model discovery requires explicit opt-in'
+                        : 'Configure Gemini API key in Settings'}
+                    </option>
+                  )
+                ) : (
+                  MOCK_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))
+                )}
               </select>
             </label>
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
               <span>Effort</span>
-              <select
-                value={effort}
-                onChange={(e) => {
-                  setDirty(true)
-                  setEffort(e.target.value as 'low' | 'medium' | 'high')
-                }}
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+              {(() => {
+                const supportedEfforts =
+                  runtimeId === 'mock-offline' || runtimeId === 'codex'
+                    ? ['low', 'medium', 'high']
+                    : []
+                const effortDisabled = supportedEfforts.length === 0
+                return (
+                  <select
+                    data-testid="bot-effort-select"
+                    value={effort}
+                    disabled={effortDisabled}
+                    title={
+                      effortDisabled
+                        ? 'Effort selection is not supported by this provider'
+                        : undefined
+                    }
+                    onChange={(e) => {
+                      setDirty(true)
+                      setEffort(e.target.value as 'low' | 'medium' | 'high')
+                    }}
+                  >
+                    {effortDisabled ? (
+                      <option value={effort}>Not supported by provider</option>
+                    ) : (
+                      <>
+                        {supportedEfforts.includes('low') && <option value="low">Low</option>}
+                        {supportedEfforts.includes('medium') && (
+                          <option value="medium">Medium</option>
+                        )}
+                        {supportedEfforts.includes('high') && <option value="high">High</option>}
+                      </>
+                    )}
+                  </select>
+                )
+              })()}
             </label>
 
             <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>

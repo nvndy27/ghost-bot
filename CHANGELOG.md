@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Phase 3D — Production Memory, Knowledge, and MCP Integration + Acceptance (Phase 3D.0–3D.4)
+- **Phase 3D.0:** Merged `@ghost-bot/memory`, `@ghost-bot/knowledge`, and `@ghost-bot/mcp` foundations onto `main` (`07839ff`), upgraded all workspace packages to `zod@4.6.7`, and resolved `GHSA-mrhx-c7xc-m3w5`.
+- **Phase 3D.1:** Integrated daemon-owned `MemoryService`, migration `0005_memory_core`, `MemorySettingsSection`, 6 Zod-validated IPC channels, and dispatch-boundary `CodexAppServerAdapter` context revalidation (`<= 4096` bytes).
+- **Phase 3D.2:** Integrated daemon-owned `KnowledgeService`, migration `0006_knowledge_core`, `KnowledgeSettingsSection`, 11 IPC channels, `O_NOFOLLOW` file-grant ingestion, revision-aware citations, and combined Memory+Knowledge context assembly (`<= 12288` bytes).
+- **Phase 3D.3:** Integrated daemon-owned `McpService`, migration `0007_mcp_core` (`mcp_servers`, `mcp_approval_bindings`), `McpSettingsSection`, 12 IPC channels, `ask-approval`-only `HostMcpPolicyAdapter` enforcement, explicit binary digest pinning, and single-use durable approval dispatch (keeping native Codex MCP disabled as `unsupported_native_mcp`).
+- **Phase 3D.4:** Added integrated v4/v5/v6->v7 persistence & atomic archival rollback tests (`tests/phase-3d4-integrated.test.ts`), 27-step combined Electron E2E (`scripts/verify-phase-3d4-electron.mjs`, 4 screenshots in `design/reviews/phase-3d4/`), ~2500-chunk cross-extension responsiveness benchmark, and rebuilt/verified Linux AppImage & Fedora RPM packages.
+
 ### Phase 2E — Multi-Runtime Completion, Packaging & Functional MVP Acceptance
 - Added `OpenClawGatewayAdapter` (`packages/runtime-adapters/openclaw/openclaw-gateway.ts`) with loopback-only validation, `health`/`status`/`models.list` discovery, normalized streaming/tool/approval protocol support, and fail-closed `RuntimePolicyBroker` execution gating.
 - Added optional `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`) with loopback HTTP validation, `/api/version` + `/api/tags` discovery, bounded stateless `/api/chat` NDJSON streaming, `AbortController` cancellation, and `read-only` enforcement.

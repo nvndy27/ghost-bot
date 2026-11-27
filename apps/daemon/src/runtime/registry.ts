@@ -1,10 +1,28 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import {
+  ANTHROPIC_API_VERSION,
+  APPROVED_ANTHROPIC_ORIGIN,
+  AnthropicClaudeApiAdapter,
+} from '@ghost-bot/runtime-adapters/claude'
 import { CodexAppServerAdapter } from '@ghost-bot/runtime-adapters/codex'
 import type { CodexAccountSummary } from '@ghost-bot/runtime-adapters/codex'
+import {
+  APPROVED_GEMINI_ORIGIN,
+  GEMINI_API_VERSION,
+  GoogleGeminiApiAdapter,
+} from '@ghost-bot/runtime-adapters/gemini'
+import { KimiAcpAdapter } from '@ghost-bot/runtime-adapters/kimi'
+import { DEFAULT_LLAMACPP_BASE_URL, LlamaCppLocalAdapter } from '@ghost-bot/runtime-adapters/llamacpp'
+import { DEFAULT_LMSTUDIO_BASE_URL, LmStudioLocalAdapter } from '@ghost-bot/runtime-adapters/lmstudio'
+import {
+  APPROVED_OPENROUTER_BASE_URL,
+  OpenRouterApiAdapter,
+} from '@ghost-bot/runtime-adapters/openrouter'
 import { MockRuntimeAdapter } from '@ghost-bot/runtime-adapters/mock'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
+import { RuntimePolicyBroker } from './policy-broker.ts'
 import type {
   ProviderSummary,
   RuntimeLifecycleState,
@@ -13,6 +31,7 @@ import type {
 import type {
   AgentEvent,
   AgentRequest,
+  AgentRuntime,
   ApprovalDecision,
   ModelInfo,
   Session,
@@ -53,6 +72,12 @@ export interface RuntimeRegistryOptions {
   codexClientFactory?: (version: string | null) => CodexMetadataClient
   openclawAdapter?: OpenClawGatewayAdapter
   ollamaAdapter?: OllamaLocalAdapter
+  claudeAdapter?: AnthropicClaudeApiAdapter
+  geminiAdapter?: GoogleGeminiApiAdapter
+  kimiAdapter?: KimiAcpAdapter
+  lmstudioAdapter?: LmStudioLocalAdapter
+  llamacppAdapter?: LlamaCppLocalAdapter
+  openrouterAdapter?: OpenRouterApiAdapter
   cacheTtlMs?: number
 }
 
@@ -88,6 +113,7 @@ export class RuntimeRegistry {
   private reconnectInFlight: Promise<RuntimeSnapshot> | null = null
   private lifecycleState: RuntimeLifecycleState = 'disconnected'
   private stopped = false
+  private readonly persistentAdapters = new Map<string, AgentRuntime>()
 
   constructor(options: RuntimeRegistryOptions) {
     this.options = options
@@ -213,6 +239,72 @@ export class RuntimeRegistry {
     }
   }
 
+  registerPersistentAdapter(runtimeId: string, adapter: AgentRuntime): void {
+    this.persistentAdapters.set(runtimeId, adapter)
+  }
+
+  getPersistentAdapter<T extends AgentRuntime = AgentRuntime>(runtimeId: string): T | null {
+    return (this.persistentAdapters.get(runtimeId) as T | undefined) ?? null
+  }
+
+  async getUnifiedExecutionAdapter(runtimeId: string): Promise<{
+    adapter: AgentRuntime
+    generation: number
+  }> {
+    if (this.stopped) {
+      throw new DaemonError('RUNTIME_STOPPED', 'RuntimeRegistry is stopped', { statusCode: 503 })
+    }
+    const existing = this.persistentAdapters.get(runtimeId)
+    if (existing) {
+      return { adapter: existing, generation: this.generation }
+    }
+    if (runtimeId === 'openclaw') {
+      const adapter = this.options.openclawAdapter ?? new OpenClawGatewayAdapter({ timeoutMs: 2000 })
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'ollama') {
+      const adapter = this.options.ollamaAdapter ?? new OllamaLocalAdapter({ timeoutMs: 2000 })
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'claude-api') {
+      const adapter = this.options.claudeAdapter ?? new AnthropicClaudeApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'gemini-api') {
+      const adapter = this.options.geminiAdapter ?? new GoogleGeminiApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'kimi-acp') {
+      const adapter = this.options.kimiAdapter ?? new KimiAcpAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'lmstudio') {
+      const adapter = this.options.lmstudioAdapter ?? new LmStudioLocalAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'llamacpp') {
+      const adapter = this.options.llamacppAdapter ?? new LlamaCppLocalAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    if (runtimeId === 'openrouter') {
+      const adapter = this.options.openrouterAdapter ?? new OpenRouterApiAdapter()
+      this.persistentAdapters.set(runtimeId, adapter)
+      return { adapter, generation: this.generation }
+    }
+    throw new DaemonError(
+      'RUNTIME_ADAPTER_UNAVAILABLE',
+      `No execution adapter registered for runtime "${runtimeId}"`,
+      { statusCode: 501 },
+    )
+  }
+
   async getSnapshot(refresh = false): Promise<RuntimeSnapshot> {
     if (this.stopped) {
       throw new Error('RuntimeRegistry is stopped')
@@ -247,6 +339,329 @@ export class RuntimeRegistry {
       this.inFlight = null
     })
     return this.inFlight
+  }
+
+  async getOpenClawStatus(): Promise<import('@ghost-bot/shared-types/ipc').OpenClawStatusDto> {
+    const openclaw = this.options.openclawAdapter ?? new OpenClawGatewayAdapter({ timeoutMs: 2000 })
+    const [summary, caps] = await Promise.all([
+      openclaw.inspectGateway(),
+      openclaw.capabilities().catch(() => ({
+        streaming: false,
+        cancellation: false,
+        resume: false,
+        approvals: false,
+        usage: false,
+        sandbox: false,
+        models: [],
+      })),
+    ])
+    const models = summary.available ? caps.models : []
+
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOpenClawExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      openClawVersion: summary.runtimeVersion,
+      openClawExecutionAuthorized: false,
+      openClawLoopbackVerified: summary.available,
+      openClawSandboxVerified: false,
+    })
+
+    return {
+      available: summary.available,
+      gatewayUrl: summary.gatewayUrl,
+      runtimeVersion: summary.runtimeVersion,
+      supportedVersion: summary.supportedVersion,
+      hostDesktopEnabled: summary.hostDesktopEnabled,
+      pluginsLoaded: summary.pluginsLoaded,
+      authStatus: summary.authState.status,
+      authDetail: summary.authState.detail ?? '',
+      detail: summary.detail,
+      capabilities: {
+        streaming: caps.streaming,
+        cancellation: caps.cancellation,
+        resume: caps.resume,
+        approvals: caps.approvals,
+        usage: caps.usage,
+        sandbox: caps.sandbox,
+      },
+      models: models.slice(0, 100).map((m) => ({
+        id: m.id,
+        label: m.label,
+        efforts: m.efforts,
+      })),
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getOllamaStatus(): Promise<import('@ghost-bot/shared-types/ipc').OllamaStatusDto> {
+    const ollama = this.options.ollamaAdapter ?? new OllamaLocalAdapter({ timeoutMs: 2000 })
+    const summary = await ollama.inspectLocalRuntime()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOllamaExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      ollamaExecutionAuthorized: false,
+      ollamaAvailable: summary.available,
+      ollamaLoopbackVerified: true,
+      ollamaLocalOnlyVerified: summary.localOnlyVerified,
+    })
+
+    return {
+      available: summary.available,
+      baseUrl: summary.baseUrl,
+      runtimeVersion: summary.version,
+      authStatus: summary.authStatus,
+      detail: summary.detail,
+      localOnlyVerified: summary.localOnlyVerified,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: false,
+        sandbox: false,
+      },
+      models: summary.models.slice(0, 100),
+      runningModels: summary.runningModels.slice(0, 50),
+      resourceLimits: summary.resourceLimits,
+      diagnostics: summary.diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getClaudeStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').ClaudeStatusDto> {
+    const adapter =
+      this.options.claudeAdapter ??
+      new AnthropicClaudeApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeClaudeApiExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      claudeExecutionAuthorized: input.executionAuthorized,
+      claudeCredentialConfigured: input.credentialConfigured,
+      claudeKeyringAvailable: input.keyringAvailable,
+      claudeEndpointVerified: adapter.getEndpointOrigin() === APPROVED_ANTHROPIC_ORIGIN,
+    })
+
+    const diagnostics: string[] = [
+      'Uses official Anthropic Messages API (x-api-key + anthropic-version: 2023-06-01); never Claude.ai subscription tokens or browser cookies.',
+      'Initial execution is tool-free read-only chat; Claude Code CLI is not invoked.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_ANTHROPIC_ORIGIN,
+      apiVersion: ANTHROPIC_API_VERSION,
+      billingMode: 'api-key-billed',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'Anthropic API key configured and authorized for bounded API-billed read-only chat'
+            : 'Anthropic API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No Anthropic API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: true,
+        sandbox: false,
+        tools: false,
+        claudeCodeCli: false,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getGeminiStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').GeminiStatusDto> {
+    const adapter =
+      this.options.geminiAdapter ??
+      new GoogleGeminiApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+        getAccountRef: () => input.accountRef,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeGeminiApiExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      geminiExecutionAuthorized: input.executionAuthorized,
+      geminiCredentialConfigured: input.credentialConfigured,
+      geminiKeyringAvailable: input.keyringAvailable,
+      geminiEndpointVerified: adapter.getEndpointOrigin() === APPROVED_GEMINI_ORIGIN,
+    })
+
+    const diagnostics: string[] = [
+      'Uses official Gemini API v1beta streamGenerateContent (x-goog-api-key header, never query params or Google account cookies).',
+      'Initial execution is tool-free read-only chat; Gemini CLI and Google AI subscription login are disabled.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_GEMINI_ORIGIN,
+      apiVersion: GEMINI_API_VERSION,
+      billingMode: 'api-key',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'Gemini API key configured and authorized for bounded read-only chat'
+            : 'Gemini API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No Gemini API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: false,
+        approvals: false,
+        usage: true,
+        sandbox: false,
+        tools: false,
+        geminiCli: false,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getKimiStatus(): Promise<import('@ghost-bot/shared-types/ipc').KimiStatusDto> {
+    const kimi = this.options.kimiAdapter ?? new KimiAcpAdapter()
+    const info = await kimi.inspectRuntime()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeKimiAcpExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      kimiExecutionAuthorized: false,
+      kimiCliAvailable: info.cliAvailable,
+      kimiAcpProtocolVerified: info.acpProtocolSupported,
+      kimiAuthenticated: info.authenticated,
+      kimiContainmentVerified: false,
+    })
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !info.cliAvailable
+      ? 'disconnected'
+      : info.authenticated
+        ? 'connected'
+        : 'pending'
+
+    return {
+      cliAvailable: info.cliAvailable,
+      cliVersion: info.cliVersion,
+      protocolVersion: info.protocolVersion,
+      acpProtocolSupported: info.acpProtocolSupported,
+      authenticated: info.authenticated,
+      authStatus,
+      detail: info.detail,
+      loginGuidance: 'Run `kimi login` in your local terminal (Ghost Bot never reads Kimi token files).',
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        resume: info.loadSessionSupported,
+        approvals: true,
+        usage: true,
+        clientFsSupported: false,
+        clientTerminalSupported: false,
+      },
+      models: info.models.map((m) => ({ id: m.id, label: m.label })),
+      diagnostics: [
+        'ACP protocol v1 over stdio (`kimi acp`); client fs/* and terminal/* callbacks disabled.',
+        'allow_always permission options are rejected; single-use approvals only.',
+      ],
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
   }
 
   async listProviders(): Promise<ProviderSummary[]> {
@@ -310,6 +725,169 @@ export class RuntimeRegistry {
     ]
   }
 
+  abortProviderRuns(runtimeId: 'claude-api' | 'gemini-api' | 'openrouter' | 'lmstudio' | 'llamacpp'): void {
+    const persistent = this.persistentAdapters.get(runtimeId) as
+      | { abortActiveRuns?: () => void }
+      | undefined
+    persistent?.abortActiveRuns?.()
+    if (runtimeId === 'claude-api') {
+      this.options.claudeAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'gemini-api') {
+      this.options.geminiAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'openrouter') {
+      this.options.openrouterAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'lmstudio') {
+      this.options.lmstudioAdapter?.abortActiveRuns()
+    } else if (runtimeId === 'llamacpp') {
+      this.options.llamacppAdapter?.abortActiveRuns()
+    }
+  }
+
+  async getLocalOpenAiCompatStatus(input: {
+    id: 'lmstudio' | 'llamacpp'
+    baseUrl?: string
+    executionAuthorized: boolean
+  }): Promise<import('@ghost-bot/shared-types/ipc').LocalOpenAiCompatStatusDto> {
+    const isLm = input.id === 'lmstudio'
+    const defaultUrl = isLm ? DEFAULT_LMSTUDIO_BASE_URL : DEFAULT_LLAMACPP_BASE_URL
+    const persistent = this.persistentAdapters.get(input.id) as
+      | LmStudioLocalAdapter
+      | LlamaCppLocalAdapter
+      | undefined
+    const adapter =
+      persistent ??
+      (isLm
+        ? (this.options.lmstudioAdapter ??
+          new LmStudioLocalAdapter({
+            baseUrl: input.baseUrl ?? defaultUrl,
+            isExecutionAuthorized: () => input.executionAuthorized,
+          }))
+        : (this.options.llamacppAdapter ??
+          new LlamaCppLocalAdapter({
+            baseUrl: input.baseUrl ?? defaultUrl,
+            isExecutionAuthorized: () => input.executionAuthorized,
+          })))
+    const avail = await adapter.checkAvailability()
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeLocalOpenAiCompatExecution({
+      providerLabel: isLm ? 'LM Studio' : 'llama.cpp',
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      executionAuthorized: input.executionAuthorized,
+      available: avail.available,
+      loopbackVerified: true,
+    })
+    return {
+      id: input.id,
+      available: avail.available,
+      baseUrl: adapter.getBaseUrl(),
+      authStatus: avail.available ? 'connected' : 'disconnected',
+      detail: avail.detail,
+      loopbackVerified: true,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        usage: true,
+        tools: false,
+      },
+      models: avail.models.slice(0, 100).map((m) => ({ id: m.id, label: m.label })),
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics: [
+        'Loopback-only OpenAI-compatible HTTP transport; transport locality does not prove upstream routing.',
+        'Initial execution is tool-free read-only chat; no cloud fallback.',
+      ],
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
+  async getOpenRouterStatus(input: {
+    keyringAvailable: boolean
+    keyringLocked: boolean
+    keyringReason: string | null
+    credentialConfigured: boolean
+    accountRef: string
+    maskedKeyHint: string | null
+    credentialGeneration: number
+    executionAuthorized: boolean
+    models?: Array<{ id: string; label: string }>
+  }): Promise<import('@ghost-bot/shared-types/ipc').OpenRouterStatusDto> {
+    const adapter =
+      this.options.openrouterAdapter ??
+      new OpenRouterApiAdapter({
+        isExecutionAuthorized: () => input.executionAuthorized,
+        getCredentialGeneration: () => input.credentialGeneration,
+        getAccountRef: () => input.accountRef,
+      })
+    const policyBroker = new RuntimePolicyBroker()
+    const readOnlyDecision = policyBroker.authorizeOpenRouterExecution({
+      requestedPermission: 'read-only',
+      canonicalWorkspace: '/tmp',
+      openRouterExecutionAuthorized: input.executionAuthorized,
+      openRouterCredentialConfigured: input.credentialConfigured,
+      openRouterKeyringAvailable: input.keyringAvailable,
+      openRouterEndpointVerified: adapter.getBaseUrl() === APPROVED_OPENROUTER_BASE_URL,
+    })
+
+    const diagnostics: string[] = [
+      'Pinned to https://openrouter.ai/api/v1 with provider.allow_fallbacks=false; not a ChatGPT/Claude/Gemini subscription.',
+      'Initial execution is tool-free read-only chat.',
+    ]
+    if (!input.keyringAvailable) {
+      diagnostics.push(input.keyringReason ?? 'OS Secret Service keyring is unavailable or locked.')
+    }
+
+    const authStatus: 'connected' | 'disconnected' | 'pending' | 'error' = !input.keyringAvailable
+      ? 'error'
+      : input.credentialConfigured
+        ? 'connected'
+        : 'disconnected'
+
+    return {
+      available: input.keyringAvailable && input.credentialConfigured,
+      endpoint: APPROVED_OPENROUTER_BASE_URL,
+      billingMode: 'api-key-billed',
+      authStatus,
+      detail: !input.keyringAvailable
+        ? (input.keyringReason ?? 'OS Secret Service unavailable or locked')
+        : input.credentialConfigured
+          ? input.executionAuthorized
+            ? 'OpenRouter API key configured and authorized for bounded API-billed read-only chat'
+            : 'OpenRouter API key configured in OS Secret Service (execution gated until opt-in)'
+          : 'No OpenRouter API key configured in OS Secret Service',
+      keyringAvailable: input.keyringAvailable,
+      keyringLocked: input.keyringLocked,
+      credentialConfigured: input.credentialConfigured,
+      accountRef: input.accountRef,
+      maskedKeyHint: input.maskedKeyHint,
+      credentialGeneration: input.credentialGeneration,
+      executionAuthorized: input.executionAuthorized,
+      capabilities: {
+        streaming: true,
+        cancellation: true,
+        usage: true,
+        tools: false,
+        fallbacksDisabled: true,
+      },
+      models: input.models ?? [],
+      resourceLimits: adapter.getResourceLimits(),
+      diagnostics,
+      policyCompatibility: {
+        readOnlyAllowed: readOnlyDecision.allowed,
+        askApprovalAllowed: false,
+        workspaceAllowed: false,
+        fullAccessAllowed: false,
+        gatedReason: readOnlyDecision.allowed ? null : readOnlyDecision.reason,
+      },
+    }
+  }
+
   async stop(): Promise<void> {
     this.stopped = true
     this.lifecycleState = 'disconnected'
@@ -317,6 +895,10 @@ export class RuntimeRegistry {
     this.cachedSnapshot = null
     this.lastAccountKey = null
     await this.mock.disconnect()
+    for (const adapter of this.persistentAdapters.values()) {
+      await adapter.disconnect().catch(() => {})
+    }
+    this.persistentAdapters.clear()
     if (this.codexClient) {
       const client = this.codexClient
       this.codexClient = null

@@ -1,13 +1,27 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { PermissionMode, SessionConfig } from '@ghost-bot/shared-types/runtime'
+import type {
+  AgentRuntime,
+  ConversationHistoryTurn,
+  PermissionMode,
+  Session,
+  SessionConfig,
+} from '@ghost-bot/shared-types/runtime'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError, redactSecrets } from '../errors.ts'
-import { RuntimePolicyBroker } from '../runtime/policy-broker.ts'
+import type { KnowledgeService, PreparedExecutionKnowledgeContext } from '../knowledge/service.ts'
+import type { McpService } from '../mcp/service.ts'
+import type { MemoryService, PreparedExecutionMemoryContext } from '../memory/service.ts'
+import { RuntimePolicyBroker, type PolicyAuthorizationInput } from '../runtime/policy-broker.ts'
 import type { CodexExecutionClient, RuntimeRegistry } from '../runtime/registry.ts'
 import { serializeMessageContent } from '../sessions/repository.ts'
 import type { SettingsRepository } from '../settings/repository.ts'
+import {
+  assembleCombinedExecutionContext,
+  COMBINED_EXECUTION_CONTEXT_LIMITS,
+  type CombinedExecutionContext,
+} from './context-assembler.ts'
 import { RunEventStore } from './event-store.ts'
 import { buildMockScenarioPlan } from './mock-scenarios.ts'
 import {
@@ -159,7 +173,31 @@ export interface RunOrchestratorOptions {
   runtimeRegistry?: RuntimeRegistry
   settingsRepo?: SettingsRepository
   policyBroker?: RuntimePolicyBroker
+  memoryService?: MemoryService
+  knowledgeService?: KnowledgeService
+  mcpService?: McpService
+  getProviderPolicyInput?: (
+    runtimeId: string,
+    permission: PermissionMode,
+    canonicalWorkspace: string,
+  ) => Promise<{
+    policyInput: PolicyAuthorizationInput
+    accountKey: string
+  }>
+  onBeforeTransactionInStartRun?: () => Promise<void> | void
+  onBeforeDispatchInRun?: () => Promise<void> | void
 }
+
+const UNIFIED_PROVIDER_RUNTIMES = new Set([
+  'openclaw',
+  'ollama',
+  'claude-api',
+  'gemini-api',
+  'kimi-acp',
+  'lmstudio',
+  'llamacpp',
+  'openrouter',
+])
 
 const QUARANTINE_SETTINGS_KEY = 'execution.quarantinedSessions.v1'
 
@@ -169,6 +207,18 @@ export class RunOrchestrator {
   private readonly runtimeRegistry?: RuntimeRegistry
   private readonly settingsRepo?: SettingsRepository
   private readonly policyBroker: RuntimePolicyBroker
+  private readonly memoryService?: MemoryService
+  private readonly knowledgeService?: KnowledgeService
+  private readonly mcpService?: McpService
+  private readonly getProviderPolicyInput?: RunOrchestratorOptions['getProviderPolicyInput']
+  private readonly onBeforeTransactionInStartRun?: () => Promise<void> | void
+  private readonly onBeforeDispatchInRun?: () => Promise<void> | void
+  private readonly activeUnifiedProcessSessions = new Set<string>()
+  private onRunTerminated?: (runId: string, reason: string) => void
+
+  setOnRunTerminated(handler: (runId: string, reason: string) => void): void {
+    this.onRunTerminated = handler
+  }
   private readonly activeControls = new Map<string, ActiveRunControl>()
   private readonly sessionsWithUnconfirmedStop = new Map<string, number>()
   private stopping = false
@@ -178,8 +228,111 @@ export class RunOrchestrator {
     this.runtimeRegistry = options?.runtimeRegistry
     this.settingsRepo = options?.settingsRepo
     this.policyBroker = options?.policyBroker ?? new RuntimePolicyBroker()
+    this.memoryService = options?.memoryService
+    this.knowledgeService = options?.knowledgeService
+    this.mcpService = options?.mcpService
+    this.getProviderPolicyInput = options?.getProviderPolicyInput
+    this.onBeforeTransactionInStartRun = options?.onBeforeTransactionInStartRun
+    this.onBeforeDispatchInRun = options?.onBeforeDispatchInRun
     this.eventStore = new RunEventStore(dbHandle)
     this.loadDurableQuarantine()
+  }
+
+  private async prepareExecutionKnowledgeSafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+    maxBytesBudget: number
+  }): Promise<PreparedExecutionKnowledgeContext> {
+    if (!this.knowledgeService) {
+      return {
+        status: 'disabled',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
+    }
+    try {
+      return await this.knowledgeService.prepareExecutionContext(params)
+    } catch (err) {
+      if (err instanceof DaemonError && err.code === 'KNOWLEDGE_AUTHORIZATION_FAILED') {
+        throw err
+      }
+      return {
+        status: 'error_omitted',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
+    }
+  }
+
+  private async prepareCombinedContextSafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+  }): Promise<CombinedExecutionContext> {
+    const memory = await this.prepareExecutionMemorySafely(params)
+    const remainingForKnowledge = Math.max(
+      512,
+      Math.min(
+        COMBINED_EXECUTION_CONTEXT_LIMITS.maxKnowledgeBytes,
+        COMBINED_EXECUTION_CONTEXT_LIMITS.maxCombinedBytes -
+          memory.totalBytes -
+          COMBINED_EXECUTION_CONTEXT_LIMITS.envelopeOverheadBytes,
+      ),
+    )
+    const knowledge = await this.prepareExecutionKnowledgeSafely({
+      ...params,
+      maxBytesBudget: remainingForKnowledge,
+    })
+    return assembleCombinedExecutionContext(memory, knowledge)
+  }
+
+  private async prepareExecutionMemorySafely(params: {
+    sessionId: string
+    agentId: string
+    runtimeId: string
+    queryText: string
+    isMock: boolean
+  }): Promise<PreparedExecutionMemoryContext> {
+    if (!this.memoryService) {
+      return {
+        status: 'disabled',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+    }
+    try {
+      return await this.memoryService.prepareExecutionContext(params)
+    } catch (err) {
+      if (err instanceof DaemonError && err.code === 'MEMORY_AUTHORIZATION_FAILED') {
+        throw err
+      }
+      return {
+        status: 'error_omitted',
+        mechanism: 'none',
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+    }
   }
 
   private loadDurableQuarantine(): void {
@@ -364,6 +517,22 @@ export class RunOrchestrator {
         )
         .run(now, JSON.stringify({ reason: 'daemon_restarted' }))
 
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE mcp_approval_bindings
+           SET dispatch_state = 'uncertain', updated_at = ?
+           WHERE dispatch_state = 'dispatched'`,
+        )
+        .run(now)
+
+      this.dbHandle.sqlite
+        .prepare(
+          `UPDATE mcp_approval_bindings
+           SET dispatch_state = 'cancelled', updated_at = ?
+           WHERE dispatch_state = 'pending'`,
+        )
+        .run(now)
+
       return staleRuns.length
     })
   }
@@ -483,11 +652,22 @@ export class RunOrchestrator {
 
     const isMockRuntime = preBot.runtime_id === 'mock' || preBot.runtime_id === 'mock-offline'
     const isCodexRuntime = preBot.runtime_id === 'codex'
+    const isUnifiedProviderRuntime = UNIFIED_PROVIDER_RUNTIMES.has(preBot.runtime_id)
 
     let codexPreflight: {
       adapter: CodexExecutionClient
       generation: number
       codexVersion: string | null
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    } | null = null
+
+    let unifiedPreflight: {
+      runtimeId: string
+      adapter: AgentRuntime
+      generation: number
       accountKey: string
       canonicalWorkspace: string
       effectiveInstructions: string
@@ -585,20 +765,154 @@ export class RunOrchestrator {
         effectiveInstructions: instructionParts.join('\n\n'),
         externalSessionId: preSession.external_session_id,
       }
-    } else if (isMockRuntime) {
-      if (preSession.runtime_id === 'codex') {
+    } else if (isUnifiedProviderRuntime) {
+      if (preSession.runtime_id !== preBot.runtime_id) {
         throw new DaemonError(
           'SESSION_RUNTIME_MISMATCH',
-          'Cannot run mock simulation in a live Codex conversation; start a New conversation.',
+          `Cannot run "${preBot.runtime_id}" in a "${preSession.runtime_id}" session; start a New conversation.`,
+          { statusCode: 409 },
+        )
+      }
+      let canonicalWorkspace = ''
+      try {
+        canonicalWorkspace = await realpath(resolve(preBot.workspace_path))
+        const st = await stat(canonicalWorkspace)
+        if (!st.isDirectory()) {
+          throw new Error('Not a directory')
+        }
+      } catch {
+        throw new DaemonError(
+          'INVALID_WORKSPACE',
+          `Bot workspace path "${preBot.workspace_path}" is missing or not a directory`,
+          { statusCode: 400 },
+        )
+      }
+      if (!this.runtimeRegistry || !this.getProviderPolicyInput) {
+        throw new DaemonError(
+          'LIVE_INFERENCE_DISABLED',
+          `Runtime "${preBot.runtime_id}" execution bridge is not configured.`,
+          { statusCode: 501 },
+        )
+      }
+      const { policyInput, accountKey } = await this.getProviderPolicyInput(
+        preBot.runtime_id,
+        preBot.permission_mode as PermissionMode,
+        canonicalWorkspace,
+      )
+      const policyDecision = this.policyBroker.authorize(policyInput)
+      if (!policyDecision.allowed) {
+        throw new DaemonError('PERMISSION_DENIED', policyDecision.reason, { statusCode: 403 })
+      }
+      const execInfo = await this.runtimeRegistry.getUnifiedExecutionAdapter(preBot.runtime_id)
+      if (
+        preSession.external_session_id &&
+        preSession.account_id &&
+        preSession.account_id !== accountKey
+      ) {
+        throw new DaemonError(
+          'ACCOUNT_MISMATCH',
+          'Conversation belongs to a different account, credential, or endpoint; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+      if (preSession.external_session_id) {
+        const latestRun = this.dbHandle.sqlite
+          .prepare(
+            `SELECT model_id, effort, permission_mode FROM runs
+             WHERE session_id = ?
+             ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get(input.sessionId) as
+          | { model_id: string; effort: string; permission_mode: string }
+          | undefined
+        if (
+          latestRun &&
+          (latestRun.model_id !== preBot.model_id ||
+            latestRun.effort !== preBot.effort ||
+            latestRun.permission_mode !== preBot.permission_mode)
+        ) {
+          throw new DaemonError(
+            'SESSION_CONFIG_MISMATCH',
+            'Bot model, effort, or permission changed; start a New conversation.',
+            { statusCode: 409 },
+          )
+        }
+      }
+      const discoveredModels = await execInfo.adapter.listModels().catch(() => [])
+      if (
+        (preBot.runtime_id === 'lmstudio' ||
+          preBot.runtime_id === 'llamacpp' ||
+          preBot.runtime_id === 'ollama') &&
+        discoveredModels.length > 0 &&
+        !discoveredModels.some((m) => m.id === preBot.model_id)
+      ) {
+        throw new DaemonError(
+          'UNSUPPORTED_MODEL',
+          `Model "${preBot.model_id}" was not discovered on "${preBot.runtime_id}".`,
+          { statusCode: 400 },
+        )
+      }
+      const matchedModel = discoveredModels.find((m) => m.id === preBot.model_id)
+      if (
+        matchedModel &&
+        matchedModel.efforts.length > 0 &&
+        !matchedModel.efforts.includes(preBot.effort)
+      ) {
+        throw new DaemonError(
+          'UNSUPPORTED_EFFORT',
+          `Effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
+          { statusCode: 400 },
+        )
+      }
+      if (
+        matchedModel &&
+        matchedModel.permissionModes.length > 0 &&
+        !matchedModel.permissionModes.includes(preBot.permission_mode as PermissionMode)
+      ) {
+        throw new DaemonError(
+          'PERMISSION_DENIED',
+          `Permission "${preBot.permission_mode}" is not supported by model "${preBot.model_id}".`,
+          { statusCode: 403 },
+        )
+      }
+      const instructionParts: string[] = []
+      if (preBot.instructions.trim()) instructionParts.push(preBot.instructions.trim())
+      const personalization = this.settingsRepo?.getSettings().personalization
+      if (personalization) {
+        if (personalization.defaultInstructions.trim()) {
+          instructionParts.push(personalization.defaultInstructions.trim())
+        }
+        if (personalization.responseStyle && personalization.responseStyle !== 'balanced') {
+          instructionParts.push(`Response style: ${personalization.responseStyle}`)
+        }
+      }
+      unifiedPreflight = {
+        runtimeId: preBot.runtime_id,
+        adapter: execInfo.adapter,
+        generation: execInfo.generation,
+        accountKey,
+        canonicalWorkspace,
+        effectiveInstructions: instructionParts.join('\n\n'),
+        externalSessionId: preSession.external_session_id,
+      }
+    } else if (isMockRuntime) {
+      if (preSession.runtime_id === 'codex' || UNIFIED_PROVIDER_RUNTIMES.has(preSession.runtime_id)) {
+        throw new DaemonError(
+          'SESSION_RUNTIME_MISMATCH',
+          'Cannot run mock simulation in a live provider conversation; start a New conversation.',
           { statusCode: 409 },
         )
       }
     } else {
       throw new DaemonError(
         'LIVE_INFERENCE_DISABLED',
-        `Runtime "${preBot.runtime_id}" is not supported for execution in Phase 2B.`,
+        `Runtime "${preBot.runtime_id}" is not supported for execution.`,
         { statusCode: 501 },
       )
+    }
+
+    if (this.onBeforeTransactionInStartRun) {
+      await this.onBeforeTransactionInStartRun()
     }
 
     const activePlaceholders = ACTIVE_RUN_STATUSES.map(() => '?').join(', ')
@@ -700,7 +1014,7 @@ export class RunOrchestrator {
 
       const bot = this.dbHandle.sqlite
         .prepare(
-          `SELECT id, name, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
+          `SELECT id, name, instructions, runtime_id, model_id, effort, workspace_path, permission_mode, archived_at
            FROM agents
            WHERE id = ?`,
         )
@@ -708,6 +1022,7 @@ export class RunOrchestrator {
         | {
             id: string
             name: string
+            instructions: string
             runtime_id: string
             model_id: string
             effort: string
@@ -723,6 +1038,22 @@ export class RunOrchestrator {
         })
       }
 
+      if (
+        session.agent_id !== preSession.agent_id ||
+        bot.runtime_id !== preBot.runtime_id ||
+        bot.model_id !== preBot.model_id ||
+        bot.effort !== preBot.effort ||
+        bot.permission_mode !== preBot.permission_mode ||
+        bot.workspace_path !== preBot.workspace_path ||
+        bot.instructions !== preBot.instructions
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot or session configuration changed during preflight; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
       if (bot.permission_mode === 'full-access') {
         throw new DaemonError(
           'PERMISSION_MODE_DISABLED',
@@ -732,10 +1063,14 @@ export class RunOrchestrator {
       }
 
       const isMockRuntime = bot.runtime_id === 'mock' || bot.runtime_id === 'mock-offline'
-      if (!isMockRuntime && bot.runtime_id !== 'codex') {
+      if (
+        !isMockRuntime &&
+        bot.runtime_id !== 'codex' &&
+        !UNIFIED_PROVIDER_RUNTIMES.has(bot.runtime_id)
+      ) {
         throw new DaemonError(
           'LIVE_INFERENCE_DISABLED',
-          `Live AI inference for runtime "${bot.runtime_id}" is disabled in Phase 2B.`,
+          `Live AI inference for runtime "${bot.runtime_id}" is disabled.`,
           { statusCode: 501 },
         )
       }
@@ -756,7 +1091,13 @@ export class RunOrchestrator {
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode,
-        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        instructions: bot.instructions,
+        accountKey:
+          codexPreflight?.accountKey ?? unifiedPreflight?.accountKey ?? null,
+        workspacePath:
+          codexPreflight?.canonicalWorkspace ??
+          unifiedPreflight?.canonicalWorkspace ??
+          bot.workspace_path,
         codexVersion: codexPreflight?.codexVersion ?? null,
         isMock: isMockRuntime,
       }
@@ -841,7 +1182,10 @@ export class RunOrchestrator {
         userMessageId,
         assistantMessageId,
         botName: bot.name,
-        workspacePath: codexPreflight?.canonicalWorkspace ?? bot.workspace_path,
+        workspacePath:
+          codexPreflight?.canonicalWorkspace ??
+          unifiedPreflight?.canonicalWorkspace ??
+          bot.workspace_path,
         modelId: bot.model_id,
         effort: bot.effort,
         permissionMode: bot.permission_mode as PermissionMode,
@@ -860,6 +1204,24 @@ export class RunOrchestrator {
         const preflight = codexPreflight
         control.liveCancel = (rId) => preflight.adapter.cancel(rId)
         control.donePromise = this.executeCodexRun({
+          runId: txResult.run.id,
+          sessionId: input.sessionId,
+          agentId: txResult.run.agentId,
+          assistantMessageId: txResult.assistantMessageId,
+          prompt: trimmedText,
+          modelId: txResult.modelId,
+          effort: txResult.effort,
+          permission: txResult.permissionMode,
+          preflight,
+          control,
+        }).finally(() => {
+          if (control.cancelTimeout) clearTimeout(control.cancelTimeout)
+          this.activeControls.delete(txResult.run.id)
+        })
+      } else if (!txResult.isMock && unifiedPreflight) {
+        const preflight = unifiedPreflight
+        control.liveCancel = (rId) => preflight.adapter.cancel(rId)
+        control.donePromise = this.executeUnifiedProviderRun({
           runId: txResult.run.id,
           sessionId: input.sessionId,
           agentId: txResult.run.agentId,
@@ -1147,6 +1509,7 @@ export class RunOrchestrator {
           payload: { previousStatus: currentStatus },
           timestamp: now,
         })
+        this.onRunTerminated?.(runId, 'run_cancelling')
       }
 
       const updated = this.dbHandle.sqlite
@@ -1217,6 +1580,14 @@ export class RunOrchestrator {
          WHERE run_id = ? AND status IN ('pending', 'resolving')`,
       )
       .run(now, JSON.stringify({ reason }), runId)
+
+    this.dbHandle.sqlite
+      .prepare(
+        `UPDATE mcp_approval_bindings
+         SET dispatch_state = 'cancelled', updated_at = ?
+         WHERE approval_id IN (SELECT id FROM approvals WHERE run_id = ?) AND dispatch_state = 'pending'`,
+      )
+      .run(now, runId)
 
     for (const row of pendingRows) {
       this.eventStore.appendEvent(runId, {
@@ -1301,6 +1672,77 @@ export class RunOrchestrator {
             'Approval action arguments hash mismatch',
             { statusCode: 409 },
           )
+        }
+        const mcpBinding = this.dbHandle.sqlite
+          .prepare(
+            `SELECT server_id, config_fingerprint, dispatch_state, args_hash
+             FROM mcp_approval_bindings
+             WHERE approval_id = ?`,
+          )
+          .get(approvalId) as
+          | { server_id: string; config_fingerprint: string; dispatch_state: string; args_hash: string }
+          | undefined
+        if (mcpBinding) {
+          if (mcpBinding.dispatch_state !== 'pending') {
+            throw new DaemonError(
+              'APPROVAL_ALREADY_RESOLVED',
+              `MCP approval "${approvalId}" is already in dispatch state "${mcpBinding.dispatch_state}"`,
+              { statusCode: 409 },
+            )
+          }
+          if (mcpBinding.args_hash !== appRow.args_hash) {
+            throw new DaemonError(
+              'APPROVAL_ARGS_MISMATCH',
+              'MCP approval binding arguments hash mismatch',
+              { statusCode: 409 },
+            )
+          }
+          if (decision === 'approved') {
+            const srvRow = this.dbHandle.sqlite
+              .prepare(
+                `SELECT s.enabled, s.trust_state, s.config_fingerprint, s.scope_kind, a.archived_at
+                 FROM mcp_servers s
+                 LEFT JOIN agents a ON a.id = s.bot_id
+                 WHERE s.id = ?`,
+              )
+              .get(mcpBinding.server_id) as
+              | {
+                  enabled: number
+                  trust_state: string
+                  config_fingerprint: string
+                  scope_kind: string
+                  archived_at: string | null
+                }
+              | undefined
+            const staleReason = !srvRow
+              ? 'mcp_server_missing'
+              : srvRow.enabled !== 1 || srvRow.trust_state !== 'trusted'
+                ? 'mcp_server_untrusted_or_disabled'
+                : srvRow.config_fingerprint !== mcpBinding.config_fingerprint
+                  ? 'mcp_config_changed'
+                  : srvRow.scope_kind === 'bot' && srvRow.archived_at !== null
+                    ? 'bot_archived'
+                    : null
+            if (staleReason) {
+              this.dbHandle.sqlite
+                .prepare(
+                  `UPDATE approvals SET status = 'revoked', resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
+                )
+                .run(now, JSON.stringify({ reason: staleReason }), approvalId)
+              this.dbHandle.sqlite
+                .prepare(
+                  `UPDATE mcp_approval_bindings SET dispatch_state = 'cancelled', updated_at = ? WHERE approval_id = ?`,
+                )
+                .run(now, approvalId)
+              this.eventStore.appendEvent(runId, {
+                eventKey: `approval.revoked:${approvalId}`,
+                type: 'approval.revoked',
+                payload: { approvalId, reason: staleReason },
+                timestamp: now,
+              })
+              return { outcome: 'revoked_generation' as const, isCodex: false, argsHash: '' }
+            }
+          }
         }
         if (
           runRow.runtime_id === 'codex' &&
@@ -1423,6 +1865,15 @@ export class RunOrchestrator {
           `UPDATE approvals SET status = ?, resolved_at = ?, decision_meta_json = ? WHERE id = ?`,
         )
         .run(decision, now, JSON.stringify({ decision }), approvalId)
+      if (decision === 'denied') {
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE mcp_approval_bindings
+             SET dispatch_state = 'cancelled', updated_at = ?
+             WHERE approval_id = ? AND dispatch_state = 'pending'`,
+          )
+          .run(now, approvalId)
+      }
       this.eventStore.appendEvent(runId, {
         eventKey: `approval.resolved:${approvalId}`,
         type: 'approval.resolved',
@@ -1497,7 +1948,7 @@ export class RunOrchestrator {
 
       this.revokeApprovalsInTx(params.runId, `run_${params.terminalStatus}`, now)
 
-      const isMockMeta = row.runtime_id !== 'codex'
+      const isMockMeta = row.runtime_id !== 'codex' && !UNIFIED_PROVIDER_RUNTIMES.has(row.runtime_id)
       const contentJson = serializeMessageContent(params.accumulatedText, {
         isMock: isMockMeta,
         runtimeId: row.runtime_id,
@@ -1531,6 +1982,7 @@ export class RunOrchestrator {
         timestamp: now,
       })
     })
+    this.onRunTerminated?.(params.runId, `run_${params.terminalStatus}`)
   }
 
   private flushAssistantBuffer(assistantMessageId: string, text: string): void {
@@ -1604,11 +2056,77 @@ export class RunOrchestrator {
       await sleepAbortable(plan.initialPauseMs, signal)
       if (finalizeIfCancelled()) return
 
+    const sessionOwner = this.dbHandle.sqlite
+        .prepare('SELECT agent_id FROM sessions WHERE id = ?')
+        .get(sessionId) as { agent_id: string } | undefined
+      const combinedContext = sessionOwner
+        ? await this.prepareCombinedContextSafely({
+            sessionId,
+            agentId: sessionOwner.agent_id,
+            runtimeId: 'mock',
+            queryText: prompt,
+            isMock: true,
+          })
+        : null
+
+      if (finalizeIfCancelled()) return
+
+      const preparedMemory = combinedContext?.memory ?? {
+        status: 'disabled' as const,
+        mechanism: 'none' as const,
+        envelopeJson: null,
+        selectedCount: 0,
+        totalBytes: 0,
+        truncated: false,
+      }
+      const preparedKnowledge = combinedContext?.knowledge ?? {
+        status: 'disabled' as const,
+        mechanism: 'none' as const,
+        envelopeJson: null,
+        selectedDocuments: 0,
+        selectedChunks: 0,
+        totalBytes: 0,
+        truncated: false,
+        citations: [],
+      }
+
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
         type: 'run.started',
-        payload: { runtimeId: 'mock', isMock: true, scenario: plan.kind },
+        payload: {
+          runtimeId: 'mock',
+          isMock: true,
+          scenario: plan.kind,
+          memoryContext: {
+            status: preparedMemory.status,
+            mechanism: preparedMemory.mechanism,
+            count: preparedMemory.selectedCount,
+            totalBytes: preparedMemory.totalBytes,
+            truncated: preparedMemory.truncated,
+          },
+          knowledgeContext: {
+            status: preparedKnowledge.status,
+            mechanism: preparedKnowledge.mechanism,
+            documents: preparedKnowledge.selectedDocuments,
+            chunks: preparedKnowledge.selectedChunks,
+            totalBytes: preparedKnowledge.totalBytes,
+            truncated: preparedKnowledge.truncated,
+            attachedSources: combinedContext?.attachedSources ?? [],
+          },
+          combinedContextBytes: combinedContext?.totalBytes ?? 0,
+        },
       })
+
+      if (preparedMemory.status === 'attached' && preparedMemory.envelopeJson) {
+        plan.chunks.push(
+          `\n\n[Memory Context Attached: ${preparedMemory.selectedCount} item(s), ${preparedMemory.totalBytes} bytes]`,
+        )
+      }
+      if (preparedKnowledge.status === 'attached' && preparedKnowledge.envelopeJson) {
+        plan.chunks.push(
+          `\n\n[Knowledge Context Attached: ${preparedKnowledge.selectedDocuments} doc(s), ${preparedKnowledge.selectedChunks} chunk(s), ${preparedKnowledge.totalBytes} bytes]`,
+        )
+      }
 
       if (plan.emitTool) {
         this.eventStore.appendEvent(runId, {
@@ -1681,6 +2199,247 @@ export class RunOrchestrator {
         return
       }
 
+      if (plan.mcpTool) {
+        maybeFlush(true)
+        if (!this.mcpService) {
+          throw new DaemonError('MCP_UNAVAILABLE', 'MCP service is not configured in daemon', { statusCode: 503 })
+        }
+        const runMeta = this.dbHandle.sqlite
+          .prepare('SELECT agent_id, permission_mode FROM runs WHERE id = ?')
+          .get(runId) as { agent_id: string; permission_mode: string } | undefined
+        const agentId = runMeta?.agent_id ?? 'chief'
+        const permissionMode = (runMeta?.permission_mode ?? 'ask-approval') as PermissionMode
+
+        const prepared = await this.mcpService.prepareToolCallForRun({
+          serverId: plan.mcpTool.serverId,
+          toolName: plan.mcpTool.toolName,
+          botId: agentId,
+          workspacePath,
+          permissionMode,
+          signal,
+        })
+
+        const argsJson = JSON.stringify(plan.mcpTool.args)
+        const argsHash = createHash('sha256').update(argsJson).digest('hex')
+        const mcpApprovalId = `mcp_app_${randomUUID()}`
+        const nowApp = new Date().toISOString()
+        const expiresAt = new Date(Date.now() + 120_000).toISOString()
+        const approvalSpec: PendingApprovalRecord = {
+          approvalId: mcpApprovalId,
+          title: `Approve MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+          command: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName} ${argsJson}`,
+          risk: 'high',
+          actionType: 'mcp.toolCall',
+          argsHash,
+          permissionMode,
+          expiresAt,
+          isMock: false,
+          status: 'pending',
+        }
+        const decisionPromise = new Promise<'approved' | 'denied' | 'cancelled'>((resolve) => {
+          control.pendingApproval = { spec: approvalSpec, resolve }
+        })
+
+        this.dbHandle.transaction(() => {
+          this.dbHandle.sqlite
+            .prepare(
+              `INSERT INTO approvals (
+                 id, run_id, session_id, agent_id, runtime_generation, account_id,
+                 thread_id, turn_id, provider_request_id, action_type, action_summary,
+                 args_json, args_hash, permission_mode, status, decision_meta_json,
+                 created_at, expires_at, resolved_at
+               ) VALUES (?, ?, ?, ?, ?, 'local', NULL, NULL, ?, 'mcp.toolCall', ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)`,
+            )
+            .run(
+              mcpApprovalId,
+              runId,
+              sessionId,
+              agentId,
+              prepared.connectionGeneration,
+              mcpApprovalId,
+              approvalSpec.command,
+              argsJson,
+              argsHash,
+              permissionMode,
+              nowApp,
+              expiresAt,
+            )
+
+          this.dbHandle.sqlite
+            .prepare(
+              `INSERT INTO mcp_approval_bindings (
+                 approval_id, server_id, config_fingerprint, trusted_binary_digest,
+                 connection_generation, capability_key, definition_hash, tool_name,
+                 args_hash, dispatch_state, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            )
+            .run(
+              mcpApprovalId,
+              plan.mcpTool!.serverId,
+              prepared.configFingerprint,
+              prepared.server.trustedBinaryDigest,
+              prepared.connectionGeneration,
+              `${plan.mcpTool!.serverId}::${plan.mcpTool!.toolName}`,
+              prepared.definitionHash,
+              plan.mcpTool!.toolName,
+              argsHash,
+              nowApp,
+              nowApp,
+            )
+        })
+
+        this.transitionRun(runId, 'awaiting_approval', {
+          eventKey: `approval.requested:${mcpApprovalId}`,
+          type: 'approval.requested',
+          payload: {
+            approvalId: mcpApprovalId,
+            title: approvalSpec.title,
+            command: approvalSpec.command,
+            risk: approvalSpec.risk,
+            actionType: 'mcp.toolCall',
+            argsHash,
+            permissionMode,
+            expiresAt,
+            serverId: plan.mcpTool.serverId,
+            toolName: plan.mcpTool.toolName,
+            definitionHash: prepared.definitionHash,
+          },
+        })
+
+        const decision = await decisionPromise
+        if (finalizeIfCancelled() || decision === 'cancelled') {
+          return
+        }
+
+        if (decision === 'denied') {
+          this.transitionRun(runId, 'cancelling', {
+            eventKey: `run.cancelling:mcp_approval_denied:${mcpApprovalId}`,
+            type: 'run.cancelling',
+            payload: { reason: 'approval_denied', approvalId: mcpApprovalId },
+          })
+          accumulatedText += `\n\n[MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName} denied by user]`
+          this.finalizeRun({
+            runId,
+            sessionId,
+            assistantMessageId,
+            terminalStatus: 'cancelled',
+            messageStatus: 'cancelled',
+            accumulatedText,
+            eventKey: 'run.cancelled:mcp_approval_denied',
+            eventType: 'run.cancelled',
+            eventPayload: { reason: 'approval_denied', approvalId: mcpApprovalId },
+          })
+          return
+        }
+
+        const claimTime = new Date().toISOString()
+        const claimed = this.dbHandle.transaction(() => {
+          const appCheck = this.dbHandle.sqlite
+            .prepare(`SELECT status, args_hash FROM approvals WHERE id = ?`)
+            .get(mcpApprovalId) as { status: string; args_hash: string } | undefined
+          if (!appCheck || appCheck.status !== 'approved' || appCheck.args_hash !== argsHash) {
+            return false
+          }
+          const res = this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = 'dispatched', updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'pending' AND args_hash = ?`,
+            )
+            .run(claimTime, mcpApprovalId, argsHash)
+          return Number(res.changes) === 1
+        })
+
+        if (!claimed) {
+          throw new DaemonError(
+            'APPROVAL_ALREADY_CONSUMED',
+            'MCP approval was already consumed or invalidated before dispatch',
+            { statusCode: 409 },
+          )
+        }
+
+        this.eventStore.appendEvent(runId, {
+          eventKey: `tool.started:${mcpApprovalId}`,
+          type: 'tool.started',
+          payload: {
+            toolCallId: mcpApprovalId,
+            toolName: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+            summary: `Executing MCP tool ${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+          },
+        })
+
+        try {
+          const frozenArgs = JSON.parse(argsJson) as Record<string, unknown>
+          const toolResult = await this.mcpService.invokeApprovedTool({
+            serverId: plan.mcpTool.serverId,
+            toolName: plan.mcpTool.toolName,
+            args: frozenArgs,
+            botId: agentId,
+            workspacePath,
+            permissionMode,
+            expectedConfigFingerprint: prepared.configFingerprint,
+            expectedDefinitionHash: prepared.definitionHash,
+            expectedConnectionGeneration: prepared.connectionGeneration,
+            signal,
+          })
+
+          const completedAt = new Date().toISOString()
+          const resultText = toolResult.content
+            .map((part) => (part.type === 'text' ? part.text ?? '' : `[${part.type}]`))
+            .filter((v) => v.length > 0)
+            .join('\n')
+          const summary = redactSecrets(resultText || (toolResult.isToolError ? 'Tool returned error' : 'Tool completed')).slice(0, 1000)
+
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = ?, updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'dispatched'`,
+            )
+            .run(toolResult.isToolError ? 'failed' : 'completed', completedAt, mcpApprovalId)
+
+          const delta = `MCP tool \`${plan.mcpTool.serverId}/${plan.mcpTool.toolName}\` ${toolResult.isToolError ? 'returned error' : 'result'}:\n${summary}`
+          accumulatedText += delta
+          pendingChunks += 1
+          chunkIndex += 1
+          this.eventStore.appendEvent(runId, {
+            eventKey: `message.delta:${chunkIndex}`,
+            type: 'message.delta',
+            payload: { delta },
+          })
+          this.eventStore.appendEvent(runId, {
+            eventKey: `tool.completed:${mcpApprovalId}`,
+            type: 'tool.completed',
+            payload: {
+              toolCallId: mcpApprovalId,
+              toolName: `${plan.mcpTool.serverId}/${plan.mcpTool.toolName}`,
+              summary,
+              isError: toolResult.isToolError,
+            },
+          })
+        } catch (invokeErr) {
+          const completedAt = new Date().toISOString()
+          const errCode = invokeErr instanceof DaemonError ? invokeErr.code : 'MCP_DISPATCH_UNCERTAIN'
+          const isPreDispatch =
+            errCode === 'MCP_STALE_APPROVAL' ||
+            errCode === 'MCP_UNTRUSTED' ||
+            errCode === 'MCP_FORBIDDEN' ||
+            errCode === 'MCP_DISABLED' ||
+            errCode === 'VALIDATION_ERROR' ||
+            errCode === 'MCP_NOT_FOUND'
+          const nextState = isPreDispatch ? 'failed' : 'uncertain'
+          const _safeMsg = redactSecrets(invokeErr instanceof Error ? invokeErr.message : String(invokeErr))
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE mcp_approval_bindings
+               SET dispatch_state = ?, updated_at = ?
+               WHERE approval_id = ? AND dispatch_state = 'dispatched'`,
+            )
+            .run(nextState, completedAt, mcpApprovalId)
+          throw invokeErr
+        }
+      }
+
       if (plan.approval) {
         maybeFlush(true)
         const mockApprovalId = `${plan.approval.approvalId}_${runId}`
@@ -1740,7 +2499,7 @@ export class RunOrchestrator {
         })
 
         const decision = await decisionPromise
-        if (decision === 'cancelled' || finalizeIfCancelled()) {
+        if (finalizeIfCancelled() || decision === 'cancelled') {
           return
         }
 
@@ -1933,6 +2692,48 @@ export class RunOrchestrator {
         )
       }
 
+      if (this.onBeforeDispatchInRun) {
+        await this.onBeforeDispatchInRun()
+      }
+      const dispatchSession = this.dbHandle.sqlite
+        .prepare('SELECT id, archived_at FROM sessions WHERE id = ?')
+        .get(sessionId) as { id: string; archived_at: string | null } | undefined
+      if (!dispatchSession || dispatchSession.archived_at !== null) {
+        throw new DaemonError('SESSION_ARCHIVED', 'Session was archived before dispatch.', {
+          statusCode: 409,
+        })
+      }
+      const dispatchBot = this.dbHandle.sqlite
+        .prepare(
+          `SELECT runtime_id, model_id, effort, permission_mode, archived_at FROM agents WHERE id = ?`,
+        )
+        .get(agentId) as
+        | {
+            runtime_id: string
+            model_id: string
+            effort: string
+            permission_mode: string
+            archived_at: string | null
+          }
+        | undefined
+      if (!dispatchBot || dispatchBot.archived_at !== null) {
+        throw new DaemonError('BOT_NOT_FOUND', 'Bot was archived before dispatch.', {
+          statusCode: 404,
+        })
+      }
+      if (
+        dispatchBot.runtime_id !== 'codex' ||
+        dispatchBot.model_id !== modelId ||
+        dispatchBot.effort !== effort ||
+        dispatchBot.permission_mode !== permission
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot configuration changed before Codex dispatch; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
       const sessionConfig: SessionConfig = {
         agentId,
         accountId: accountKey,
@@ -1982,6 +2783,21 @@ export class RunOrchestrator {
         }
       }
 
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
       this.transitionRun(runId, 'running', {
         eventKey: 'run.started',
         type: 'run.started',
@@ -1990,6 +2806,7 @@ export class RunOrchestrator {
           threadId: providerSession.externalId,
           resumed: Boolean(preflight.externalSessionId),
           isMock: false,
+          contextTiming: 'deferred_to_dispatch',
         },
       })
 
@@ -1997,6 +2814,49 @@ export class RunOrchestrator {
         runId,
         session: providerSession,
         text: prompt,
+        prepareReferenceContext: async () => {
+          if (signal.aborted || this.stopping) {
+            throw new DaemonError('RUN_CANCELLED', 'Run cancelled before turn dispatch', {
+              statusCode: 409,
+            })
+          }
+          const latestCombined = await this.prepareCombinedContextSafely({
+            sessionId,
+            agentId,
+            runtimeId: 'codex',
+            queryText: prompt,
+            isMock: false,
+          })
+          if (signal.aborted || this.stopping) {
+            throw new DaemonError('RUN_CANCELLED', 'Run cancelled during context preparation', {
+              statusCode: 409,
+            })
+          }
+          this.eventStore.appendEvent(runId, {
+            eventKey: 'run.context_prepared',
+            type: 'run.context_prepared',
+            payload: {
+              memoryContext: {
+                status: latestCombined.memory.status,
+                mechanism: latestCombined.memory.mechanism,
+                count: latestCombined.memory.selectedCount,
+                totalBytes: latestCombined.memory.totalBytes,
+                truncated: latestCombined.memory.truncated,
+              },
+              knowledgeContext: {
+                status: latestCombined.knowledge.status,
+                mechanism: latestCombined.knowledge.mechanism,
+                documents: latestCombined.knowledge.selectedDocuments,
+                chunks: latestCombined.knowledge.selectedChunks,
+                totalBytes: latestCombined.knowledge.totalBytes,
+                truncated: latestCombined.knowledge.truncated,
+                attachedSources: latestCombined.attachedSources,
+              },
+              combinedContextBytes: latestCombined.totalBytes,
+            },
+          })
+          return latestCombined.envelopeJson ?? undefined
+        },
       })) {
         if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
           throw new DaemonError(
@@ -2244,6 +3104,517 @@ export class RunOrchestrator {
           retryable: true,
         },
         eventKey: 'run.failed:codex_error',
+        eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+        eventPayload: { code: errCode, message: safeMsg },
+      })
+    } finally {
+      if (this.runtimeRegistry && !this.stopping) {
+        void this.runtimeRegistry.getSnapshot(true).catch(() => undefined)
+      }
+    }
+  }
+
+  private buildBoundedCanonicalHistory(
+    sessionId: string,
+    currentRunId: string,
+  ): ConversationHistoryTurn[] {
+    const rows = this.dbHandle.sqlite
+      .prepare(
+        `SELECT role, content_json FROM messages
+         WHERE session_id = ? AND status = 'complete' AND (run_id IS NULL OR run_id != ?)
+         ORDER BY seq_order DESC
+         LIMIT 40`,
+      )
+      .all(sessionId, currentRunId) as Array<{ role: string; content_json: string }>
+
+    if (rows.length === 0) return []
+
+    const maxMessages = 20
+    const maxBytes = 16_000
+    const selectedReversed: ConversationHistoryTurn[] = []
+    let totalBytes = 0
+
+    for (const row of rows.slice(0, maxMessages)) {
+      if (row.role !== 'user' && row.role !== 'assistant') continue
+      let text = ''
+      try {
+        const parsed = JSON.parse(row.content_json) as { text?: unknown }
+        if (typeof parsed.text === 'string') text = redactSecrets(parsed.text).trim()
+      } catch {
+        continue
+      }
+      if (!text) continue
+      const bytes = Buffer.byteLength(text, 'utf8')
+      if (totalBytes + bytes > maxBytes) break
+      totalBytes += bytes
+      selectedReversed.push({ role: row.role, content: text })
+    }
+
+    return selectedReversed.reverse()
+  }
+
+  private async executeUnifiedProviderRun(params: {
+    runId: string
+    sessionId: string
+    agentId: string
+    assistantMessageId: string
+    prompt: string
+    modelId: string
+    effort: string
+    permission: PermissionMode
+    preflight: {
+      runtimeId: string
+      adapter: AgentRuntime
+      generation: number
+      accountKey: string
+      canonicalWorkspace: string
+      effectiveInstructions: string
+      externalSessionId: string | null
+    }
+    control: ActiveRunControl
+  }): Promise<void> {
+    const {
+      runId,
+      sessionId,
+      agentId,
+      assistantMessageId,
+      prompt,
+      modelId,
+      effort,
+      permission,
+      preflight,
+      control,
+    } = params
+    const { runtimeId, adapter, generation, accountKey, canonicalWorkspace, effectiveInstructions } =
+      preflight
+    const { signal } = control.abortController
+
+    let accumulatedText = ''
+    let pendingChunks = 0
+    let lastFlushAt = Date.now()
+    const flushBuffer = (force: boolean) => {
+      if (pendingChunks === 0 && !force) return
+      const nowMs = Date.now()
+      if (force || pendingChunks >= 8 || nowMs - lastFlushAt >= 60) {
+        if (accumulatedText.length > 0 || force) {
+          this.dbHandle.sqlite
+            .prepare(
+              `UPDATE messages SET content_json = ?, updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              serializeMessageContent(accumulatedText, { isMock: false, runtimeId }),
+              new Date().toISOString(),
+              assistantMessageId,
+            )
+          pendingChunks = 0
+          lastFlushAt = nowMs
+        }
+      }
+    }
+
+    try {
+      this.transitionRun(runId, 'starting', {
+        eventKey: 'run.starting',
+        type: 'run.starting',
+        payload: {
+          runtimeId,
+          isMock: false,
+        },
+      })
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
+      if (this.runtimeRegistry && this.runtimeRegistry.getGeneration() !== generation) {
+        throw new DaemonError(
+          'RUNTIME_GENERATION_CHANGED',
+          `Runtime "${runtimeId}" generation changed before session setup; please retry.`,
+          { statusCode: 409, retryable: true },
+        )
+      }
+
+      if (this.onBeforeDispatchInRun) {
+        await this.onBeforeDispatchInRun()
+      }
+
+      const dispatchSession = this.dbHandle.sqlite
+        .prepare('SELECT id, agent_id, archived_at FROM sessions WHERE id = ?')
+        .get(sessionId) as { id: string; agent_id: string; archived_at: string | null } | undefined
+      if (!dispatchSession || dispatchSession.archived_at !== null) {
+        throw new DaemonError('SESSION_ARCHIVED', 'Session was archived before dispatch.', {
+          statusCode: 409,
+        })
+      }
+      const dispatchBot = this.dbHandle.sqlite
+        .prepare(
+          `SELECT runtime_id, model_id, effort, permission_mode, archived_at
+           FROM agents WHERE id = ?`,
+        )
+        .get(agentId) as
+        | {
+            runtime_id: string
+            model_id: string
+            effort: string
+            permission_mode: string
+            archived_at: string | null
+          }
+        | undefined
+      if (!dispatchBot || dispatchBot.archived_at !== null) {
+        throw new DaemonError('BOT_NOT_FOUND', 'Bot was archived before dispatch.', {
+          statusCode: 404,
+        })
+      }
+      if (
+        dispatchBot.runtime_id !== runtimeId ||
+        dispatchBot.model_id !== modelId ||
+        dispatchBot.effort !== effort ||
+        dispatchBot.permission_mode !== permission
+      ) {
+        throw new DaemonError(
+          'EXECUTION_CONFIG_CHANGED',
+          'Bot configuration changed before provider dispatch; please retry.',
+          { statusCode: 409, retryable: true },
+        )
+      }
+
+      if (!this.getProviderPolicyInput) {
+        throw new DaemonError(
+          'LIVE_INFERENCE_DISABLED',
+          `Runtime "${runtimeId}" execution bridge is not configured.`,
+          { statusCode: 501 },
+        )
+      }
+      const { policyInput: freshPolicyInput, accountKey: freshAccountKey } =
+        await this.getProviderPolicyInput(runtimeId, permission, canonicalWorkspace)
+      const freshDecision = this.policyBroker.authorize(freshPolicyInput)
+      if (!freshDecision.allowed) {
+        throw new DaemonError('PERMISSION_DENIED', freshDecision.reason, { statusCode: 403 })
+      }
+      if (freshAccountKey !== accountKey) {
+        throw new DaemonError(
+          'ACCOUNT_MISMATCH',
+          'Account, credential, or endpoint changed before dispatch; start a New conversation.',
+          { statusCode: 409 },
+        )
+      }
+
+      const sessionConfig: SessionConfig = {
+        agentId,
+        accountId: accountKey,
+        modelId,
+        effort,
+        permission,
+        workspace: canonicalWorkspace,
+        instructions: effectiveInstructions,
+      }
+
+      const maybeResumable = adapter as AgentRuntime & {
+        resumeSession?: (externalId: string, config: SessionConfig) => Promise<Session>
+      }
+
+      let providerSession: Session
+      if (preflight.externalSessionId) {
+        if (this.activeUnifiedProcessSessions.has(sessionId)) {
+          if (typeof maybeResumable.resumeSession === 'function') {
+            providerSession = await maybeResumable.resumeSession(
+              preflight.externalSessionId,
+              sessionConfig,
+            )
+          } else {
+            providerSession = {
+              id: sessionId,
+              externalId: preflight.externalSessionId,
+              runtimeId,
+            }
+          }
+        } else {
+          // Stateless HTTP / in-memory-session provider after daemon restart:
+          // recreate/reseed adapter session with structured canonical history
+          // (preserving user/assistant role separation, never elevating into system instructions).
+          const reconstructedHistory = this.buildBoundedCanonicalHistory(sessionId, runId)
+          const seededConfig: SessionConfig =
+            reconstructedHistory.length > 0
+              ? {
+                  ...sessionConfig,
+                  history: reconstructedHistory,
+                }
+              : sessionConfig
+          if (typeof maybeResumable.resumeSession === 'function') {
+            providerSession = await maybeResumable.resumeSession(
+              preflight.externalSessionId,
+              seededConfig,
+            )
+          } else {
+            providerSession = await adapter.createSession(seededConfig)
+            this.dbHandle.sqlite
+              .prepare(
+                `UPDATE sessions SET external_session_id = ?, account_id = ?, updated_at = ? WHERE id = ?`,
+              )
+              .run(providerSession.externalId, accountKey, new Date().toISOString(), sessionId)
+          }
+          this.activeUnifiedProcessSessions.add(sessionId)
+        }
+      } else {
+        providerSession = await adapter.createSession(sessionConfig)
+        this.dbHandle.sqlite
+          .prepare(
+            `UPDATE sessions SET external_session_id = ?, account_id = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(providerSession.externalId, accountKey, new Date().toISOString(), sessionId)
+        this.activeUnifiedProcessSessions.add(sessionId)
+      }
+
+      if (signal.aborted || this.stopping) {
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'cancelled',
+          messageStatus: this.stopping ? 'interrupted' : 'cancelled',
+          accumulatedText: '[Run cancelled before turn start]',
+          eventKey: this.stopping ? 'run.interrupted:shutdown' : 'run.cancelled:pre_turn',
+          eventType: this.stopping ? 'run.interrupted' : 'run.cancelled',
+          eventPayload: { reason: this.stopping ? 'daemon_stopping' : 'cancelled_before_turn' },
+        })
+        return
+      }
+
+      this.transitionRun(runId, 'running', {
+        eventKey: 'run.started',
+        type: 'run.started',
+        payload: {
+          runtimeId,
+          externalSessionId: providerSession.externalId,
+          resumed: Boolean(preflight.externalSessionId),
+          isMock: false,
+          contextTiming: 'deferred_to_dispatch',
+        },
+      })
+
+      let sawTerminal = false
+
+      const buildPrepareReferenceContext = () => async () => {
+        if (signal.aborted || this.stopping) {
+          throw new DaemonError('RUN_CANCELLED', 'Run cancelled before turn dispatch', {
+            statusCode: 409,
+          })
+        }
+        const latestCombined = await this.prepareCombinedContextSafely({
+          sessionId,
+          agentId,
+          runtimeId,
+          queryText: prompt,
+          isMock: false,
+        })
+        if (signal.aborted || this.stopping) {
+          throw new DaemonError('RUN_CANCELLED', 'Run cancelled during context preparation', {
+            statusCode: 409,
+          })
+        }
+        this.eventStore.appendEvent(runId, {
+          eventKey: 'run.context_prepared',
+          type: 'run.context_prepared',
+          payload: {
+            memoryContext: {
+              status: latestCombined.memory.status,
+              mechanism: latestCombined.memory.mechanism,
+              count: latestCombined.memory.selectedCount,
+              totalBytes: latestCombined.memory.totalBytes,
+              truncated: latestCombined.memory.truncated,
+            },
+            knowledgeContext: {
+              status: latestCombined.knowledge.status,
+              mechanism: latestCombined.knowledge.mechanism,
+              documents: latestCombined.knowledge.selectedDocuments,
+              chunks: latestCombined.knowledge.selectedChunks,
+              totalBytes: latestCombined.knowledge.totalBytes,
+              truncated: latestCombined.knowledge.truncated,
+              attachedSources: latestCombined.attachedSources,
+            },
+            combinedContextBytes: latestCombined.totalBytes,
+          },
+        })
+        return latestCombined.envelopeJson || undefined
+      }
+
+      const consumeAdapterStream = async (activeSession: Session) => {
+        for await (const ev of adapter.run({
+          runId,
+          session: activeSession,
+          text: prompt,
+          prepareReferenceContext: buildPrepareReferenceContext(),
+        })) {
+          if (
+            this.runtimeRegistry &&
+            this.runtimeRegistry.getGeneration() !== generation
+          ) {
+            throw new DaemonError(
+              'RUNTIME_GENERATION_CHANGED',
+              `Runtime "${runtimeId}" generation changed during execution`,
+              { statusCode: 409, retryable: true },
+            )
+          }
+
+          if (ev.type === 'message.delta') {
+            accumulatedText += ev.text
+            pendingChunks += 1
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'message.delta',
+              payload: { delta: ev.text },
+              timestamp: ev.timestamp,
+            })
+            flushBuffer(false)
+          } else if (ev.type === 'tool.started') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'tool.started',
+              payload: {
+                toolCallId: ev.callId,
+                toolName: ev.tool,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'tool.completed') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'tool.completed',
+              payload: {
+                toolCallId: ev.callId,
+                toolName: ev.tool,
+                summary: ev.summary,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'usage.updated') {
+            this.eventStore.appendEvent(runId, {
+              eventKey: `${runtimeId}.evt:${ev.seq}`,
+              type: 'usage.updated',
+              payload: {
+                inputTokens: ev.usage.inputTokens ?? null,
+                outputTokens: ev.usage.outputTokens ?? null,
+                isMock: false,
+              },
+              timestamp: ev.timestamp,
+            })
+          } else if (ev.type === 'run.completed') {
+            sawTerminal = true
+            this.clearQuarantineForSession(sessionId)
+            flushBuffer(true)
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'completed',
+              messageStatus: 'complete',
+              accumulatedText,
+              eventKey: 'run.completed',
+              eventType: 'run.completed',
+              eventPayload: { assistantMessageId, isMock: false },
+            })
+            break
+          } else if (ev.type === 'run.cancelled') {
+            sawTerminal = true
+            this.clearQuarantineForSession(sessionId)
+            flushBuffer(true)
+            const cancelledText =
+              accumulatedText.trim().length > 0
+                ? `${accumulatedText}\n\n[Cancelled]`
+                : '[Run cancelled]'
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'cancelled',
+              messageStatus: 'cancelled',
+              accumulatedText: cancelledText,
+              eventKey: 'run.cancelled',
+              eventType: 'run.cancelled',
+              eventPayload: { reason: 'user_cancelled' },
+            })
+            break
+          } else if (ev.type === 'run.failed') {
+            sawTerminal = true
+            if (/UNKNOWN_TERMINATION|DISCONNECTED|UNCERTAIN/i.test(ev.code)) {
+              this.addQuarantine(sessionId)
+            }
+            flushBuffer(true)
+            const safeMsg = redactSecrets(ev.message)
+            this.finalizeRun({
+              runId,
+              sessionId,
+              assistantMessageId,
+              terminalStatus: 'failed',
+              messageStatus: 'failed',
+              accumulatedText,
+              error: {
+                code: ev.code,
+                message: safeMsg,
+                retryable: true,
+              },
+              eventKey: 'run.failed',
+              eventType: 'run.failed',
+              eventPayload: { code: ev.code, message: safeMsg },
+            })
+            break
+          }
+        }
+      }
+
+      await consumeAdapterStream(providerSession)
+
+      if (!sawTerminal) {
+        flushBuffer(true)
+        this.addQuarantine(sessionId)
+        this.finalizeRun({
+          runId,
+          sessionId,
+          assistantMessageId,
+          terminalStatus: this.stopping ? 'interrupted' : 'failed',
+          messageStatus: this.stopping ? 'interrupted' : 'failed',
+          accumulatedText,
+          error: {
+            code: 'RUNTIME_DISCONNECTED',
+            message: `Runtime "${runtimeId}" stream ended before reporting a terminal event.`,
+            retryable: true,
+          },
+          eventKey: 'run.failed:stream_eof',
+          eventType: this.stopping ? 'run.interrupted' : 'run.failed',
+          eventPayload: { reason: 'stream_ended_without_terminal_event' },
+        })
+      }
+    } catch (err) {
+      flushBuffer(true)
+      const safeMsg = redactSecrets(err instanceof Error ? err.message : String(err))
+      const errCode = err instanceof DaemonError ? err.code : 'PROVIDER_EXECUTION_ERROR'
+      if (signal.aborted && !this.stopping) {
+        this.addQuarantine(sessionId)
+      }
+      this.finalizeRun({
+        runId,
+        sessionId,
+        assistantMessageId,
+        terminalStatus: this.stopping ? 'interrupted' : 'failed',
+        messageStatus: this.stopping ? 'interrupted' : 'failed',
+        accumulatedText,
+        error: {
+          code: errCode,
+          message: safeMsg,
+          retryable: true,
+        },
+        eventKey: 'run.failed:provider_error',
         eventType: this.stopping ? 'run.interrupted' : 'run.failed',
         eventPayload: { code: errCode, message: safeMsg },
       })

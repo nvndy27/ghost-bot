@@ -6,10 +6,17 @@ import type {
   DaemonHealthResponse,
   ProviderSummary,
   RuntimeSnapshot,
+  TeamRecordDto,
 } from '@ghost-bot/shared-types/ipc'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
+import { McpSettingsSection } from './McpSettingsSection.tsx'
+import { LocalSkillsSettingsSection } from './LocalSkillsSettingsSection.tsx'
+import { MemorySettingsSection } from './MemorySettingsSection.tsx'
+import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
+import { ComputerUseSettingsSection } from './ComputerUseSettingsSection.tsx'
 
 const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General' },
@@ -19,6 +26,7 @@ const SETTINGS_SECTIONS = [
   { id: 'usage', label: 'Usage' },
   { id: 'personalization', label: 'Personalization' },
   { id: 'memory', label: 'Memory' },
+  { id: 'knowledge', label: 'Knowledge' },
   { id: 'tools', label: 'Tools & MCP' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'computer-use', label: 'Computer Use' },
@@ -46,9 +54,16 @@ export interface SettingsModalProps {
   runtimeSnapshot: RuntimeSnapshot | null
   daemonHealth: DaemonHealthResponse | null
   bots: WorkspaceBot[]
+  teams?: TeamRecordDto[]
+  activeBotId?: string | null
+  initialSection?: SectionId
   onUpdateSettings: (patch: AppSettingsPatch) => Promise<void>
   onResetSettings: () => Promise<void>
   onRefreshRuntime: () => Promise<void>
+  onRefreshWorkspaceRoutines?: () => void
+  onNavigateToBot?: (botId: string) => void
+  onNavigateToTeam?: (teamId: string) => void
+  onOpenComputerUseLiveViewer?: (sessionId?: string) => void
   onClose: () => void
 }
 
@@ -59,22 +74,129 @@ export function SettingsModal({
   runtimeSnapshot,
   daemonHealth,
   bots,
+  teams = [],
+  activeBotId,
+  initialSection,
   onUpdateSettings,
   onResetSettings,
   onRefreshRuntime,
+  onRefreshWorkspaceRoutines,
+  onNavigateToBot,
+  onNavigateToTeam,
+  onOpenComputerUseLiveViewer,
   onClose,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<SectionId>('appearance')
+  const [activeSection, setActiveSection] = useState<SectionId>(initialSection ?? 'appearance')
   const [refreshing, setRefreshing] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [openClawStatus, setOpenClawStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OpenClawStatusDto | null
+  >(null)
+  const [ollamaStatus, setOllamaStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
+  >(null)
+  const [claudeStatus, setClaudeStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
+  >(null)
+  const [claudeApiKeyInput, setClaudeApiKeyInput] = useState('')
+  const [claudeBusy, setClaudeBusy] = useState(false)
+  const [geminiStatus, setGeminiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').GeminiStatusDto | null
+  >(null)
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
+  const [geminiBusy, setGeminiBusy] = useState(false)
+  const [kimiStatus, setKimiStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').KimiStatusDto | null
+  >(null)
+  const [lmStudioStatus, setLmStudioStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').LocalOpenAiCompatStatusDto | null
+  >(null)
+  const [lmStudioUrlInput, setLmStudioUrlInput] = useState('http://127.0.0.1:1234/v1')
+  const [llamaCppStatus, setLlamaCppStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').LocalOpenAiCompatStatusDto | null
+  >(null)
+  const [llamaCppUrlInput, setLlamaCppUrlInput] = useState('http://127.0.0.1:8080/v1')
+  const [openRouterStatus, setOpenRouterStatus] = useState<
+    import('@ghost-bot/shared-types/ipc').OpenRouterStatusDto | null
+  >(null)
+  const [openRouterApiKeyInput, setOpenRouterApiKeyInput] = useState('')
+  const [openRouterBusy, setOpenRouterBusy] = useState(false)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
+    if (initialSection) setActiveSection(initialSection)
     setConfirmReset(false)
     setErrorMsg(null)
-  }, [open])
+    setClaudeApiKeyInput('')
+    setGeminiApiKeyInput('')
+    if (window.ghostBot?.getOpenClawStatus) {
+      void window.ghostBot
+        .getOpenClawStatus()
+        .then(setOpenClawStatus)
+        .catch((err: unknown) => {
+          setErrorMsg(err instanceof Error ? err.message : 'Failed to load OpenClaw status')
+          setOpenClawStatus(null)
+        })
+    }
+    if (window.ghostBot?.getOllamaStatus) {
+      void window.ghostBot
+        .getOllamaStatus()
+        .then(setOllamaStatus)
+        .catch(() => {
+          setOllamaStatus(null)
+        })
+    }
+    if (window.ghostBot?.getClaudeStatus) {
+      void window.ghostBot
+        .getClaudeStatus()
+        .then(setClaudeStatus)
+        .catch(() => {
+          setClaudeStatus(null)
+        })
+    }
+    if (window.ghostBot?.getGeminiStatus) {
+      void window.ghostBot
+        .getGeminiStatus()
+        .then(setGeminiStatus)
+        .catch(() => {
+          setGeminiStatus(null)
+        })
+    }
+    if (window.ghostBot?.getKimiStatus) {
+      void window.ghostBot
+        .getKimiStatus()
+        .then(setKimiStatus)
+        .catch(() => {
+          setKimiStatus(null)
+        })
+    }
+    if (window.ghostBot?.getLmStudioStatus) {
+      void window.ghostBot
+        .getLmStudioStatus()
+        .then((s) => {
+          setLmStudioStatus(s)
+          setLmStudioUrlInput(s.baseUrl)
+        })
+        .catch(() => setLmStudioStatus(null))
+    }
+    if (window.ghostBot?.getLlamaCppStatus) {
+      void window.ghostBot
+        .getLlamaCppStatus()
+        .then((s) => {
+          setLlamaCppStatus(s)
+          setLlamaCppUrlInput(s.baseUrl)
+        })
+        .catch(() => setLlamaCppStatus(null))
+    }
+    if (window.ghostBot?.getOpenRouterStatus) {
+      void window.ghostBot
+        .getOpenRouterStatus()
+        .then(setOpenRouterStatus)
+        .catch(() => setOpenRouterStatus(null))
+    }
+  }, [open, initialSection])
 
   useModalDialog(open, modalRef, onClose)
 
@@ -388,6 +510,566 @@ export function SettingsModal({
                     <span className="gb-badge">{p.status}</span>
                   </div>
                 ))}
+
+                {openClawStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="openclaw-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        OpenClaw Gateway {openClawStatus.runtimeVersion ?? '(not detected)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="openclaw-auth-badge">
+                        {openClawStatus.available ? openClawStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{openClawStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>URL: {openClawStatus.gatewayUrl}</span>
+                      <span>Version verified: {openClawStatus.supportedVersion ? 'yes' : 'no'}</span>
+                      <span>Host desktop: {openClawStatus.hostDesktopEnabled ? 'enabled' : 'disabled'}</span>
+                      <span>Models: {openClawStatus.models.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        streaming: {openClawStatus.capabilities.streaming ? 'on' : 'off'}
+                      </span>
+                      <span className="gb-badge">
+                        sandbox: {openClawStatus.capabilities.sandbox ? 'verified' : 'unverified'}
+                      </span>
+                      <span className="gb-badge">
+                        usage: {openClawStatus.capabilities.usage ? 'reported' : 'unavailable'}
+                      </span>
+                    </div>
+                    {openClawStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="openclaw-gated-reason">
+                        Execution gate: {openClawStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {ollamaStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="ollama-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        Ollama Local {ollamaStatus.runtimeVersion ?? '(not detected)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="ollama-auth-badge">
+                        {ollamaStatus.available ? ollamaStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{ollamaStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>URL: {ollamaStatus.baseUrl}</span>
+                      <span>Local-only verified: {ollamaStatus.localOnlyVerified ? 'yes' : 'no'}</span>
+                      <span>Installed models: {ollamaStatus.models.length}</span>
+                      <span>Running: {ollamaStatus.runningModels.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        max concurrent: {ollamaStatus.resourceLimits.maxConcurrentRuns}
+                      </span>
+                      <span className="gb-badge">
+                        max output: {ollamaStatus.resourceLimits.maxOutputTokens} tok
+                      </span>
+                      <span className="gb-badge">
+                        history: {ollamaStatus.resourceLimits.maxHistoryMessages} turns /{' '}
+                        {Math.round(ollamaStatus.resourceLimits.maxHistoryBytes / 1024)} KB
+                      </span>
+                    </div>
+                    {ollamaStatus.diagnostics.map((d, idx) => (
+                      <small key={idx} className="gb-muted">
+                        Diagnostic: {d}
+                      </small>
+                    ))}
+                    {ollamaStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="ollama-gated-reason">
+                        Execution gate: {ollamaStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {claudeStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="claude-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>Anthropic Claude API (API-key billed)</strong>
+                      <span className="gb-badge" data-testid="claude-auth-badge">
+                        {claudeStatus.authStatus}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{claudeStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Endpoint: {claudeStatus.endpoint}</span>
+                      <span>Keyring: {claudeStatus.keyringAvailable ? 'available' : claudeStatus.keyringLocked ? 'locked' : 'unavailable'}</span>
+                      <span>Key: {claudeStatus.maskedKeyHint ?? 'not configured'}</span>
+                      <span>Gen: {claudeStatus.credentialGeneration}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">billing: API-key billed (not Pro/Max)</span>
+                      <span className="gb-badge">tools: disabled (read-only chat)</span>
+                      <span className="gb-badge">claude code cli: disabled</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="password"
+                        data-testid="claude-api-key-input"
+                        value={claudeApiKeyInput}
+                        onChange={(e) => setClaudeApiKeyInput(e.target.value)}
+                        placeholder={
+                          claudeStatus.credentialConfigured
+                            ? 'Replace Anthropic API key (sk-ant-...)'
+                            : 'Enter Anthropic API key (sk-ant-...)'
+                        }
+                        autoComplete="off"
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="claude-save-key-btn"
+                        disabled={claudeBusy || claudeApiKeyInput.trim().length < 8}
+                        onClick={() => {
+                          if (!window.ghostBot?.setClaudeCredential) return
+                          setClaudeBusy(true)
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setClaudeCredential({ apiKey: claudeApiKeyInput.trim(), accountRef: 'default' })
+                            .then((next) => {
+                              setClaudeStatus(next)
+                              setClaudeApiKeyInput('')
+                            })
+                            .catch((err: unknown) => {
+                              setErrorMsg(err instanceof Error ? err.message : 'Failed to save API key')
+                            })
+                            .finally(() => setClaudeBusy(false))
+                        }}
+                      >
+                        {claudeStatus.credentialConfigured ? 'Replace key' : 'Save key'}
+                      </button>
+                      {claudeStatus.credentialConfigured && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="claude-delete-key-btn"
+                            disabled={claudeBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.deleteClaudeCredential) return
+                              setClaudeBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .deleteClaudeCredential()
+                                .then(setClaudeStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to delete API key')
+                                })
+                                .finally(() => setClaudeBusy(false))
+                            }}
+                          >
+                            Delete key
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="claude-toggle-auth-btn"
+                            disabled={claudeBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.setClaudeExecutionAuthorized) return
+                              setClaudeBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .setClaudeExecutionAuthorized({
+                                  authorized: !claudeStatus.executionAuthorized,
+                                })
+                                .then(setClaudeStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
+                                })
+                                .finally(() => setClaudeBusy(false))
+                            }}
+                          >
+                            {claudeStatus.executionAuthorized ? 'Revoke API opt-in' : 'Authorize API-billed chat'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {claudeStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="claude-gated-reason">
+                        Execution gate: {claudeStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {geminiStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="gemini-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>Google Gemini API (API key)</strong>
+                      <span className="gb-badge" data-testid="gemini-auth-badge">
+                        {geminiStatus.authStatus}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{geminiStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Endpoint: {geminiStatus.endpoint}</span>
+                      <span>
+                        Keyring:{' '}
+                        {geminiStatus.keyringAvailable
+                          ? 'available'
+                          : geminiStatus.keyringLocked
+                            ? 'locked'
+                            : 'unavailable'}
+                      </span>
+                      <span>Key: {geminiStatus.maskedKeyHint ?? 'not configured'}</span>
+                      <span>Gen: {geminiStatus.credentialGeneration}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">billing: API key (free-tier eligibility varies; not Google AI sub)</span>
+                      <span className="gb-badge">tools: disabled (read-only chat)</span>
+                      <span className="gb-badge">gemini cli: disabled</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="password"
+                        data-testid="gemini-api-key-input"
+                        value={geminiApiKeyInput}
+                        onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                        placeholder={
+                          geminiStatus.credentialConfigured
+                            ? 'Replace Gemini API key (AIza...)'
+                            : 'Enter Gemini API key (AIza...)'
+                        }
+                        autoComplete="off"
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="gemini-save-key-btn"
+                        disabled={geminiBusy || geminiApiKeyInput.trim().length < 8}
+                        onClick={() => {
+                          if (!window.ghostBot?.setGeminiCredential) return
+                          setGeminiBusy(true)
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setGeminiCredential({ apiKey: geminiApiKeyInput.trim(), accountRef: 'default' })
+                            .then((next) => {
+                              setGeminiStatus(next)
+                              setGeminiApiKeyInput('')
+                            })
+                            .catch((err: unknown) => {
+                              setErrorMsg(err instanceof Error ? err.message : 'Failed to save Gemini API key')
+                            })
+                            .finally(() => setGeminiBusy(false))
+                        }}
+                      >
+                        {geminiStatus.credentialConfigured ? 'Replace key' : 'Save key'}
+                      </button>
+                      {geminiStatus.credentialConfigured && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="gemini-delete-key-btn"
+                            disabled={geminiBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.deleteGeminiCredential) return
+                              setGeminiBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .deleteGeminiCredential()
+                                .then(setGeminiStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to delete Gemini API key')
+                                })
+                                .finally(() => setGeminiBusy(false))
+                            }}
+                          >
+                            Delete key
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="gemini-toggle-auth-btn"
+                            disabled={geminiBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.setGeminiExecutionAuthorized) return
+                              setGeminiBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .setGeminiExecutionAuthorized({
+                                  authorized: !geminiStatus.executionAuthorized,
+                                })
+                                .then(setGeminiStatus)
+                                .catch((err: unknown) => {
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
+                                })
+                                .finally(() => setGeminiBusy(false))
+                            }}
+                          >
+                            {geminiStatus.executionAuthorized ? 'Revoke API opt-in' : 'Authorize Gemini API'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {geminiStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="gemini-gated-reason">
+                        Execution gate: {geminiStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {kimiStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="kimi-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '6px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>
+                        Kimi Code ACP {kimiStatus.cliVersion ?? '(not installed)'}
+                      </strong>
+                      <span className="gb-badge" data-testid="kimi-auth-badge">
+                        {kimiStatus.cliAvailable ? kimiStatus.authStatus : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{kimiStatus.detail}</small>
+                    <small className="gb-muted">{kimiStatus.loginGuidance}</small>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">
+                        ACP v{kimiStatus.protocolVersion ?? '?'}:{' '}
+                        {kimiStatus.acpProtocolSupported ? 'verified' : 'unverified'}
+                      </span>
+                      <span className="gb-badge">client fs/terminal: disabled</span>
+                      <span className="gb-badge">allow_always: rejected</span>
+                    </div>
+                    {kimiStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="kimi-gated-reason">
+                        Execution gate: {kimiStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {lmStudioStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="lmstudio-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>LM Studio (Local OpenAI-compatible)</strong>
+                      <span className="gb-badge" data-testid="lmstudio-auth-badge">
+                        {lmStudioStatus.available ? 'connected' : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{lmStudioStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        data-testid="lmstudio-url-input"
+                        value={lmStudioUrlInput}
+                        onChange={(e) => setLmStudioUrlInput(e.target.value)}
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="lmstudio-save-url-btn"
+                        onClick={() => {
+                          if (!window.ghostBot?.setLmStudioConfig) return
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setLmStudioConfig({ baseUrl: lmStudioUrlInput.trim() })
+                            .then(setLmStudioStatus)
+                            .catch((err: unknown) =>
+                              setErrorMsg(err instanceof Error ? err.message : 'Invalid LM Studio URL'),
+                            )
+                        }}
+                      >
+                        Save endpoint
+                      </button>
+                    </div>
+                    {lmStudioStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="lmstudio-gated-reason">
+                        Execution gate: {lmStudioStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {llamaCppStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="llamacpp-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>llama.cpp Server (Local OpenAI-compatible)</strong>
+                      <span className="gb-badge" data-testid="llamacpp-auth-badge">
+                        {llamaCppStatus.available ? 'connected' : 'unavailable'}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{llamaCppStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        data-testid="llamacpp-url-input"
+                        value={llamaCppUrlInput}
+                        onChange={(e) => setLlamaCppUrlInput(e.target.value)}
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="llamacpp-save-url-btn"
+                        onClick={() => {
+                          if (!window.ghostBot?.setLlamaCppConfig) return
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setLlamaCppConfig({ baseUrl: llamaCppUrlInput.trim() })
+                            .then(setLlamaCppStatus)
+                            .catch((err: unknown) =>
+                              setErrorMsg(err instanceof Error ? err.message : 'Invalid llama.cpp URL'),
+                            )
+                        }}
+                      >
+                        Save endpoint
+                      </button>
+                    </div>
+                    {llamaCppStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="llamacpp-gated-reason">
+                        Execution gate: {llamaCppStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
+
+                {openRouterStatus && (
+                  <div
+                    className="gb-card"
+                    data-testid="openrouter-status-card"
+                    style={{ marginTop: '14px', display: 'grid', gap: '8px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>OpenRouter API (API-key billed)</strong>
+                      <span className="gb-badge" data-testid="openrouter-auth-badge">
+                        {openRouterStatus.authStatus}
+                      </span>
+                    </div>
+                    <small className="gb-muted">{openRouterStatus.detail}</small>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px' }}>
+                      <span>Endpoint: {openRouterStatus.endpoint}</span>
+                      <span>Key: {openRouterStatus.maskedKeyHint ?? 'not configured'}</span>
+                      <span>Gen: {openRouterStatus.credentialGeneration}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '11.5px' }}>
+                      <span className="gb-badge">billing: API-key billed (not ChatGPT/Claude/Gemini sub)</span>
+                      <span className="gb-badge">allow_fallbacks: false</span>
+                      <span className="gb-badge">tools: disabled (read-only chat)</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="password"
+                        data-testid="openrouter-api-key-input"
+                        value={openRouterApiKeyInput}
+                        onChange={(e) => setOpenRouterApiKeyInput(e.target.value)}
+                        placeholder={
+                          openRouterStatus.credentialConfigured
+                            ? 'Replace OpenRouter API key (sk-or-v1-...)'
+                            : 'Enter OpenRouter API key (sk-or-v1-...)'
+                        }
+                        autoComplete="off"
+                        style={{ flex: '1 1 220px' }}
+                      />
+                      <button
+                        type="button"
+                        data-testid="openrouter-save-key-btn"
+                        disabled={openRouterBusy || openRouterApiKeyInput.trim().length < 8}
+                        onClick={() => {
+                          if (!window.ghostBot?.setOpenRouterCredential) return
+                          setOpenRouterBusy(true)
+                          setErrorMsg(null)
+                          void window.ghostBot
+                            .setOpenRouterCredential({
+                              apiKey: openRouterApiKeyInput.trim(),
+                              accountRef: 'default',
+                            })
+                            .then((next) => {
+                              setOpenRouterStatus(next)
+                              setOpenRouterApiKeyInput('')
+                            })
+                            .catch((err: unknown) =>
+                              setErrorMsg(err instanceof Error ? err.message : 'Failed to save OpenRouter key'),
+                            )
+                            .finally(() => setOpenRouterBusy(false))
+                        }}
+                      >
+                        {openRouterStatus.credentialConfigured ? 'Replace key' : 'Save key'}
+                      </button>
+                      {openRouterStatus.credentialConfigured && (
+                        <>
+                          <button
+                            type="button"
+                            data-testid="openrouter-delete-key-btn"
+                            disabled={openRouterBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.deleteOpenRouterCredential) return
+                              setOpenRouterBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .deleteOpenRouterCredential()
+                                .then(setOpenRouterStatus)
+                                .catch((err: unknown) =>
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to delete key'),
+                                )
+                                .finally(() => setOpenRouterBusy(false))
+                            }}
+                          >
+                            Delete key
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="openrouter-toggle-auth-btn"
+                            disabled={openRouterBusy}
+                            onClick={() => {
+                              if (!window.ghostBot?.setOpenRouterExecutionAuthorized) return
+                              setOpenRouterBusy(true)
+                              setErrorMsg(null)
+                              void window.ghostBot
+                                .setOpenRouterExecutionAuthorized({
+                                  authorized: !openRouterStatus.executionAuthorized,
+                                })
+                                .then(setOpenRouterStatus)
+                                .catch((err: unknown) =>
+                                  setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization'),
+                                )
+                                .finally(() => setOpenRouterBusy(false))
+                            }}
+                          >
+                            {openRouterStatus.executionAuthorized
+                              ? 'Revoke OpenRouter opt-in'
+                              : 'Authorize OpenRouter API'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {openRouterStatus.policyCompatibility.gatedReason && (
+                      <small className="gb-muted" data-testid="openrouter-gated-reason">
+                        Execution gate: {openRouterStatus.policyCompatibility.gatedReason}
+                      </small>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -413,6 +1095,61 @@ export function SettingsModal({
                       </small>
                     </div>
                   ))
+                )}
+
+                {openClawStatus && openClawStatus.models.length > 0 && (
+                  <div style={{ marginTop: '14px' }}>
+                    <h3 style={{ margin: '0 0 8px', fontSize: '14px' }}>
+                      OpenClaw Gateway Models ({openClawStatus.models.length})
+                    </h3>
+                    {openClawStatus.models.slice(0, 20).map((m) => (
+                      <div key={m.id} className="gb-setting-row">
+                        <div>
+                          <div>{m.label}</div>
+                          <small className="gb-muted">ID: {m.id}</small>
+                        </div>
+                        <small className="gb-muted">
+                          Efforts: {m.efforts.join(', ') || 'none'}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {ollamaStatus && (
+                  <div style={{ marginTop: '14px' }} data-testid="ollama-models-section">
+                    <h3 style={{ margin: '0 0 8px', fontSize: '14px' }}>
+                      Ollama Local Models ({ollamaStatus.models.length})
+                    </h3>
+                    {ollamaStatus.models.length === 0 ? (
+                      <p className="gb-muted" style={{ fontSize: '12.5px', margin: 0 }}>
+                        {ollamaStatus.available
+                          ? 'No local Ollama models installed.'
+                          : 'Ollama daemon not detected on loopback http://127.0.0.1:11434.'}
+                      </p>
+                    ) : (
+                      ollamaStatus.models.slice(0, 20).map((m) => {
+                        const running = ollamaStatus.runningModels.some((r) => r.name === m.id)
+                        const sizeMb =
+                          m.sizeBytes !== null ? `${Math.round(m.sizeBytes / (1024 * 1024))} MB` : 'unknown size'
+                        return (
+                          <div key={m.id} className="gb-setting-row">
+                            <div>
+                              <div>
+                                {m.label} {running ? <span className="gb-badge">running</span> : null}
+                              </div>
+                              <small className="gb-muted">
+                                {m.parameterSize ?? 'unknown params'} · {m.quantizationLevel ?? 'unknown quant'} · {sizeMb}
+                              </small>
+                            </div>
+                            <small className="gb-muted">
+                              ctx: {m.contextLength ?? 'unknown'}
+                            </small>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
                 )}
 
                 {runtimeSnapshot &&
@@ -732,24 +1469,63 @@ export function SettingsModal({
               </div>
             )}
 
-            {(activeSection === 'memory' ||
-              activeSection === 'tools' ||
-              activeSection === 'computer-use' ||
-              activeSection === 'routines') && (
-              <div>
-                <h2 style={{ margin: '0 0 10px', fontSize: '17px' }}>
-                  {SETTINGS_SECTIONS.find((s) => s.id === activeSection)?.label}{' '}
-                  <span className="gb-badge">
-                    {activeSection === 'memory' || activeSection === 'tools'
-                      ? 'Unavailable · Phase 3'
-                      : 'Unavailable · Phase 5'}
-                  </span>
-                </h2>
-                <p className="gb-muted">
-                  This capability is not implemented in Phase 1D and remains disabled until its
-                  scheduled vertical slice.
-                </p>
-              </div>
+            {activeSection === 'memory' && (
+              <MemorySettingsSection
+                settings={settings}
+                bots={bots}
+                activeBotId={activeBotId}
+                onUpdateSettings={onUpdateSettings}
+              />
+            )}
+
+            {activeSection === 'knowledge' && (
+              <KnowledgeSettingsSection
+                settings={settings}
+                bots={bots}
+                activeBotId={activeBotId}
+                onUpdateSettings={onUpdateSettings}
+              />
+            )}
+
+            {activeSection === 'tools' && (
+              <>
+                <McpSettingsSection
+                  settings={settings}
+                  bots={bots}
+                  activeBotId={activeBotId}
+                  onUpdateSettings={onUpdateSettings}
+                />
+                <LocalSkillsSettingsSection />
+              </>
+            )}
+
+            {activeSection === 'routines' && (
+              <RoutinesSettingsSection
+                bots={bots}
+                teams={teams}
+                activeBotId={activeBotId ?? null}
+                isMockMode={daemonHealth?.runtimeMode !== 'codex'}
+                onRefreshWorkspaceRoutines={onRefreshWorkspaceRoutines}
+                onNavigateToBot={(bId) => {
+                  onNavigateToBot?.(bId)
+                  onClose()
+                }}
+                onNavigateToTeam={(tId) => {
+                  onNavigateToTeam?.(tId)
+                  onClose()
+                }}
+              />
+            )}
+
+            {activeSection === 'computer-use' && (
+              <ComputerUseSettingsSection
+                bots={bots}
+                activeBotId={activeBotId ?? null}
+                onOpenLiveViewer={(sId) => {
+                  onClose()
+                  onOpenComputerUseLiveViewer?.(sId)
+                }}
+              />
             )}
           </section>
         </div>

@@ -1,0 +1,27 @@
+{
+  "name": "@ghost-bot/scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/types.ts",
+    "./db": "./src/repository/sqlite-store.ts",
+    "./schedules": "./src/schedules/calculator.ts",
+    "./repository": "./src/repository/routine-repository.ts",
+    "./queue": "./src/queue/execution-queue.ts",
+    "./engine": "./src/engine/scheduler-engine.ts",
+    "./security": "./src/security/validation.ts",
+    "./preview": "./src/diagnostics/preview.ts",
+    "./diagnostics": "./src/diagnostics/diagnostics.ts",
+    "./statistics": "./src/diagnostics/statistics.ts",
+    "./simulator": "./src/simulator/dry-run.ts",
+    "./portability": "./src/portability/export-import.ts",
+    "./notifications": "./src/notifications/repository.ts",
+    "./notification-policy": "./src/notifications/policy.ts",
+    "./approvals": "./src/queue/approval-coordinator.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts"
+  }
+}

@@ -1,3 +1,4 @@
+import type { HostMcpPolicyAdapter } from '@ghost-bot/mcp'
 import { canEnablePermission } from '@ghost-bot/shared-types/permissions'
 import type { RuntimePermissionEvidence } from '@ghost-bot/shared-types/permissions'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
@@ -21,11 +22,49 @@ export function resolveCodexVerifiedEvidence(
 }
 
 export interface PolicyAuthorizationInput {
-  runtimeMode: 'codex' | 'openclaw' | 'ollama' | 'mock'
+  runtimeMode:
+    | 'codex'
+    | 'openclaw'
+    | 'ollama'
+    | 'claude-api'
+    | 'gemini-api'
+    | 'kimi-acp'
+    | 'lmstudio'
+    | 'llamacpp'
+    | 'openrouter'
+    | 'mock'
   codexVersion: string | null
   authMethod: 'chatgpt' | 'apiKey' | 'mock' | 'none'
   requestedPermission: PermissionMode
   canonicalWorkspace: string | null
+  openClawVersion?: string | null
+  openClawExecutionAuthorized?: boolean
+  openClawLoopbackVerified?: boolean
+  openClawSandboxVerified?: boolean
+  ollamaExecutionAuthorized?: boolean
+  ollamaAvailable?: boolean
+  ollamaLoopbackVerified?: boolean
+  ollamaLocalOnlyVerified?: boolean
+  claudeExecutionAuthorized?: boolean
+  claudeCredentialConfigured?: boolean
+  claudeKeyringAvailable?: boolean
+  claudeEndpointVerified?: boolean
+  geminiExecutionAuthorized?: boolean
+  geminiCredentialConfigured?: boolean
+  geminiKeyringAvailable?: boolean
+  geminiEndpointVerified?: boolean
+  kimiExecutionAuthorized?: boolean
+  kimiCliAvailable?: boolean
+  kimiAcpProtocolVerified?: boolean
+  kimiAuthenticated?: boolean
+  kimiContainmentVerified?: boolean
+  localCompatAuthorized?: boolean
+  localCompatAvailable?: boolean
+  localCompatLoopbackVerified?: boolean
+  openRouterExecutionAuthorized?: boolean
+  openRouterCredentialConfigured?: boolean
+  openRouterKeyringAvailable?: boolean
+  openRouterEndpointVerified?: boolean
 }
 
 export interface PolicyAuthorizationDecision {
@@ -66,21 +105,81 @@ export class RuntimePolicyBroker {
     }
 
     if (input.runtimeMode === 'openclaw') {
-      return {
-        allowed: false,
-        reason:
-          'OpenClaw live execution is gated until Gateway sandbox and upstream billing enforcement are verified',
-        verifiedModes: [],
-      }
+      return this.authorizeOpenClawExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        openClawVersion: input.openClawVersion ?? null,
+        openClawExecutionAuthorized: input.openClawExecutionAuthorized ?? false,
+        openClawLoopbackVerified: input.openClawLoopbackVerified ?? false,
+        openClawSandboxVerified: input.openClawSandboxVerified ?? false,
+      })
     }
 
     if (input.runtimeMode === 'ollama') {
-      return {
-        allowed: false,
-        reason:
-          'Ollama local execution requires explicit local-model opt-in and supports read-only chat without tools',
-        verifiedModes: [],
-      }
+      return this.authorizeOllamaExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        ollamaExecutionAuthorized: input.ollamaExecutionAuthorized ?? false,
+        ollamaAvailable: input.ollamaAvailable ?? false,
+        ollamaLoopbackVerified: input.ollamaLoopbackVerified ?? false,
+        ollamaLocalOnlyVerified: input.ollamaLocalOnlyVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'claude-api') {
+      return this.authorizeClaudeApiExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        claudeExecutionAuthorized: input.claudeExecutionAuthorized ?? false,
+        claudeCredentialConfigured: input.claudeCredentialConfigured ?? false,
+        claudeKeyringAvailable: input.claudeKeyringAvailable ?? false,
+        claudeEndpointVerified: input.claudeEndpointVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'gemini-api') {
+      return this.authorizeGeminiApiExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        geminiExecutionAuthorized: input.geminiExecutionAuthorized ?? false,
+        geminiCredentialConfigured: input.geminiCredentialConfigured ?? false,
+        geminiKeyringAvailable: input.geminiKeyringAvailable ?? false,
+        geminiEndpointVerified: input.geminiEndpointVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'kimi-acp') {
+      return this.authorizeKimiAcpExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        kimiExecutionAuthorized: input.kimiExecutionAuthorized ?? false,
+        kimiCliAvailable: input.kimiCliAvailable ?? false,
+        kimiAcpProtocolVerified: input.kimiAcpProtocolVerified ?? false,
+        kimiAuthenticated: input.kimiAuthenticated ?? false,
+        kimiContainmentVerified: input.kimiContainmentVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'lmstudio' || input.runtimeMode === 'llamacpp') {
+      return this.authorizeLocalOpenAiCompatExecution({
+        providerLabel: input.runtimeMode === 'lmstudio' ? 'LM Studio' : 'llama.cpp',
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        executionAuthorized: input.localCompatAuthorized ?? false,
+        available: input.localCompatAvailable ?? false,
+        loopbackVerified: input.localCompatLoopbackVerified ?? false,
+      })
+    }
+
+    if (input.runtimeMode === 'openrouter') {
+      return this.authorizeOpenRouterExecution({
+        requestedPermission: input.requestedPermission,
+        canonicalWorkspace: input.canonicalWorkspace,
+        openRouterExecutionAuthorized: input.openRouterExecutionAuthorized ?? false,
+        openRouterCredentialConfigured: input.openRouterCredentialConfigured ?? false,
+        openRouterKeyringAvailable: input.openRouterKeyringAvailable ?? false,
+        openRouterEndpointVerified: input.openRouterEndpointVerified ?? false,
+      })
     }
 
     if (!evidence) {
@@ -131,5 +230,526 @@ export class RuntimePolicyBroker {
    */
   authorizeLiveExecution(input: PolicyAuthorizationInput): PolicyAuthorizationDecision {
     return this.authorize(input)
+  }
+
+  authorizeOpenClawExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    openClawVersion: string | null
+    openClawExecutionAuthorized: boolean
+    openClawLoopbackVerified: boolean
+    openClawSandboxVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reason: 'Full Access is disabled for OpenClaw Gateway execution',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openClawExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'OpenClaw live execution is gated until Gateway sandbox, billing, and explicit user authorization are verified',
+        verifiedModes: [],
+      }
+    }
+    if (input.openClawVersion !== '2026.11.8') {
+      return {
+        allowed: false,
+        reason: `OpenClaw Gateway version "${input.openClawVersion ?? 'unknown'}" is not verified for execution`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.openClawLoopbackVerified) {
+      return {
+        allowed: false,
+        reason: 'OpenClaw Gateway must be verified on loopback (ws://127.0.0.1 / localhost / ::1)',
+        verifiedModes: [],
+      }
+    }
+    if (input.requestedPermission !== 'read-only' && !input.openClawSandboxVerified) {
+      return {
+        allowed: false,
+        reason: `OpenClaw Gateway sandbox/approval enforcement is not verified for "${input.requestedPermission}" mode`,
+        verifiedModes: ['read-only'],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: ['read-only'],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded OpenClaw Gateway execution',
+      verifiedModes: input.openClawSandboxVerified
+        ? ['read-only', 'ask-approval', 'workspace']
+        : ['read-only'],
+    }
+  }
+
+  authorizeOllamaExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    ollamaExecutionAuthorized: boolean
+    ollamaAvailable: boolean
+    ollamaLoopbackVerified: boolean
+    ollamaLocalOnlyVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Ollama local execution only supports 'read-only' chat without tools; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Ollama local execution requires explicit local-model opt-in and supports read-only chat without tools',
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaLoopbackVerified) {
+      return {
+        allowed: false,
+        reason: 'Ollama endpoint must be verified on loopback (http://127.0.0.1 / localhost / ::1)',
+        verifiedModes: [],
+      }
+    }
+    if (!input.ollamaAvailable || !input.ollamaLocalOnlyVerified) {
+      return {
+        allowed: false,
+        reason:
+          'Local Ollama daemon and verified non-cloud installed model are required before execution',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded local read-only Ollama chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeClaudeApiExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    claudeExecutionAuthorized: boolean
+    claudeCredentialConfigured: boolean
+    claudeKeyringAvailable: boolean
+    claudeEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Anthropic Claude API initial integration supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'Anthropic API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Anthropic Claude API execution is gated until explicit API-billed authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.claudeEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://api.anthropic.com endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded API-billed read-only Anthropic Claude chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeGeminiApiExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    geminiExecutionAuthorized: boolean
+    geminiCredentialConfigured: boolean
+    geminiKeyringAvailable: boolean
+    geminiEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `Google Gemini API initial integration supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'Gemini API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Google Gemini API execution is gated until explicit API usage authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.geminiEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://generativelanguage.googleapis.com endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded read-only Google Gemini API chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeKimiAcpExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    kimiExecutionAuthorized: boolean
+    kimiCliAvailable: boolean
+    kimiAcpProtocolVerified: boolean
+    kimiAuthenticated: boolean
+    kimiContainmentVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reason: 'Full Access is disabled for Kimi Code ACP',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiCliAvailable) {
+      return {
+        allowed: false,
+        reason: 'Kimi Code CLI (`kimi`) is not installed or unreachable on host',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiAcpProtocolVerified) {
+      return {
+        allowed: false,
+        reason: 'Kimi ACP protocol version 1 handshake is not verified',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiAuthenticated) {
+      return {
+        allowed: false,
+        reason: 'Kimi CLI authentication required (`kimi login`)',
+        verifiedModes: [],
+      }
+    }
+    if (!input.kimiContainmentVerified || !input.kimiExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'Kimi Code ACP execution is gated until runtime-level containment and explicit opt-in are verified',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded Kimi Code ACP execution',
+      verifiedModes: ['read-only', 'ask-approval'],
+    }
+  }
+
+  authorizeLocalOpenAiCompatExecution(input: {
+    providerLabel: 'LM Studio' | 'llama.cpp'
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    executionAuthorized: boolean
+    available: boolean
+    loopbackVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.loopbackVerified) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} endpoint must be verified on literal loopback`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.available) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} local server is not reachable on loopback`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.executionAuthorized) {
+      return {
+        allowed: false,
+        reason: `${input.providerLabel} execution is gated until explicit local-runtime opt-in`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: `Authorized for bounded read-only ${input.providerLabel} chat without tools`,
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  authorizeOpenRouterExecution(input: {
+    requestedPermission: PermissionMode
+    canonicalWorkspace: string | null
+    openRouterExecutionAuthorized: boolean
+    openRouterCredentialConfigured: boolean
+    openRouterKeyringAvailable: boolean
+    openRouterEndpointVerified: boolean
+  }): PolicyAuthorizationDecision {
+    if (input.requestedPermission !== 'read-only') {
+      return {
+        allowed: false,
+        reason: `OpenRouter API supports 'read-only' tool-free chat only; rejected '${input.requestedPermission}'`,
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterKeyringAvailable) {
+      return {
+        allowed: false,
+        reason: 'OS Secret Service keyring is unavailable or locked; failing closed',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterCredentialConfigured) {
+      return {
+        allowed: false,
+        reason: 'OpenRouter API key is not configured in OS Secret Service',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterExecutionAuthorized) {
+      return {
+        allowed: false,
+        reason:
+          'OpenRouter execution is gated until explicit cloud data-transfer and API-billing authorization is granted',
+        verifiedModes: [],
+      }
+    }
+    if (!input.openRouterEndpointVerified) {
+      return {
+        allowed: false,
+        reason: 'Official https://openrouter.ai/api/v1 endpoint verification is required',
+        verifiedModes: [],
+      }
+    }
+    if (!input.canonicalWorkspace) {
+      return {
+        allowed: false,
+        reason: 'A valid canonicalized workspace directory is required',
+        verifiedModes: [],
+      }
+    }
+    return {
+      allowed: true,
+      reason: 'Authorized for bounded API-billed read-only OpenRouter chat without tools',
+      verifiedModes: ['read-only'],
+    }
+  }
+
+  /**
+   * Creates a HostMcpPolicyAdapter bound to a bot/run permission mode.
+   * Blocks local STDIO MCP launch and tool invocation under `full-access` and `read-only`;
+   * permits `ask-approval` and `workspace` (with per-call durable approval enforced by the orchestrator).
+   */
+  createMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {
+    return createHostMcpPolicyAdapter(permissionMode)
+  }
+
+  /**
+   * Authorizes Computer Use session creation and capability boundaries.
+   * Separates observation from side-effecting navigation/interaction, rejects inherited
+   * Teams/Scheduler consent, and keeps live model-driven Computer Use disabled.
+   */
+  evaluateComputerUsePolicy(input: {
+    requestedPermission: PermissionMode
+    explicitConsent: boolean
+    inheritedFromTeamOrRoutine: boolean
+    allowObservation: boolean
+    allowNavigation: boolean
+    allowInteraction: boolean
+    liveModelDriven?: boolean
+  }): {
+    allowed: boolean
+    reasonCode: string
+    reason: string
+    allowObservation: boolean
+    allowNavigation: boolean
+    allowInteraction: boolean
+    requiresSingleUseApproval: boolean
+  } {
+    if (input.requestedPermission === 'full-access') {
+      return {
+        allowed: false,
+        reasonCode: 'CU_FULL_ACCESS_DENIED',
+        reason: 'Full Access is disabled for Computer Use',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.inheritedFromTeamOrRoutine !== false) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_INHERITED_CONSENT_FORBIDDEN',
+        reason: 'Computer Use consent cannot be inherited from Teams or Scheduler routines',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.explicitConsent !== true) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_CONSENT_REQUIRED',
+        reason: 'Explicit user consent is required to start a Computer Use session',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.liveModelDriven === true) {
+      return {
+        allowed: false,
+        reasonCode: 'LIVE_MODEL_DRIVEN_CU_DISABLED',
+        reason: 'Live model-driven Computer Use is disabled in CU.4',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    if (input.requestedPermission === 'read-only' && (input.allowNavigation || input.allowInteraction)) {
+      return {
+        allowed: false,
+        reasonCode: 'CU_READ_ONLY_BLOCKS_MUTATION',
+        reason: 'Read-Only permission mode permits observation only, not browser navigation or interaction',
+        allowObservation: false,
+        allowNavigation: false,
+        allowInteraction: false,
+        requiresSingleUseApproval: true,
+      }
+    }
+    return {
+      allowed: true,
+      reasonCode: 'CU_AUTHORIZED',
+      reason: 'Authorized under isolated Computer Use policy with single-use action approval',
+      allowObservation: input.allowObservation,
+      allowNavigation: input.allowNavigation,
+      allowInteraction: input.allowInteraction,
+      requiresSingleUseApproval: true,
+    }
+  }
+}
+
+export function createHostMcpPolicyAdapter(permissionMode: PermissionMode): HostMcpPolicyAdapter {
+  const evaluate = (action: 'launch' | 'tool'): { allowed: boolean; reason?: string } => {
+    if (permissionMode === 'full-access') {
+      return {
+        allowed: false,
+        reason: `Full Access mode is blocked for local STDIO MCP ${action}`,
+      }
+    }
+    if (permissionMode === 'read-only') {
+      return {
+        allowed: false,
+        reason: `Read-Only mode blocks local STDIO MCP ${action}`,
+      }
+    }
+    if (permissionMode === 'workspace') {
+      return {
+        allowed: false,
+        reason: `Workspace mode blocks unsandboxed local STDIO MCP ${action} (cannot enforce workspace containment or network isolation)`,
+      }
+    }
+    return { allowed: true }
+  }
+
+  return {
+    evaluateLaunch: () => evaluate('launch'),
+    evaluateToolInvocation: () => evaluate('tool'),
   }
 }

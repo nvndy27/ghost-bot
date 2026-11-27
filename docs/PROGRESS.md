@@ -1,5 +1,144 @@
 # Progress log
 
+## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
+
+2026-11-27. Executed the finalized bounded 3-prompt live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on `22b3b16` (`integration/alpha0-native-chat-rc`, production baseline `6779ab3`, PR #15) using the dedicated ChatGPT `plus` profile (`gpt-6.2-sol`, `effort: low`, `read-only` permission, isolated temp dirs). See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).
+
+| State | Evidence |
+|---|---|
+| Verified | **Live Codex `0.172.0` PASS (3/3 prompts)**: Prompt 1 (`run_afca03dc-...`) **`completed`** (`deltaEventCount: 4`, `ALPHA0_OK` assistant match, `inputTokens: 14992`, `outputTokens: 8`); Prompt 2 (`run_0dff4316-...`) **`cancelled`** (`stopClicked: true`, `terminalEvent: "run.cancelled"`, `usage: "unavailable"`); Electron+daemon restart preserved identical `externalSessionId` and `SessionRecord.accountId` (`accountBindingVerified: true`), and Prompt 3 (`run_490ca871-...`) **`completed`** (`deltaEventCount: 4`, `ALPHA0_OK` recalled, `inputTokens: 15098`, `outputTokens: 8`). IPC/SQLite run IDs matched, `workspaceIntact: true`, and runtime usage windows reported (`300m: 10%`, `10080m: 30%`). Agent 2 independent security & packaging sign-off on PR #15 remains pending. |
+
+## Alpha.0B — Integrated Native Chat Release Candidate
+
+2026-11-27. Branched `integration/alpha0-native-chat-rc` from `fec34fc` (`feat/alpha0a-native-chat-closure`, PR #14), verified complete Git ancestry from `origin/main` (`07839ff`), reconciled full owner-approved `v0.1 Personal & Friends Alpha` `README.md` and `docs/ROADMAP.md` from PR #12 (`docs/v0.1-personal-friends-alpha`), and verified offline RC readiness with zero live inference or paid API spend. See [Alpha.0B RC report](extensions/alpha0b-integrated-native-chat-rc.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Reconciled PR #12 (`1802b0af`, `d4d5dbd`) full `README.md` and `docs/ROADMAP.md` (`Alpha.0`–`Alpha.3`, `Post-alpha`) while retaining Provider.7, Alpha.0A, and all `Phase 0`–`Phase 6` technical milestones; preserved frozen migrations `0001`–`0013` byte-for-byte; documented authoritative provider capability matrix, Agent 2 packaging/security handoff, bounded live acceptance request, and Alpha.1/Alpha.2 shared contract ownership. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `corepack pnpm audit --prod` (`No known vulnerabilities found`), frozen migration diff check (`0` changes to `migrations.ts`/`schema.ts` since `ddc97fc`), 3 consecutive full-workspace regression runs (**234/234** per run: `root` 141/141, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts sequentially (16/16), and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
+## Alpha.0A — Native Chat Closure & Integration Readiness
+
+2026-11-27. Branched `feat/alpha0a-native-chat-closure` from `0291693` (`feat/provider7-unified-execution`). Closed A0-01..A0-06 native Chat correctness/security findings, extended daemon-path provider acceptance (`llamacpp`, `claude-api`, `gemini-api`, `ollama` via deterministic fixtures), and prepared PR #6–#13 + PR #12 reconciliation and Alpha.1/Alpha.2 contract inventory with zero live inference or paid API spend. See [Alpha.0A report](extensions/alpha0a-native-chat-closure.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | **A0-01/A0-03**: Enforced `modelId`/`effort`/`permission`/`instructions` equality in `resumeSession()` across `OpenAiCompatibleRuntimeBase`, `AnthropicClaudeApiAdapter`, `GoogleGeminiApiAdapter`, and `OllamaLocalAdapter`; added `SESSION_CONFIG_MISMATCH` (409), `UNSUPPORTED_MODEL` (400), `UNSUPPORTED_EFFORT` (400), and `PERMISSION_DENIED` (403) dispatch checks in `RunOrchestrator.startRun()`; disabled unsupported Effort `<select>` in `BotEditorModal.tsx`. |
+| Implemented | **A0-02/A0-04/A0-06**: Added atomic preflight-to-transaction equality & pre-dispatch DB snapshot checks (`EXECUTION_CONFIG_CHANGED` 409) in `RunOrchestrator` (`startRun`, `executeUnifiedProviderRun`, `executeCodexRun`); added structured `ConversationHistoryTurn[]` (`SessionConfig.history`) with `LIMIT 40` SQLite query + `redactSecrets()` so untrusted history is never elevated into `system` instructions; added `assertNoLoopbackProxyBypass()` for `NODE_USE_ENV_PROXY=1`. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/alpha0a-native-chat-closure.test.ts` (2/2), 3 consecutive full-workspace regression runs (**234/234** per run: `root` 141/141, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts, and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
+## Provider.7 — Unified Multi-Provider Execution Integration
+
+2026-11-27. Branched `feat/provider7-unified-execution` from `5d57c39` (`feat/provider6-openai-compatible`). Resolved the HTTP 501 `LIVE_INFERENCE_DISABLED` execution gap in `RunOrchestrator`, `RuntimeRegistry`, and `DaemonServer` across `openclaw`, `ollama`, `claude-api`, `gemini-api`, `kimi-acp`, `lmstudio`, `llamacpp`, and `openrouter` while preserving Codex and fail-closed `RuntimePolicyBroker` gating, and closed the targeted Provider.6 residual checks with zero live inference or paid API spend. See [Provider.7 report](extensions/provider7-unified-execution.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added persistent adapter ownership (`RuntimeRegistry.registerPersistentAdapter`, `getPersistentAdapter`, `getUnifiedExecutionAdapter`, `stop()` disconnect), `DaemonServer.registerPersistentProviderAdapters()` + `buildProviderPolicyInput()` + `configGeneration` tracking on `/lmstudio/config` & `/llamacpp/config`, and `RunOrchestrator.executeUnifiedProviderRun()` (pre-dispatch `RuntimePolicyBroker.authorize` revalidation, canonical `messages` history reconstruction on restart, streaming/cancellation, and uncertain-outcome quarantine without automatic replay). |
+| Implemented | Closed Provider.6 residuals: `readBoundedResponseText()` incremental metadata byte limits (`openai-compatible-transport.ts`, `anthropic-claude-api.ts`, `google-gemini-api.ts`), exact path/query/fragment enforcement in `assertPinnedHttpsOriginUrl()`, removal of `allowNetworkDiscovery` unauthenticated bypass for cloud adapters, `configGeneration` in `CompatSessionState` (`A -> B -> A` invalidation), post-`[DONE]` frame suppression, and unexpected `finish_reason` rejection. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider7-unified-execution.test.ts`, 3 consecutive full-workspace regression runs (**232/232** per run: `root` 139/139, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 16 Electron E2E/IPC scripts (`verify-provider7-unified-execution-desktop.mjs` + 15 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`14/14` PASS) all passed. |
+
+## Provider.6 — Shared OpenAI-Compatible Runtime Integration
+
+2026-11-27. Branched `feat/provider6-openai-compatible` from `d13e686` (`feat/provider5-kimi-acp`). Implemented shared OpenAI-compatible transport (`OpenAiCompatibleRuntimeBase`) and three provider runtimes (`lmstudio`, `llamacpp`, `openrouter`), `RuntimePolicyBroker` gates, daemon routes, Electron IPC, and Desktop Settings/`BotEditorModal` UI with zero live inference or paid API spend. See [Provider.6 report](extensions/provider6-openai-compatible.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added `OpenAiCompatibleRuntimeBase` (`packages/runtime-adapters/openai-compat/openai-compatible-transport.ts`), `LmStudioLocalAdapter` (`lmstudio`, `http://127.0.0.1:1234/v1`), `LlamaCppLocalAdapter` (`llamacpp`, `http://127.0.0.1:8080/v1`), and `OpenRouterApiAdapter` (`openrouter`, pinned `https://openrouter.ai/api/v1`, `provider.allow_fallbacks: false`, `ghost-bot.provider` OS Secret Service key isolation). Enforces pre-request endpoint/credential/auth checks, `redirect: 'error'` + `3xx` mapping, fragmented UTF-8 SSE parsing, idle/total timeouts, abort-raced stream reads, tool-call rejection, reasoning suppression, non-cumulative usage, and `RuntimePolicyBroker` gating. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider6-openai-compat-production.test.ts` (3/3), 3 consecutive full-workspace regression runs (**231/231** per run: `root` 138/138, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 14 Electron E2E/IPC scripts (`verify-provider6-openai-compat-desktop.mjs` + 13 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
+## Provider.5 — Kimi Code ACP Runtime Integration
+
+2026-11-27. Branched `feat/provider5-kimi-acp` from `c65a621` (`feat/provider4-gemini-api`). Commit 1 (`42b708b`) closed shared provider pre-request credential revalidation, proactive abort on rotation/revocation, and stalled stream cancellation; Commit 2 implemented `KimiAcpAdapter` (`kimi-acp`), `RuntimePolicyBroker.authorizeKimiAcpExecution()`, `GET /kimi/status`, `IPC_CHANNELS.KIMI_STATUS`, and Desktop Settings & BotEditorModal UI with zero live inference or CLI installation. See [Provider.5 report](extensions/provider5-kimi-acp.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Shared provider security hardening (`42b708b`): immediate pre-request `credentialGeneration`/`isExecutionAuthorized()`/`resolveApiKey()` verification, `abortActiveRuns()` on rotation/deletion/revocation, and abort-raced `readWithAbort()` for stalled SSE streams (`tests/shared-provider-security.test.ts` PASS). |
+| Implemented | Added `KimiAcpAdapter` (`packages/runtime-adapters/kimi/kimi-acp.ts`) speaking ACP v1 JSON-RPC over stdio (`initialize`, `session/new`, `session/load`, `session/prompt`, `session/update`, `session/request_permission`, `session/cancel`) with `fs/*` & `terminal/*` callback rejection, `allow_always` stripping, `agent_thought_chunk` suppression, session quarantine on unexpected exit, `RuntimePolicyBroker.authorizeKimiAcpExecution()`, and Desktop Settings / BotEditorModal UI. `kimi` CLI is not installed on host. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider5-kimi-production.test.ts` (2/2), 3 consecutive full-workspace regression runs (**228/228** per run: `root` 135/135, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 13 Electron E2E/IPC scripts (`verify-provider5-kimi-desktop.mjs` + 12 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
+## Provider.4 — Google Gemini API Production Integration
+
+2026-11-27. Branched `feat/provider4-gemini-api` from `fcded26` (`feat/provider3-claude-api`). Implemented `GoogleGeminiApiAdapter` (`v1beta/models`, `streamGenerateContent?alt=sse`, `x-goog-api-key`), shared provider credential hardening, Desktop Settings & BotEditorModal UI, and read-only Gemini CLI assessment with zero live inference or external API requests. See [Provider.4 report](extensions/provider4-gemini-api.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Added `GoogleGeminiApiAdapter` (`packages/runtime-adapters/gemini/google-gemini-api.ts`) pinned to `https://generativelanguage.googleapis.com` (`v1beta`), `x-goog-api-key` header (query `?key=` rejected), paginated `generateContent` model discovery, `read-only` tool-free SSE streaming, non-cumulative `usageMetadata` snapshot emission, safety/`MAX_TOKENS`/`thought` handling, mid-stream credential rotation abort (hardened across both Claude and Gemini adapters), stale `accountRef` cleanup in `apps/daemon/src/server.ts`, `RuntimePolicyBroker.authorizeGeminiApiExecution()`, `/gemini/*` daemon routes, `IPC_CHANNELS.GEMINI_*`, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider4-gemini-production.test.ts` (2/2), 3 consecutive full-workspace regression runs (**225/225** per run: `root` 132/132, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 12 Electron E2E/IPC scripts (`verify-provider4-gemini-desktop.mjs` + 11 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
+## Provider.3 — Anthropic Claude API Integration & Targeted Core Hardening
+
+2026-11-27. Branched `feat/provider3-claude-api` from `94a71dc` (`feat/provider2-ollama-local`). Commit 1 (`edfbad1`) closed `CORE2-TERM-01` and `CORE1-SS-01`; Commit 2 implemented `AnthropicClaudeApiAdapter` and provider credential namespace with zero live inference or external API calls. See [Provider.3 report](extensions/provider3-claude-api.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Closed `CORE2-TERM-01` (`ScopedTerminalService.revokeByRunId`/`revokeByBotId` wired to `RunOrchestrator.setOnRunTerminated` and `PATCH/DELETE /bots/:id`, startup race closed, unconfirmed running commands marked `uncertain`) and `CORE1-SS-01` (`LinuxSecretServiceStore.getStatus()` fails closed when `busctl`, `org.freedesktop.secrets`, or collections are unavailable/locked) in `tests/core-security-hardening.test.ts` (2/2 PASS). |
+| Implemented | Added `AnthropicClaudeApiAdapter` (`packages/runtime-adapters/claude/anthropic-claude-api.ts`) pinned to `https://api.anthropic.com` (`anthropic-version: 2023-06-01`), `read-only` tool-free SSE streaming, bounded history/tokens/duration/stream, `maxAttempts: 1`, `ProviderSecretCoordinate` (`ghost-bot.provider`) in `SecretStore`, `RuntimePolicyBroker.authorizeClaudeApiExecution()`, `/claude/*` daemon routes, `IPC_CHANNELS.CLAUDE_*`, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI. Assessed local `claude` CLI `2.1.331` read-only (`capabilities.claudeCodeCli: false`). |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider3-claude-production.test.ts` + `tests/core-security-hardening.test.ts` (4/4), 3 consecutive full-workspace regression runs (**223/223** per run: `root` 130/130, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 11 Electron E2E/IPC scripts (`verify-provider3-claude-desktop.mjs` + 10 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
+## Provider.2 — Ollama Local Runtime Production Integration
+
+2026-11-27. Branched `feat/provider2-ollama-local` from `d6436c6` (`feat/provider1-openclaw-execution`). Offline Provider.2 implementation is **Tested / Implemented** (host Ollama CLI/daemon unavailable) with zero live inference, model downloads, or `sudo` changes. See [Provider.2 report](extensions/provider2-ollama-local.md).
+
+| State | Evidence |
+|---|---|
+| Implemented | Hardened `OllamaLocalAdapter` (`packages/runtime-adapters/ollama/ollama-adapter.ts`): loopback-only URLs without credentials, `redirect: 'error'` + explicit `3xx` rejection, cloud-model rejection (`:cloud`, `remote_model`, `remote_host`), `listModelDetails`, `inspectModel`, `listRunningModels`, `inspectLocalRuntime`, `resumeSession`, `inspectSession`, `reconnect`, `read-only` tool-free enforcement, `maxConcurrentRuns`, `24`-turn/`32 KB` history, `num_predict` cap, `120s` timeout, `2 MB` stream limit, `OLLAMA_UNKNOWN_TERMINATION` on incomplete streams, and actual token usage mapping (`getUsage() -> null`). |
+| Implemented | Added `RuntimePolicyBroker.authorizeOllamaExecution()` (`apps/daemon/src/runtime/policy-broker.ts`), `RuntimeRegistry.getOllamaStatus()` (`apps/daemon/src/runtime/registry.ts`), `GET /ollama/status` (`apps/daemon/src/server.ts`), `IPC_CHANNELS.OLLAMA_STATUS` + `OllamaStatusDtoSchema` (`packages/shared-types/ipc.ts`), Electron preload/main handlers, and `SettingsModal.tsx` / `BotEditorModal.tsx` UI integration. |
+| Tested | `corepack pnpm lint && corepack pnpm -r --if-present typecheck && corepack pnpm -r --if-present build` (11/11), `tests/provider2-ollama-production.test.ts` + `tests/ollama-adapter.test.ts` (4/4), 3 consecutive full-workspace regression runs (**219/219** per run: `root` 126/126, `teams` 20/20, `scheduler` 17/17, `computer-use` 16/16, `memory` 14/14, `knowledge` 12/12, `mcp` 14/14), all 10 Electron E2E/IPC scripts (`verify-provider2-ollama-desktop.mjs` + 9 existing), and 4-worker `@ghost-bot/mcp` concurrency stress (`MCP_CONCURRENCY_STRESS_PASSED`) all passed. |
+
+## Phase 3D.4 — Integrated End-to-End Acceptance
+
+2026-11-26. Branched `feat/phase-3d4-integrated-acceptance` from `04e324c` (Phase 3D.3 hardened). Offline integrated RC is **Verified** (**PASS**) with zero live subscription inference turns consumed. See [Phase 3D.4 report](extensions/phase-3d4-integrated-acceptance.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Verified fresh + populated v4/v5/v6->v7 upgrades (`0700`/`0600` permissions, FTS5 consistency, foreign keys), atomic bot archival rollback across Core + Memory + Knowledge + MCP, combined `4096`/`8192`/`12288`-byte UTF-8 budgets, and `CodexAppServerAdapter` dispatch-time revalidation (`tests/phase-3d4-integrated.test.ts`). |
+| Verified | Verified unified 27-step Memory + Knowledge + MCP + restart Electron E2E (`scripts/verify-phase-3d4-electron.mjs`, 4 screenshots in `design/reviews/phase-3d4/`, deny = `0` invocations, approve = `1` invocation, no auto-launch on restart) and ~2500-chunk cross-extension responsiveness (`searchP50Ms: 75.27–91.63`, `searchP95Ms: 104.70–120.58`, `healthP95Ms: 1.39–1.53`, `eventLoopP95Ms: 10.74–10.76`). |
+| Verified | Rebuilt and verified Linux AppImage (`GhostBot-0.1.0-x86_64.AppImage`, sha256 `b8d45e8b0eb4d232a20bef2cff47fd3dc88dc34bc8368b5df73083f3893faca8`, `APPIMAGE_EXTRACT_AND_RUN=1` 2-launch E2E) and Fedora RPM (`ghost-bot-0.1.0-1.x86_64.rpm`, sha256 `24ba149303222cb8318905b4b16260969b5d6532e21018a4f6923e332103f9c6`, `rpm -qip` + extracted smoke launch, zero credentials/DB bundled). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (`No known vulnerabilities found`), all 5 Electron E2E suites (`2e`, `3d1`, `3d2`, `3d3`, `3d4`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `81/81` core = **121/121** each) all passed. |
+
+## Phase 3D.3 — Production MCP Integration
+
+2026-11-26. Branched `feat/phase-3d3-mcp-integration` from `9b6ba1b` (Phase 3D.2 hardened). Phase 3D.3 is **Verified** (**PASS**) with zero live subscription inference turns and native Codex MCP execution kept disabled (`unsupported_native_mcp`). See [Phase 3D.3 report](extensions/phase-3d3-mcp-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added `createBorrowedMcpDatabaseHandle()` (`packages/mcp/src/storage/sqlite-client.ts`), production migration `0007_mcp_core` (`mcp_servers` + `mcp_approval_bindings` in `apps/daemon/src/db/migrations.ts`, `schema.ts`), and `RuntimePolicyBroker.createMcpPolicyAdapter()` (`apps/daemon/src/runtime/policy-broker.ts`) blocking `full-access` and `read-only` for local STDIO MCP. |
+| Verified | Implemented daemon-owned `McpService` (`apps/daemon/src/mcp/service.ts`) with trusted `McpAuthContext`, explicit trust + binary digest pinning, fail-closed default `McpSecretResolver`, `archiveMcpForBotInTx()` + post-commit `invalidateBotConnections()` on `DELETE /bots/:id`, and `RunOrchestrator` durable `approvals` + `mcp_approval_bindings` single-use execution (`pending -> dispatched -> completed | failed | uncertain | cancelled`). |
+| Verified | Wired 12 Zod v4 MCP IPC channels (`packages/shared-types/ipc.ts`, `apps/desktop/electron/preload.cts`, `main.ts`), `McpSettingsSection` UI (`apps/desktop/src/components/McpSettingsSection.tsx`, `SettingsModal.tsx`), and `/mcp/*` daemon routes (`apps/daemon/src/server.ts`). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (`No known vulnerabilities found`), `verify-phase-2e-acceptance.mjs`, `verify-phase-3d1-electron.mjs`, `verify-phase-3d2-electron.mjs`, `verify-phase-3d3-electron.mjs` (4 screenshots in `design/reviews/phase-3d3/`), cross-extension responsiveness benchmark (`searchP95Ms: 17.43–21.92`, `healthMemoryP95Ms: 3.78–5.66`, `eventLoopP95Ms: 10.43–10.76`), hardening regressions (`tests/phase-3d3-hardening.test.ts`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `78/78` core = **118/118** each) all passed. |
+
+## Phase 3D.2 — Production Knowledge & Retrieval Integration
+
+2026-11-26. Branched `feat/phase-3d2-knowledge-integration` from `ac4f80d` (Phase 3D.1 closure gate). Phase 3D.2 is **Verified** (**PASS**) with zero MCP production integration and zero live subscription inference turns. See [Phase 3D.2 report](extensions/phase-3d2-knowledge-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added production migration `0006_knowledge_core` (`apps/daemon/src/db/migrations.ts`, `schema.ts`) and `createBorrowedKnowledgeDatabaseHandle()` (`packages/knowledge/src/storage/sqlite-client.ts`) so `KnowledgeService.close()` never closes the daemon's `DatabaseSync`. |
+| Verified | Implemented daemon-owned `KnowledgeService` (`apps/daemon/src/knowledge/service.ts`) constructing trusted `KnowledgeAuthContext`, supporting `direct_text`, UTF-8 `.txt`, and `.md`/`.markdown` (via Electron `dialog.showOpenDialog` in `apps/desktop/electron/main.ts` + `O_NOFOLLOW`), revision-aware citations (`resolveCitation`), and atomic bot-scoped archival via `archiveKnowledgeForBotInTx()` in `DELETE /bots/:id`. |
+| Verified | Added `KnowledgeSettingsSchema` / `KnowledgeSettingsPatchSchema` (`enabled: true`, `automaticRetrieval: false`, `includeUserWide: false`, `externalProviderConsent: false`), 11 strict Zod v4 IPC channels, `KnowledgeSettingsSection` UI (`apps/desktop/src/components/KnowledgeSettingsSection.tsx`), and combined Memory+Knowledge `context-assembler.ts` (`<= 12288` bytes) with `CodexAppServerAdapter.run()` `prepareReferenceContext` revalidation. |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (0 vulns), `verify-phase-2e-acceptance.mjs`, `verify-phase-3d1-electron.mjs`, `verify-phase-3d2-electron.mjs` (2 screenshots in `design/reviews/phase-3d2/`), 573-chunk (`searchMs: 44.04`, `prepareMs: 36.95`) and 2501-chunk (`searchMs: 255.35`) benchmarks, hardening regressions (bytes-only ingestion, cross-scope collection rejection, atomic rollback, `run.context_prepared`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `71/71` core = **111/111** each) all passed. |
+
+## Phase 3D.1 — Production Memory Integration
+
+2026-11-26. Branched `feat/phase-3d1-memory-integration` from `158a728`. Phase 3D.1 is **Verified** (**PASS**) with zero Knowledge/MCP production integration and zero live subscription inference turns. See [Phase 3D.1 report](extensions/phase-3d1-memory-integration.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Added production migration `0005_memory_core` (`apps/daemon/src/db/migrations.ts`, `schema.ts`) creating `memories` (`bot_id REFERENCES agents(id) ON DELETE RESTRICT`) and `memories_fts` (`unicode61 remove_diacritics 2`); added `createBorrowedMemoryDatabaseHandle()` (`packages/memory/src/storage/sqlite-client.ts`) so `MemoryService.close()` never closes the daemon's `DatabaseSync`. |
+| Verified | Implemented daemon-owned `MemoryService` (`apps/daemon/src/memory/service.ts`) constructing trusted `MemoryAuthContext` (`LOCAL_USER_ID`, `agents` ownership, `realpath` workspace hash `deriveWorkspaceId`), archiving bot-scoped memories on `DELETE /bots/:id` while preserving user-wide memories, and enforcing `MemorySettingsSchema` (`enabled: true`, `automaticRetrieval: false`, `includeUserWide: false`, `externalProviderConsent: false`). |
+| Verified | Wired 6 strict Zod v4 IPC channels (`ghost:memory:*` in `packages/shared-types/ipc.ts`, `apps/desktop/electron/preload.cts`, `main.ts`, `apps/daemon/src/server.ts`), `MemorySettingsSection` (`apps/desktop/src/components/MemorySettingsSection.tsx`, `SettingsModal.tsx`), and dispatch-boundary `RunOrchestrator` + `CodexAppServerAdapter` `turn/start.input` reference context (`baseInstructions` untouched, `run_events` metadata-only). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm lint`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm -r --if-present build`, `corepack pnpm audit --prod` (0 vulns), `node scripts/verify-phase-2e-acceptance.mjs`, `node scripts/verify-phase-3d1-electron.mjs` (2 screenshots in `design/reviews/phase-3d1/`), 250-record synthetic benchmark (`searchMs: 13.61`, `prepareMs: 7.14`), closure-gate barrier tests (`CodexAppServerAdapter.run` `prepareReferenceContext`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `67/67` core = **107/107** each) all passed. |
+
+## Phase 3D.0 — Core and Extension Integration Foundation
+
+2026-11-26. Branched `feat/phase-3d0-integration-foundation` from `main` (`07839ff`), merged accepted Track B (`d7ec6ba`, `feat/phase-3c-mcp-foundation`), and upgraded `zod` to `4.6.7` across all 6 dependent workspace packages. Phase 3D.0 is **Verified** (**PASS**) with zero `0005+` migrations or Phase 3D.1–3D.4 daemon wiring. See [Phase 3D.0 report](extensions/phase-3d0-integration-report.md).
+
+| State | Evidence |
+|---|---|
+| Verified | Merged `d7ec6ba` (`--no-ff`) onto `07839ff` preserving Track A (`electron-builder@26.0.12`, `apps/desktop/scripts/build-rpm.mjs`, migrations `0001`–`0004`) and Track B (`@ghost-bot/memory`, `@ghost-bot/knowledge`, `@ghost-bot/mcp` remaining daemon-agnostic). |
+| Verified | Upgraded `"zod": "^4.6.7"` across all 6 workspace packages (`shared-types`, `memory`, `knowledge`, `mcp`, `desktop`, `daemon`), resolving `GHSA-mrhx-c7xc-m3w5` (`corepack pnpm audit --prod`: `No known vulnerabilities found`; `corepack pnpm list -r zod --depth 0`: all `zod@4.6.7`). Fixed Zod v4 strictness in `packages/shared-types/ipc.ts` (`.prefault({})` on `AppSettingsSchema` sections) and `packages/mcp/src/contracts/schemas.ts` (`z.record(z.string(), z.unknown())`). |
+| Tested | `corepack pnpm install --frozen-lockfile`, `corepack pnpm -r --if-present typecheck` (8/8), `corepack pnpm lint`, `corepack pnpm -r --if-present build`, `node scripts/verify-phase-2e-acceptance.mjs` (`0` console errors, `daemonExitedCleanly: true`), and **3 consecutive full test runs** (`14/14` memory, `12/12` knowledge, `14/14` mcp, `62/62` core = **102/102** each) all passed. |
+
 ## Phase 2D — Runtime Recovery, Reconnect, Resume & Release Preparation
 
 2026-11-26. Phase 2C merged to `main` (`c7891af`); Phase 2D **Implemented & Offline-Tested** on `feat/phase-2d-recovery-resume` (**CONDITIONAL PASS**: `55/55` unit tests and Electron recovery E2E passed; `electron-builder` not installed for AppImage/RPM artifact build and `GHOST_BOT_RUN_LIVE_RECOVERY=1` not executed without new live budget).
