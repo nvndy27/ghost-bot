@@ -1783,7 +1783,7 @@ export class GhostBotDaemon {
         }
         if (url.pathname === '/workspace/git/cancel') {
           const input = await readWorkspaceRequest(req, WorkspaceGitOperationSchema)
-          sendJson(res, 200, workspaceGit.cancel(input))
+          sendJson(res, 200, await workspaceGit.cancel(input))
           return
         }
       }

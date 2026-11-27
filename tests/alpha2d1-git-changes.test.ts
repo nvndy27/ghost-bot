@@ -116,11 +116,11 @@ test('read-only Git inspection keeps configuration inert and data inside the nat
       assert.deepEqual(details.result.files, [{ path: 'tracked.txt', code: 'A' }])
 
       const cancelling = { ...operation(), kind: 'status' as const }
-      const cancelled = service.inspect(cancelling)
+      const cancelled = assert.rejects(service.inspect(cancelling), { name: 'AbortError' })
       const cancelInput = { ...access, operationId: cancelling.operationId }
-      assert.equal(service.cancel({ ...cancelInput, authGeneration: 'different' }), false)
-      assert.equal(service.cancel(cancelInput), true)
-      await assert.rejects(cancelled, { name: 'AbortError' })
+      assert.equal(await service.cancel({ ...cancelInput, authGeneration: 'different' }), false)
+      assert.equal(await service.cancel(cancelInput), true)
+      await cancelled
       await assert.rejects(readFile(marker), { code: 'ENOENT' })
       assert.deepEqual(await readFile(join(root, '.git', 'index')), indexBefore)
       await rename(join(root, '.git'), join(outside, 'external-git'))

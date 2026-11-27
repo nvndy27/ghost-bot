@@ -117,9 +117,9 @@ async function inspectSnapshot(input: WorkspaceGitInspect, snapshot: string, omi
 export class WorkspaceGitService {
   private readonly active = new Map<string, AbortController>()
   private readonly files: WorkspaceFilesService
-  private readonly requireGrant: (access: WorkspaceGitOperation) => void
+  private readonly requireGrant: (access: WorkspaceGitOperation) => void | Promise<void>
 
-  constructor(files: WorkspaceFilesService, requireGrant: (access: WorkspaceGitOperation) => void) {
+  constructor(files: WorkspaceFilesService, requireGrant: (access: WorkspaceGitOperation) => void | Promise<void>) {
     this.files = files
     this.requireGrant = requireGrant
   }
@@ -128,8 +128,8 @@ export class WorkspaceGitService {
     return JSON.stringify([operation.botId, operation.workspaceId, operation.authGeneration, operation.operationId])
   }
 
-  cancel(operation: WorkspaceGitOperation) {
-    this.requireGrant(operation)
+  async cancel(operation: WorkspaceGitOperation) {
+    await this.requireGrant(operation)
     const active = this.active.get(this.key(operation))
     if (!active || active.signal.aborted) return false
     active.abort()
@@ -141,7 +141,6 @@ export class WorkspaceGitService {
   }
 
   async inspect(input: WorkspaceGitInspect, caller?: AbortSignal): Promise<WorkspaceGitResponse> {
-    this.requireGrant(input)
     caller?.throwIfAborted()
     const key = this.key(input)
     if (this.active.size >= 2 || this.active.has(key)) {
@@ -154,6 +153,8 @@ export class WorkspaceGitService {
     let temporary: string | undefined
     let result: Result
     try {
+      await this.requireGrant(input)
+      signal.throwIfAborted()
       const workspace = await this.files.validateDiscoveryWorkspace(input)
       try {
         if (process.platform !== 'linux' || process.getuid?.() === 0) {
@@ -169,9 +170,9 @@ export class WorkspaceGitService {
           result = { kind: 'unavailable', reason: err.message }
         } else throw err
       }
-      this.requireGrant(input)
+      await this.requireGrant(input)
       await this.files.validateDiscoveryWorkspace(input)
-      this.requireGrant(input)
+      await this.requireGrant(input)
       controller.signal.throwIfAborted()
       caller?.throwIfAborted()
       const { botId, workspaceId, authGeneration, operationId } = input
