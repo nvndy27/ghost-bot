@@ -19,6 +19,10 @@ Review the [convergence candidate and Alpha.2C proposal](extensions/alpha-shared
 
 Review the Alpha.1A branch against accepted UI.1 main. Shared wiring is available in the separate convergence draft for maintainer review. Keep Group task indicators and Private Task Chats scoped to Alpha.1D.
 
+## Alpha.2D.1 — Read-only Git Changes
+
+Review the isolated draft stacked on PR #22. At convergence, preserve both the existing discovery contract and the feature-specific `inspectWorkspaceGit` / `cancelWorkspaceGit` channels. Re-run the focused Electron Git scenario on the combined baseline. Keep Git mutations gated.
+
 ## Alpha.2A–B — Shared Workspace Integration (Draft Review)
 
 1. Review the history-preserving integration candidate on `integration/alpha2ab-shared-wiring`. Coordinate disposition of draft PRs #16 and #18 with their owner.

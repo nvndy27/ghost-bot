@@ -4,6 +4,8 @@ import {
 } from '@ghost-bot/shared-types/workspace-discovery'
 export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
+import type { WorkspaceGitInspect, WorkspaceGitOperation, WorkspaceGitResponse } from '@ghost-bot/shared-types/workspace-git'
+export * from '@ghost-bot/shared-types/workspace-git'
 
 export const IPC_CHANNELS = {
   APP_INFO: 'ghost:app:info',
@@ -25,6 +27,8 @@ export const IPC_CHANNELS = {
   WORKSPACE_CANCEL_DISCOVERY: 'ghost:workspace:cancel-discovery',
   WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
   WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
+  WORKSPACE_GIT_INSPECT: 'ghost:workspace:git-inspect',
+  WORKSPACE_GIT_CANCEL: 'ghost:workspace:git-cancel',
   SETTINGS_GET: 'ghost:settings:get',
   SETTINGS_UPDATE: 'ghost:settings:update',
   SETTINGS_RESET: 'ghost:settings:reset',
@@ -2281,6 +2285,8 @@ export interface GhostBotBridge {
   ): Promise<WorkspaceListDirectoryIpcResponse>
   readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
   saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
+  inspectWorkspaceGit(params: WorkspaceGitInspect): Promise<WorkspaceGitResponse>
+  cancelWorkspaceGit(params: WorkspaceGitOperation): Promise<boolean>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
   resetSettings(): Promise<AppSettings>

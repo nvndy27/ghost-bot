@@ -11,6 +11,15 @@
 ## Alpha.1A — Bot and Conversation Management
 
 **Tested** on post-UI.1 main. Continued from `290d956` and fixed legacy workspace path handling for provider edits, explicit bot navigation read state and conversation paging. Focused tests passed 3/3, database and Teams regressions 8/8, and the offline two-launch Electron scenario passed. Zero live inference. See [Alpha.1A scope and evidence](extensions/alpha1a-bot-conversation-management.md).
+
+## Alpha.2D.1 — Read-only Git Changes
+
+Implemented on an isolated feature branch from PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae`. The Changes tab uses the existing native personal workspace grant through validated Electron IPC. The daemon reinspects authorization before releasing results and scopes cancellation to the bot, root, generation and operation.
+
+Git reads a bounded daemon-owned snapshot inside Bubblewrap. The snapshot excludes sensitive paths, special files, repository-local configuration, helper metadata and object alternates. The snapshot mount is read-only and the subprocess has no network or host workspace mount. No file or Git mutation routes were added. Repo status, bounded file patches and HEAD history work for supported local root repositories. See [Git Changes scope](extensions/alpha2d1-git-changes.md).
+
+**Tested** — Focused suite 9/9 with the Git sandbox required. The isolated Git service exercised output limits, redirected metadata, sensitive paths, stale grants and cancellation. Real Electron rendered native-granted status, working-tree and untracked diffs and commit details, then verified grant revocation. Existing workspace shell and daemon security checks, lint, recursive typecheck and recursive build passed. No live inference.
+
 ## Alpha.2C.1 — Workspace search and previews
 
 The maintainer authorized the read-only feature branch from `c91ebcba34a9308ce5e3645417f5afaacd56e472` (PR #19). Workspace-owned modules implement descriptor-relative name and text search, matching-line navigation, preview loading, Markdown text rendering, sanitized SVG and bounded static PNG/GIF data, isolated PDF rasterization, and a draft insertion callback. Search limits are 8 levels, 96 directory visits, 4,000 scanned entries, 600 files, 100 results, 64 KiB per text file and a 2.5-second cooperative deadline. An in-flight filesystem operation completes before the deadline or cancellation can be observed. Preview inputs are capped at 1 MiB, with a lower SVG limit and a raster pixel limit.

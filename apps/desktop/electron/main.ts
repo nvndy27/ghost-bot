@@ -107,6 +107,9 @@ import {
   SetGeminiCredentialInputSchema,
   WorkspaceAuthorizeReadInputSchema,
   WorkspaceContextIpcResponseSchema,
+  WorkspaceGitInspectSchema,
+  WorkspaceGitOperationSchema,
+  WorkspaceGitResponseSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceListDirectoryIpcResponseSchema,
   WorkspaceReadFileIpcInputSchema,
@@ -607,6 +610,22 @@ function registerIpcHandlers(): void {
       method: 'POST',
       body: parsed,
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_GIT_INSPECT, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceGitInspectSchema.parse(params)
+    return queryDaemon('/workspace/git/inspect', WorkspaceGitResponseSchema, {
+      method: 'POST',
+      body: input,
+      timeoutMs: 6500,
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_GIT_CANCEL, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const input = WorkspaceGitOperationSchema.parse(params)
+    return queryDaemon('/workspace/git/cancel', z.boolean(), { method: 'POST', body: input })
   })
 
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_SAVE_FILE, async (event, params) => {

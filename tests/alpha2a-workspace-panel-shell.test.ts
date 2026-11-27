@@ -25,8 +25,9 @@ test('Alpha.2A workspace tab definitions and keyboard navigation contract', () =
   )
   assert.equal(WORKSPACE_TABS[0].implemented, true)
   assert.equal(WORKSPACE_TABS[1].implemented, true)
-  for (const deferred of WORKSPACE_TABS.slice(2)) {
-    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2B`)
+  assert.equal(WORKSPACE_TABS[2].implemented, true)
+  for (const deferred of WORKSPACE_TABS.slice(3)) {
+    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2D.1`)
     assert.ok(deferred.milestone?.startsWith('Alpha.2'), `${deferred.id} must declare future milestone`)
   }
 
@@ -113,7 +114,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
 
     await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-active-tab="changes"]')
-    await page.waitForSelector('[data-testid="workspace-placeholder-changes"]')
+    await page.waitForSelector('[data-testid="workspace-git-changes"]')
 
     await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-active-tab="browser"]')

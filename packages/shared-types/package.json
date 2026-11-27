@@ -8,6 +8,7 @@
     "./discovery": "./discovery.ts",
     "./permissions": "./permissions.ts",
     "./workspace-discovery": "./workspace-discovery.ts",
+    "./workspace-git": "./workspace-git.ts",
     "./ipc": "./ipc.ts"
   },
   "dependencies": {

@@ -22,6 +22,8 @@
 
 - The shared discovery candidate is provisionally stacked on PR #21. Daemon IPC is tested. Agent 2 owns combined Electron acceptance, including PDF and selection-to-draft. Save, group filesystem access and Git mutation gates are unchanged.
 
+- Read-only Git Changes requires an isolated Linux runtime and an ordinary local repository at the granted root. Linked, redirected and oversized repositories fail closed. Packaging support awaits Alpha.3 verification.
+
 ## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.

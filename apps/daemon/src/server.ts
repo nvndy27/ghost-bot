@@ -86,6 +86,8 @@ import {
   UpdateSidebarOrganizationInputSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
+  WorkspaceGitInspectSchema,
+  WorkspaceGitOperationSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceReadFileIpcInputSchema,
   WorkspaceReadGrantSchema,
@@ -131,6 +133,7 @@ import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
 import { LOCAL_USER_ID } from './memory/service.ts'
 import { WorkspaceDiscoveryOperations } from './workspace/discovery-operations.ts'
+import { WorkspaceGitService } from './workspace/git-service.ts'
 import { WorkspaceFilesService } from './workspace/files-service.ts'
 
 export interface DaemonServerOptions {
@@ -217,6 +220,7 @@ export class GhostBotDaemon {
   private skillsService: LocalSkillsService | null = null
   private workspaceDiscovery: WorkspaceDiscoveryOperations | null = null
   private readonly workspaceReadGrants = new Map<string, { workspaceId: string; authGeneration: string }>()
+  private workspaceGitService: WorkspaceGitService | null = null
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
@@ -376,6 +380,10 @@ export class GhostBotDaemon {
     this.skillsService = new LocalSkillsService(dbHandle)
     this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
     this.workspaceDiscovery = new WorkspaceDiscoveryOperations(
+      this.workspaceFilesService,
+      (input) => this.requireDiscoveryGrant(input),
+    )
+    this.workspaceGitService = new WorkspaceGitService(
       this.workspaceFilesService,
       (input) => this.requireDiscoveryGrant(input),
     )
@@ -967,6 +975,8 @@ export class GhostBotDaemon {
     this.workspaceDiscovery?.abortAll()
     this.workspaceDiscovery = null
     this.workspaceReadGrants.clear()
+    this.workspaceGitService?.abortAll()
+    this.workspaceGitService = null
     if (this.terminalService) {
       await this.terminalService.shutdownAll()
       this.terminalService = null
@@ -1755,6 +1765,27 @@ export class GhostBotDaemon {
           label: parsed.data.label,
         })
         return
+      }
+
+      const workspaceGit = this.workspaceGitService
+      if (workspaceGit && req.method === 'POST') {
+        if (url.pathname === '/workspace/git/inspect') {
+          const input = await readWorkspaceRequest(req, WorkspaceGitInspectSchema)
+          const cancellation = new AbortController()
+          const onClose = () => cancellation.abort()
+          res.once('close', onClose)
+          try {
+            sendJson(res, 200, await workspaceGit.inspect(input, cancellation.signal))
+          } finally {
+            res.off('close', onClose)
+          }
+          return
+        }
+        if (url.pathname === '/workspace/git/cancel') {
+          const input = await readWorkspaceRequest(req, WorkspaceGitOperationSchema)
+          sendJson(res, 200, workspaceGit.cancel(input))
+          return
+        }
       }
 
       if (this.workspaceFilesService) {
