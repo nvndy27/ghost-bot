@@ -2,11 +2,11 @@
 
 ## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
 
-2026-11-27. Executed bounded 3-prompt opt-in live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on candidate `6779ab3` (`integration/alpha0-native-chat-rc`, PR #15) using the dedicated ChatGPT `plus` profile, `read-only` permission, and isolated temp dirs. See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).
+2026-11-27. Executed the finalized bounded 3-prompt live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on `22b3b16` (`integration/alpha0-native-chat-rc`, production baseline `6779ab3`, PR #15) using the dedicated ChatGPT `plus` profile (`gpt-6.2-sol`, `effort: low`, `read-only` permission, isolated temp dirs). See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).
 
 | State | Evidence |
 |---|---|
-| Tested | Verified `codex-cli 0.172.0` and dedicated ChatGPT profile (`$HOME/.config/ghost-bot/codex-profile`). Prompt 1 (`Reply with exactly ALPHA0_OK.`) completed (`runs[0].status = 'completed'`, `external_session_id` persisted); Prompt 2 cancellation executed; `app2` restart restored `ALPHA0_OK` and started Prompt 3 (`runs[2]`), which transitioned cleanly to `'interrupted'` when `app2.close()` ran before `Stop generation` mounted. Fixed the wait race in `scripts/verify-alpha0-live-codex.mjs` without exceeding the 3-prompt budget. |
+| Verified | **Live Codex `0.172.0` PASS (3/3 prompts)**: Prompt 1 (`run_afca03dc-...`) **`completed`** (`deltaEventCount: 4`, `ALPHA0_OK` assistant match, `inputTokens: 14992`, `outputTokens: 8`); Prompt 2 (`run_0dff4316-...`) **`cancelled`** (`stopClicked: true`, `terminalEvent: "run.cancelled"`, `usage: "unavailable"`); Electron+daemon restart preserved identical `externalSessionId` and `SessionRecord.accountId` (`accountBindingVerified: true`), and Prompt 3 (`run_490ca871-...`) **`completed`** (`deltaEventCount: 4`, `ALPHA0_OK` recalled, `inputTokens: 15098`, `outputTokens: 8`). IPC/SQLite run IDs matched, `workspaceIntact: true`, and runtime usage windows reported (`300m: 10%`, `10080m: 30%`). Agent 2 independent security & packaging sign-off on PR #15 remains pending. |
 
 ## Alpha.0B — Integrated Native Chat Release Candidate
 
