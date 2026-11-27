@@ -117,6 +117,11 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await setWidth(400)
     await page.getByTestId('workspace-tab-overview').click()
     await page.getByLabel('Team activity panel').waitFor()
+    const diagnostics = page.getByLabel('Team activity panel').locator('details')
+    await diagnostics.locator('summary').click()
+    await diagnostics.getByText('Concurrency limit', { exact: true }).waitFor()
+    await diagnostics.getByText('Uncertain', { exact: true }).waitFor()
+    await diagnostics.locator('summary').click()
     for (const theme of ['dark', 'light']) {
       await page.getByRole('button', { name: 'Open Settings' }).click()
       await page.getByLabel('Theme').selectOption(theme)
