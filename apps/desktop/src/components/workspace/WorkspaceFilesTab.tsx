@@ -64,10 +64,6 @@ export function WorkspaceFilesTab({
   const activeKeyRef = useRef<string | null>(null)
   useEffect(() => {
     activeKeyRef.current = contextKey
-  useEffect(() => {
-    activeKeyRef.current = contextKey
-    return () => { activeKeyRef.current = '' }
-  }, [contextKey])
     return () => {
       activeKeyRef.current = null
     }
@@ -373,10 +369,10 @@ export function WorkspaceFilesTab({
 
 
   async function requireCurrentAccess() {
-    if (!access || activeKeyRef.current !== contextKey) {
+    if (!transport || !access || activeKeyRef.current !== contextKey) {
       throw new Error('The originating workspace is no longer active.')
     }
-    const context = await transport!.resolveContext({ botId: access.botId })
+    const context = await transport.resolveContext({ botId: access.botId })
     const latest = store.getActiveWorkspaceState(contextKey)
     if (activeKeyRef.current !== contextKey || latest?.workspaceId !== access.workspaceId ||
         latest.contextInfo.authGeneration !== access.authGeneration) {
