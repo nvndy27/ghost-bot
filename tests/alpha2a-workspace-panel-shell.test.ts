@@ -24,8 +24,9 @@ test('Alpha.2A workspace tab definitions and keyboard navigation contract', () =
     ['overview', 'files', 'changes', 'browser', 'output'],
   )
   assert.equal(WORKSPACE_TABS[0].implemented, true)
-  for (const deferred of WORKSPACE_TABS.slice(1)) {
-    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2A`)
+  assert.equal(WORKSPACE_TABS[1].implemented, true)
+  for (const deferred of WORKSPACE_TABS.slice(2)) {
+    assert.equal(deferred.implemented, false, `${deferred.id} must remain unimplemented in Alpha.2B`)
     assert.ok(deferred.milestone?.startsWith('Alpha.2'), `${deferred.id} must declare future milestone`)
   }
 
@@ -106,8 +107,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.keyboard.press('ArrowRight')
     assert.equal(await shell.getAttribute('data-active-tab'), 'files')
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-testid')), 'workspace-tab-files')
-    await page.waitForSelector('[data-testid="workspace-placeholder-files"]')
-    assert.ok((await page.getByTestId('workspace-placeholder-files').innerText()).includes('Alpha.2B'))
+    await page.waitForSelector('[data-testid="workspace-files-unavailable"]')
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-files-placeholder-dark.png') })
 
     await page.keyboard.press('ArrowRight')

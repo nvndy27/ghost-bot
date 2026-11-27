@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { WorkspaceFilesTab } from './workspace/WorkspaceFilesTab.tsx'
+import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
 import { WorkspacePlaceholderTab } from './workspace/WorkspacePlaceholderTab.tsx'
 import {
   WORKSPACE_TABS,
@@ -12,12 +14,14 @@ export interface WorkspacePanelShellProps {
   contextKey: string
   contextLabel: string
   contextKind?: 'bot' | 'team'
+  ownerId?: string | null
   workspacePath?: string | null
   isMockMode: boolean
   activeTab?: WorkspaceTabId
   onTabChange?: (tab: WorkspaceTabId) => void
   onCollapse: () => void
   overviewContent: ReactNode
+  filesTransport?: WorkspaceFilesTransport | null
 }
 
 export function WorkspacePanelShell({
@@ -25,15 +29,18 @@ export function WorkspacePanelShell({
   contextKey,
   contextLabel,
   contextKind = 'bot',
+  ownerId = null,
   workspacePath,
   isMockMode,
   activeTab: controlledTab,
   onTabChange,
   onCollapse,
   overviewContent,
+  filesTransport,
 }: WorkspacePanelShellProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<WorkspaceTabId>('overview')
   const [maximized, setMaximized] = useState(false)
+  const [filesMounted, setFilesMounted] = useState(false)
   const tabRefs = useRef<Partial<Record<WorkspaceTabId, HTMLButtonElement | null>>>({})
   const maximizeBtnRef = useRef<HTMLButtonElement | null>(null)
   const baseId = useId()
@@ -46,6 +53,12 @@ export function WorkspacePanelShell({
   }, [contextKey, controlledTab])
 
   const activeTab = controlledTab ?? uncontrolledTab
+
+  useEffect(() => {
+    if (activeTab === 'files') {
+      setFilesMounted(true)
+    }
+  }, [activeTab])
 
   const selectTab = (nextTab: WorkspaceTabId) => {
     if (controlledTab === undefined) {
@@ -153,24 +166,47 @@ export function WorkspacePanelShell({
         })}
       </div>
 
-      <div
-        id={`${baseId}-panel-${activeTabDef.id}`}
-        role="tabpanel"
-        aria-labelledby={`${baseId}-tab-${activeTabDef.id}`}
-        className="gb-workspace-tabpanel"
-        data-testid={`workspace-tabpanel-${activeTabDef.id}`}
-      >
-        {activeTabDef.id === 'overview' ? (
-          overviewContent
-        ) : (
-          <WorkspacePlaceholderTab
-            tab={activeTabDef}
+      {activeTabDef.id !== 'files' && (
+        <div
+          id={`${baseId}-panel-${activeTabDef.id}`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-${activeTabDef.id}`}
+          className="gb-workspace-tabpanel"
+          data-testid={`workspace-tabpanel-${activeTabDef.id}`}
+        >
+          {activeTabDef.id === 'overview' ? (
+            overviewContent
+          ) : (
+            <WorkspacePlaceholderTab
+              tab={activeTabDef}
+              contextLabel={contextLabel}
+              workspacePath={workspacePath}
+              isMockMode={isMockMode}
+            />
+          )}
+        </div>
+      )}
+
+      {filesMounted && (
+        <div
+          id={`${baseId}-panel-files`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-files`}
+          className="gb-workspace-tabpanel"
+          data-testid="workspace-tabpanel-files"
+          hidden={activeTabDef.id !== 'files'}
+        >
+          <WorkspaceFilesTab
+            contextKey={contextKey}
+            contextKind={contextKind}
+            ownerId={ownerId}
             contextLabel={contextLabel}
             workspacePath={workspacePath}
             isMockMode={isMockMode}
+            transport={filesTransport}
           />
-        )}
-      </div>
+        </div>
+      )}
     </aside>
   )
 }
