@@ -1,3 +1,7 @@
+## Licensing and public source distribution
+
+- Original project code and documentation are being licensed under Apache-2.0. This does not license third-party dependencies, screenshots, or trademarks. The tracked files under `design/references/` require separate rights review and must not be redistributed without permission. Review dependency notices and packaged attributions, contributor rights, and Git history for secrets before public binary distribution. No full provenance or security audit was performed by the licensing change.
+
 ## Personal & Friends Alpha release risks (2026-11-27)
 
 - Stacked provider PRs #6–#13, docs PR #12, and Alpha.0A PR require controlled convergence before Alpha.0 release sign-off; live Teams/Autonomous/Computer Use gates remain enforced.
