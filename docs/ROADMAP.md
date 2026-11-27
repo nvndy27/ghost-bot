@@ -15,7 +15,7 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Gate: at least one verified live provider path remains functional; each advertised live provider/capability has matching evidence; unsupported paths fail closed with clear status; no unauthorized inference or billing.
 
 ### Alpha.1 — Group Bot & private task collaboration
-- **Not Started** — [Alpha.1B membership and routing contract](extensions/alpha1b-group-membership-model-routing-contract.md) awaits approval.
+- **Tested** — [Alpha.1B membership and routing](extensions/alpha1b-group-membership-model-routing-contract.md) supports scoped overrides and immutable offline routing. Other provider catalogs and live Teams remain gated.
 - **Tested** — Alpha.1A adds durable bot and group pinning, ordering and search, provider-only labels alongside existing avatars and names, personal conversation management and durable personal unread indicators. See [Alpha.1A evidence](extensions/alpha1a-bot-conversation-management.md). Group tasks and Private Task Chats remain in later milestones.
 - Group creation/editing: add/remove existing bots; default new groups 2–6 members, existing supported advanced cap 12, preserve legacy groups without destructive migration. Default concurrency 2 and automatic discussion 1–2 rounds; enforce daemon-side bounds and user-configurable token/time budgets within validated limits.
 - Group is discussion-first: user/bot messages, `@bot` and `@all`, independent answers and bounded replies/reflection. No direct filesystem edits, command execution, browser actions or other side-effecting tools in group discussion. Keep Chief of Staff/DAG/ledger functionality as a bounded advanced task/activity surface; do not remove established security controls.

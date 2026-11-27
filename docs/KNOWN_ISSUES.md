@@ -1,5 +1,9 @@
 ## Licensing and public source distribution
 
+## Alpha.1B routing limits
+
+- Routing catalogs expose the offline mock catalog or the active verified Codex subscription catalog. Other provider/account catalogs remain unavailable for team routing. Live Teams remains gated. The Codex catalog path has no live acceptance evidence.
+
 - Original project code and documentation are offered under MIT OR Apache-2.0, subject to copyright holders' authority. This does not license third-party dependencies, screenshots, or trademarks. The tracked files under `design/references/` require separate rights review and must not be redistributed without permission. Review dependency notices and packaged attributions, contributor rights, and Git history for secrets before public binary distribution. No full provenance or security audit was performed by the licensing change.
 
 ## Personal & Friends Alpha release risks (2026-11-27)

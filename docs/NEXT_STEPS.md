@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.1B and Alpha.1C
+
+Review the Alpha.1B draft against accepted main. Keep the approved Alpha.1C discussion feature on a separate branch with mock-only, tool-free execution; preserve advanced Teams runs as separate functionality.
+
 ## Open-source readiness follow-up
 
 - Review and merge the scoped readiness PR; confirm licensing authority for existing contributions and coordinate active Alpha branches.

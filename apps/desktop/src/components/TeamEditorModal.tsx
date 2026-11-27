@@ -268,6 +268,7 @@ export function TeamEditorModal({
 
           <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
             <span>Team members ({memberBotIds.length} selected)</span>
+            <small>2–6 members recommended. Advanced groups support up to 12.</small>
             <div
               style={{
                 display: 'grid',

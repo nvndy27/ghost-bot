@@ -11,6 +11,8 @@ export const IPC_CHANNELS = {
   BOTS_DELETE: 'ghost:bots:delete',
   BOTS_SET_ACTIVE: 'ghost:bots:set-active',
   AVATAR_IMPORT_SVG: 'ghost:avatar:import-svg',
+  TEAM_MEMBER_ROUTING_GET: 'ghost:teams:member-routing:get',
+  TEAM_MEMBER_ROUTING_SET: 'ghost:teams:member-routing:set',
   WORKSPACE_PICK: 'ghost:workspace:pick',
   WORKSPACE_AUTHORIZE_READ: 'ghost:workspace:authorize-read',
   WORKSPACE_RESOLVE_CONTEXT: 'ghost:workspace:resolve-context',
@@ -1417,6 +1419,39 @@ export const UpdateTeamMembersIpcInputSchema = z
   .strict()
 
 export const TeamIdParamSchema = z.object({ teamId: TeamIpcIdSchema }).strict()
+const RoutingValueSchema = z.string().trim().min(1).max(160)
+export const TeamMemberRoutingOverrideSchema = z.object({
+  runtimeId: RoutingValueSchema.optional(),
+  accountId: RoutingValueSchema.optional(),
+  modelId: RoutingValueSchema.optional(),
+  effort: RoutingValueSchema.optional(),
+}).strict()
+export const TeamMemberRoutingKeySchema = z.object({ teamId: TeamIpcIdSchema, botId: BotIdSchema }).strict()
+export const SetTeamMemberRoutingSchema = TeamMemberRoutingKeySchema.extend({
+  override: TeamMemberRoutingOverrideSchema.nullable(),
+})
+export const TeamMemberRoutingTupleSchema = z.object({
+  runtimeId: RoutingValueSchema,
+  accountId: RoutingValueSchema.nullable(),
+  modelId: RoutingValueSchema,
+  effort: RoutingValueSchema,
+})
+export const TeamMemberRoutingDtoSchema = z.object({
+  override: TeamMemberRoutingOverrideSchema.nullable(),
+  effective: TeamMemberRoutingTupleSchema,
+  revision: z.string(),
+  supported: z.boolean(),
+  catalogs: z.array(z.object({
+    runtimeId: RoutingValueSchema,
+    accountId: RoutingValueSchema,
+    models: z.array(RuntimeModelSummarySchema),
+  })),
+})
+export type TeamMemberRoutingOverride = z.infer<typeof TeamMemberRoutingOverrideSchema>
+export type TeamMemberRoutingKey = z.infer<typeof TeamMemberRoutingKeySchema>
+export type SetTeamMemberRouting = z.infer<typeof SetTeamMemberRoutingSchema>
+export type TeamMemberRoutingDto = z.infer<typeof TeamMemberRoutingDtoSchema>
+
 export const TeamRunIdParamSchema = z.object({ teamRunId: TeamIpcIdSchema }).strict()
 
 export const TeamPlanTaskInputSchema = z
@@ -2354,6 +2389,8 @@ export interface GhostBotBridge {
   setOpenRouterCredential(input: SetOpenRouterCredentialInput): Promise<OpenRouterStatusDto>
   deleteOpenRouterCredential(): Promise<OpenRouterStatusDto>
   setOpenRouterExecutionAuthorized(input: SetOpenRouterAuthInput): Promise<OpenRouterStatusDto>
+  getTeamMemberRouting(input: TeamMemberRoutingKey): Promise<TeamMemberRoutingDto>
+  setTeamMemberRouting(input: SetTeamMemberRouting): Promise<TeamMemberRoutingDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

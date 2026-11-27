@@ -1,5 +1,9 @@
 # Progress log
 
+## Alpha.1B — Group membership and model routing
+
+**Tested** on accepted main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`. Team-scoped settings validate daemon catalog choices without mutating bots. Membership edits prune overrides and require a retained lead. Offline dispatch snapshots effective routing and uses durable scoped child sessions. Lint, affected typechecks/build, focused tests 4/4, and two-launch offline Electron acceptance passed. Zero live inference.
+
 ## Shared baseline convergence
 
 **Tested** — Combined PR #20 and the independently read-only accepted PR #19 in a dedicated candidate. Lint, affected typechecks/builds, 7/7 focused tests and one two-launch offline Electron scenario passed. Agent 2 accepted the implementation at `78d0822` and requested targeted acceptance after bringing in current main. The reconciliation preserves both documentation histories and the newer main changes. See the [combined evidence](extensions/alpha-shared-convergence.md).

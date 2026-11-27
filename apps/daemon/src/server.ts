@@ -76,6 +76,8 @@ import {
   StartRunInputSchema,
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
+  TeamMemberRoutingKeySchema,
+  SetTeamMemberRoutingSchema,
   TeamRunIdParamSchema,
   TriggerRoutineIpcInputSchema,
   UpdateBotInputSchema,
@@ -109,6 +111,7 @@ import { SchedulerService } from './scheduler/service.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 import { SidebarOrganizationRepository } from './sidebar/repository.ts'
+import { TeamMemberRoutingService } from './teams/member-routing.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
@@ -201,6 +204,7 @@ export class GhostBotDaemon {
   private botRepo: BotRepository | null = null
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
+  private teamMemberRouting: TeamMemberRoutingService | null = null
   private sidebarRepo: SidebarOrganizationRepository | null = null
   private memoryService: MemoryService | null = null
   private knowledgeService: KnowledgeService | null = null
@@ -325,7 +329,13 @@ export class GhostBotDaemon {
         this.buildProviderPolicyInput(runtimeId, permission, canonicalWorkspace),
     })
     this.runOrchestrator.reconcileOnStartup()
+    const memberRouting = new TeamMemberRoutingService(
+      dbHandle, this.botRepo, () => this.runtimeRegistry.getTeamRoutingCatalogs(),
+    )
+    this.teamMemberRouting = memberRouting
     const teamsBridge = new TeamsExecutionBridge({
+      memberRouting,
+      getRuntimeGeneration: () => this.runtimeRegistry.getGeneration(),
       dbHandle,
       botRepo: this.botRepo,
       sessionRepo: this.sessionRepo,
@@ -968,6 +978,7 @@ export class GhostBotDaemon {
     this.botRepo = null
     this.settingsRepo = null
     this.sessionRepo = null
+    this.teamMemberRouting = null
     this.workspaceReadGrants.clear()
     this.workspaceFilesService = null
     if (this.memoryService) {
@@ -2535,6 +2546,21 @@ export class GhostBotDaemon {
 
       if (this.teamsService) {
         const teamsService = this.teamsService
+
+        if (req.method === 'POST' && this.teamMemberRouting &&
+            (url.pathname === '/teams/member-routing/get' || url.pathname === '/teams/member-routing/set')) {
+          const body = await readJsonBody(req)
+          if (url.pathname.endsWith('/get')) {
+            const input = TeamMemberRoutingKeySchema.safeParse(body)
+            if (!input.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid member routing key', { statusCode: 400 })
+            sendJson(res, 200, await this.teamMemberRouting.get(input.data))
+          } else {
+            const input = SetTeamMemberRoutingSchema.safeParse(body)
+            if (!input.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid member routing override', { statusCode: 400 })
+            sendJson(res, 200, await this.teamMemberRouting.set(input.data))
+          }
+          return
+        }
 
         if (req.method === 'GET' && url.pathname === '/teams') {
           const parsed = ListTeamsInputSchema.safeParse({

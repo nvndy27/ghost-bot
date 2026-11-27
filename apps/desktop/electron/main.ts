@@ -34,6 +34,9 @@ import {
   PreviewTeamPlanIpcInputSchema,
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
+  TeamMemberRoutingKeySchema,
+  TeamMemberRoutingDtoSchema,
+  SetTeamMemberRoutingSchema,
   TeamRecordDtoSchema,
   TeamRunIdParamSchema,
   TeamPlanPreviewDtoSchema,
@@ -1477,6 +1480,22 @@ function registerIpcHandlers(): void {
     }
     checkShape(raw, 0)
   }
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_MEMBER_ROUTING_GET, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/member-routing/get', TeamMemberRoutingDtoSchema, {
+      method: 'POST',
+      body: TeamMemberRoutingKeySchema.parse(input),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_MEMBER_ROUTING_SET, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/member-routing/set', TeamMemberRoutingDtoSchema, {
+      method: 'POST',
+      body: SetTeamMemberRoutingSchema.parse(input),
+    })
+  })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_LIST, async (event, params) => {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')

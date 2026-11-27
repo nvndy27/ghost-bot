@@ -21,6 +21,7 @@ import {
   type TeamTaskPlanner,
   type TeamTaskRecord,
 } from '@ghost-bot/teams'
+import { clearRemovedMemberRouting } from './member-routing.ts'
 import type { BotRepository } from '../bots/repository.ts'
 import type { DatabaseHandle } from '../db/client.ts'
 import { DaemonError } from '../errors.ts'
@@ -151,6 +152,9 @@ export class TeamsService {
         throw new DaemonError('TEAM_ARCHIVED', 'Cannot update an archived team', { statusCode: 409 })
       }
       const nextLead = input.leadBotId ?? existing.leadBotId
+      if (input.memberBotIds && !input.memberBotIds.includes(nextLead)) {
+        throw new DaemonError('TEAM_LEAD_REQUIRED', 'Select a lead from the retained team members', { statusCode: 400 })
+      }
       const nextMembers = new Set<string>([nextLead, ...(input.memberBotIds ?? existing.memberBotIds)])
       this.assertValidBots(nextLead, [...nextMembers])
 
@@ -181,6 +185,7 @@ export class TeamsService {
             existing.id,
           )
         this.syncPhase1cTeamMembers(existing.id, nextLead, [...nextMembers])
+        clearRemovedMemberRouting(this.dbHandle, existing.id, existing.memberBotIds, [...nextMembers])
         return this.repository.getTeam(existing.id, LOCAL_USER_ID)
       })
     } catch (err) {
@@ -191,10 +196,14 @@ export class TeamsService {
   updateTeamMembers(teamId: string, memberBotIds: string[]): TeamRecord {
     try {
       const existing = this.repository.getTeam(teamId, LOCAL_USER_ID)
+      if (!memberBotIds.includes(existing.leadBotId)) {
+        throw new DaemonError('TEAM_LEAD_REQUIRED', 'Choose a replacement lead before removing the current lead', { statusCode: 400 })
+      }
       this.assertValidBots(existing.leadBotId, memberBotIds)
       return this.repository.getDatabase().transaction(() => {
         const updated = this.repository.updateTeamMembers(teamId, LOCAL_USER_ID, memberBotIds)
         this.syncPhase1cTeamMembers(updated.id, updated.leadBotId, updated.memberBotIds)
+        clearRemovedMemberRouting(this.dbHandle, existing.id, existing.memberBotIds, updated.memberBotIds)
         return updated
       })
     } catch (err) {

@@ -1,3 +1,4 @@
+import { TeamMemberRouting } from './TeamMemberRouting.tsx'
 import { useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
@@ -190,6 +191,7 @@ export function TeamWorkspaceView({
 
       <div className="gb-messages" style={{ flex: 1, overflowY: 'auto' }}>
         <div className="gb-messages-inner" style={{ display: 'grid', gap: 12 }}>
+          <TeamMemberRouting key={team.id} team={team} bots={bots} />
           {runError && (
             <div
               role="alert"
