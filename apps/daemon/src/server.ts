@@ -83,6 +83,7 @@ import {
   UpdateMcpServerIpcInputSchema,
   UpdateMemoryIpcInputSchema,
   UpdateRoutineIpcInputSchema,
+  UpdateSidebarOrganizationInputSchema,
   UpdateTeamIpcInputSchema,
   UpdateTeamMembersIpcInputSchema,
 } from '@ghost-bot/shared-types/ipc'
@@ -103,6 +104,7 @@ import { DaemonRoutineDispatcher } from './scheduler/execution-bridge.ts'
 import { SchedulerService } from './scheduler/service.ts'
 import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
+import { SidebarOrganizationRepository } from './sidebar/repository.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
 import { ComputerUseService } from './computer-use/service.ts'
@@ -186,6 +188,7 @@ export class GhostBotDaemon {
   private botRepo: BotRepository | null = null
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
+  private sidebarRepo: SidebarOrganizationRepository | null = null
   private memoryService: MemoryService | null = null
   private knowledgeService: KnowledgeService | null = null
   private mcpService: McpService | null = null
@@ -286,6 +289,7 @@ export class GhostBotDaemon {
     this.botRepo = new BotRepository(dbHandle)
     this.settingsRepo = new SettingsRepository(dbHandle)
     this.sessionRepo = new SessionRepository(dbHandle)
+    this.sidebarRepo = new SidebarOrganizationRepository(dbHandle)
     this.memoryService = new MemoryService(dbHandle, this.settingsRepo)
     this.knowledgeService = new KnowledgeService(dbHandle, this.settingsRepo)
     const policyBroker = new RuntimePolicyBroker()
@@ -1638,6 +1642,8 @@ export class GhostBotDaemon {
             onArchiveBot: (botId, now) => {
               this.memoryService?.archiveMemoriesForBotInTx(botId, now)
               this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
+              this.sidebarRepo?.pruneBotInTx(botId, now)
+              this.sessionRepo?.pruneReadStateForBotInTx(botId, now)
               if (this.mcpService) {
                 archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
               }
@@ -1662,6 +1668,26 @@ export class GhostBotDaemon {
         }
         sendJson(res, 200, repo.setActiveBot(parsed.data.id))
         return
+      }
+
+      if (this.sidebarRepo) {
+        if (req.method === 'GET' && url.pathname === '/sidebar/organization') {
+          sendJson(res, 200, this.sidebarRepo.getOrganization())
+          return
+        }
+        if (req.method === 'PUT' && url.pathname === '/sidebar/organization') {
+          const body = await readJsonBody(req)
+          const parsed = UpdateSidebarOrganizationInputSchema.safeParse(body)
+          if (!parsed.success) {
+            throw new DaemonError(
+              'VALIDATION_ERROR',
+              parsed.error.issues[0]?.message ?? 'Invalid sidebar organization payload',
+              { statusCode: 400 },
+            )
+          }
+          sendJson(res, 200, this.sidebarRepo.updateOrganization(parsed.data))
+          return
+        }
       }
 
       if (req.method === 'POST' && url.pathname === '/avatars/import-svg') {
@@ -1756,6 +1782,18 @@ export class GhostBotDaemon {
             })
           }
           sendJson(res, 200, sessionRepo.archiveSession(idCheck.data))
+          return
+        }
+
+        const sessionReadMatch = /^\/sessions\/([^/]+)\/read$/.exec(url.pathname)
+        if (req.method === 'POST' && sessionReadMatch) {
+          const idCheck = SessionIdSchema.safeParse(decodeURIComponent(sessionReadMatch[1]))
+          if (!idCheck.success) {
+            throw new DaemonError('VALIDATION_ERROR', 'Invalid session identifier', {
+              statusCode: 400,
+            })
+          }
+          sendJson(res, 200, sessionRepo.markSessionRead(idCheck.data))
           return
         }
 
@@ -2442,7 +2480,9 @@ export class GhostBotDaemon {
             return
           }
           if (action === 'archive' && req.method === 'POST') {
-            sendJson(res, 200, teamsService.archiveTeam(idCheck.data.teamId))
+            const archived = teamsService.archiveTeam(idCheck.data.teamId)
+            this.sidebarRepo?.pruneTeam(idCheck.data.teamId)
+            sendJson(res, 200, archived)
             return
           }
           if (action === 'preview' && req.method === 'POST') {

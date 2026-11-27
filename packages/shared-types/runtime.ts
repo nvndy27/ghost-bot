@@ -51,3 +51,22 @@ export interface RuntimeEventV1 {
   timestamp: string;
   payload: EventPayload;
 }
+
+export const RUNTIME_PROVIDER_LABELS: Readonly<Record<string, string>> = {
+  codex: 'Codex',
+  'claude-api': 'Claude',
+  'gemini-api': 'Gemini',
+  ollama: 'Ollama',
+  openclaw: 'OpenClaw',
+  'kimi-acp': 'Kimi',
+  lmstudio: 'LM Studio',
+  llamacpp: 'llama.cpp',
+  openrouter: 'OpenRouter',
+  'mock-offline': 'Mock',
+  mock: 'Mock',
+};
+
+export function formatProviderLabel(runtimeId: string | null | undefined): string {
+  if (!runtimeId) return 'Mock';
+  return RUNTIME_PROVIDER_LABELS[runtimeId] ?? runtimeId;
+}

@@ -20,6 +20,9 @@ export interface SessionRecord {
   lastMessagePreview?: string
   activeRunId?: string | null
   activeRunStatus?: RunStatus | null
+  unread?: boolean
+  lastCompletedRunStatus?: RunStatus | null
+  lastReadAt?: string | null
 }
 
 export interface PersistedMessage {
@@ -60,6 +63,14 @@ interface RawMessageRow {
 }
 
 const ACTIVE_SESSION_BY_BOT_KEY = 'ui.activeSessionByBot.v1'
+const SESSION_READ_AT_KEY = 'ui.sessionReadAt.v1'
+const COMPLETED_OR_ATTENTION_RUN_STATUSES = new Set<RunStatus>([
+  'completed',
+  'failed',
+  'interrupted',
+  'cancelled',
+  'awaiting_approval',
+])
 
 function parseMessageContent(contentJson: string): { text: string; meta?: Record<string, unknown> } {
   try {
@@ -149,10 +160,10 @@ export class SessionRepository {
     return { id: row.id, runtimeId: row.runtime_id }
   }
 
-  private readActiveSessionMap(): Record<string, string> {
+  private readSettingsStringMap(key: string): Record<string, string> {
     const row = this.dbHandle.sqlite
       .prepare('SELECT value_json FROM settings WHERE key = ?')
-      .get(ACTIVE_SESSION_BY_BOT_KEY) as { value_json: string } | undefined
+      .get(key) as { value_json: string } | undefined
 
     if (!row) return {}
     try {
@@ -172,15 +183,80 @@ export class SessionRepository {
     return {}
   }
 
-  private writeActiveSessionMap(map: Record<string, string>): void {
-    const now = new Date().toISOString()
+  private writeSettingsStringMap(key: string, map: Record<string, string>, now = new Date().toISOString()): void {
     this.dbHandle.sqlite
       .prepare(
         `INSERT INTO settings (key, value_json, updated_at)
          VALUES (?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
       )
-      .run(ACTIVE_SESSION_BY_BOT_KEY, JSON.stringify(map), now)
+      .run(key, JSON.stringify(map), now)
+  }
+
+  private readActiveSessionMap(): Record<string, string> {
+    return this.readSettingsStringMap(ACTIVE_SESSION_BY_BOT_KEY)
+  }
+
+  private writeActiveSessionMap(map: Record<string, string>): void {
+    this.writeSettingsStringMap(ACTIVE_SESSION_BY_BOT_KEY, map)
+  }
+
+  private readSessionReadAtMap(): Record<string, string> {
+    return this.readSettingsStringMap(SESSION_READ_AT_KEY)
+  }
+
+  private writeSessionReadAtMap(map: Record<string, string>, now?: string): void {
+    this.writeSettingsStringMap(SESSION_READ_AT_KEY, map, now)
+  }
+
+  private enrichSessionIndicatorFields(
+    session: SessionRecord,
+    readAtMap: Record<string, string>,
+  ): SessionRecord {
+    const lastRun = this.dbHandle.sqlite
+      .prepare(
+        `SELECT id, status, ended_at, created_at
+         FROM runs
+         WHERE session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(session.id) as
+      | { id: string; status: RunStatus; ended_at: string | null; created_at: string }
+      | undefined
+
+    const lastCompletedRunStatus =
+      lastRun && COMPLETED_OR_ATTENTION_RUN_STATUSES.has(lastRun.status) ? lastRun.status : null
+
+    const lastAssistantMsg = this.dbHandle.sqlite
+      .prepare(
+        `SELECT created_at
+         FROM messages
+         WHERE session_id = ? AND role != 'user'
+         ORDER BY seq_order DESC, created_at DESC
+         LIMIT 1`,
+      )
+      .get(session.id) as { created_at: string } | undefined
+
+    const runActivityAt =
+      lastRun && COMPLETED_OR_ATTENTION_RUN_STATUSES.has(lastRun.status)
+        ? (lastRun.ended_at ?? lastRun.created_at)
+        : null
+    const msgActivityAt = lastAssistantMsg?.created_at ?? null
+    const latestActivityAt =
+      runActivityAt && msgActivityAt
+        ? runActivityAt > msgActivityAt
+          ? runActivityAt
+          : msgActivityAt
+        : (runActivityAt ?? msgActivityAt)
+
+    const lastReadAt = readAtMap[session.id] ?? null
+    const unread = Boolean(latestActivityAt && (!lastReadAt || latestActivityAt > lastReadAt))
+
+    session.lastCompletedRunStatus = lastCompletedRunStatus
+    session.lastReadAt = lastReadAt
+    session.unread = unread
+    return session
   }
 
   getActiveSessionId(agentId: string): string | null {
@@ -223,8 +299,50 @@ export class SessionRepository {
 
       map[agentId] = sessionId
       this.writeActiveSessionMap(map)
+      const readAtMap = this.readSessionReadAtMap()
+      readAtMap[sessionId] = new Date().toISOString()
+      this.writeSessionReadAtMap(readAtMap)
       return { agentId, activeSessionId: sessionId }
     })
+  }
+
+  markSessionRead(sessionId: string): { sessionId: string; lastReadAt: string } {
+    const existing = this.getSession(sessionId)
+    if (existing.archivedAt !== null) {
+      throw new DaemonError('SESSION_ARCHIVED', 'Cannot mark an archived session as read', {
+        statusCode: 409,
+      })
+    }
+    const now = new Date().toISOString()
+    return this.dbHandle.transaction(() => {
+      const readAtMap = this.readSessionReadAtMap()
+      readAtMap[sessionId] = now
+      this.writeSessionReadAtMap(readAtMap, now)
+      return { sessionId, lastReadAt: now }
+    })
+  }
+
+  pruneReadStateForBotInTx(agentId: string, now: string): void {
+    const sessionRows = this.dbHandle.sqlite
+      .prepare('SELECT id FROM sessions WHERE agent_id = ?')
+      .all(agentId) as Array<{ id: string }>
+    const activeMap = this.readActiveSessionMap()
+    if (activeMap[agentId]) {
+      delete activeMap[agentId]
+      this.writeSettingsStringMap(ACTIVE_SESSION_BY_BOT_KEY, activeMap, now)
+    }
+    if (sessionRows.length === 0) return
+    const readAtMap = this.readSessionReadAtMap()
+    let changed = false
+    for (const row of sessionRows) {
+      if (readAtMap[row.id]) {
+        delete readAtMap[row.id]
+        changed = true
+      }
+    }
+    if (changed) {
+      this.writeSessionReadAtMap(readAtMap, now)
+    }
   }
 
   listSessions(
@@ -257,6 +375,7 @@ export class SessionRepository {
       .all(agentId, limit, offset) as unknown as RawSessionRow[]
 
     const activePlaceholders = ACTIVE_RUN_STATUSES.map(() => '?').join(', ')
+    const readAtMap = this.readSessionReadAtMap()
     const sessions: SessionRecord[] = rows.map((row) => {
       const session = rowToSession(row)
       const lastMsg = this.dbHandle.sqlite
@@ -276,7 +395,7 @@ export class SessionRepository {
         .get(row.id, ...ACTIVE_RUN_STATUSES) as { id: string; status: RunStatus } | undefined
       session.activeRunId = activeRun?.id ?? null
       session.activeRunStatus = activeRun?.status ?? null
-      return session
+      return this.enrichSessionIndicatorFields(session, readAtMap)
     })
 
     return {
@@ -304,6 +423,9 @@ export class SessionRepository {
       const map = this.readActiveSessionMap()
       map[bot.id] = id
       this.writeActiveSessionMap(map)
+      const readAtMap = this.readSessionReadAtMap()
+      readAtMap[id] = now
+      this.writeSessionReadAtMap(readAtMap, now)
 
       return {
         id,
@@ -317,6 +439,9 @@ export class SessionRepository {
         archivedAt: null,
         activeRunId: null,
         activeRunStatus: null,
+        unread: false,
+        lastCompletedRunStatus: null,
+        lastReadAt: now,
       }
     })
   }
@@ -345,7 +470,7 @@ export class SessionRepository {
       .get(row.id, ...ACTIVE_RUN_STATUSES) as { id: string; status: RunStatus } | undefined
     session.activeRunId = activeRun?.id ?? null
     session.activeRunStatus = activeRun?.status ?? null
-    return session
+    return this.enrichSessionIndicatorFields(session, this.readSessionReadAtMap())
   }
 
   renameSession(sessionId: string, title: string): SessionRecord {
@@ -418,6 +543,12 @@ export class SessionRepository {
           delete map[existing.agentId]
         }
         this.writeActiveSessionMap(map)
+      }
+
+      const readAtMap = this.readSessionReadAtMap()
+      if (readAtMap[sessionId]) {
+        delete readAtMap[sessionId]
+        this.writeSessionReadAtMap(readAtMap, now)
       }
 
       return {

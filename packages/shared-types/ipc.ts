@@ -22,6 +22,9 @@ export const IPC_CHANNELS = {
   SESSIONS_RENAME: 'ghost:sessions:rename',
   SESSIONS_ARCHIVE: 'ghost:sessions:archive',
   SESSIONS_SET_ACTIVE: 'ghost:sessions:set-active',
+  SESSIONS_MARK_READ: 'ghost:sessions:mark-read',
+  SIDEBAR_GET_ORGANIZATION: 'ghost:sidebar:get-organization',
+  SIDEBAR_UPDATE_ORGANIZATION: 'ghost:sidebar:update-organization',
   MESSAGES_LIST: 'ghost:messages:list',
   RUNS_START: 'ghost:runs:start',
   RUNS_GET: 'ghost:runs:get',
@@ -502,9 +505,39 @@ export const SessionRecordSchema = z.object({
   lastMessagePreview: z.string().optional(),
   activeRunId: RunIdSchema.nullable().optional(),
   activeRunStatus: RunStatusSchema.nullable().optional(),
+  unread: z.boolean().optional(),
+  lastCompletedRunStatus: RunStatusSchema.nullable().optional(),
+  lastReadAt: z.string().nullable().optional(),
 })
 
 export type SessionRecord = z.infer<typeof SessionRecordSchema>
+
+export const MarkSessionReadResponseSchema = z.object({
+  sessionId: SessionIdSchema,
+  lastReadAt: z.string().min(1),
+})
+
+export type MarkSessionReadResponse = z.infer<typeof MarkSessionReadResponseSchema>
+
+export const SidebarOrganizationSchema = z.object({
+  pinnedBotIds: z.array(BotIdSchema).default([]),
+  botOrder: z.array(BotIdSchema).default([]),
+  pinnedTeamIds: z.array(z.string().min(1).max(128)).default([]),
+  teamOrder: z.array(z.string().min(1).max(128)).default([]),
+})
+
+export type SidebarOrganization = z.infer<typeof SidebarOrganizationSchema>
+
+export const UpdateSidebarOrganizationInputSchema = z
+  .object({
+    pinnedBotIds: z.array(BotIdSchema).max(500).optional(),
+    botOrder: z.array(BotIdSchema).max(500).optional(),
+    pinnedTeamIds: z.array(z.string().min(1).max(128)).max(500).optional(),
+    teamOrder: z.array(z.string().min(1).max(128)).max(500).optional(),
+  })
+  .strict()
+
+export type UpdateSidebarOrganizationInput = z.infer<typeof UpdateSidebarOrganizationInputSchema>
 
 export const ListSessionsParamsSchema = z
   .object({
@@ -2108,6 +2141,9 @@ export interface GhostBotBridge {
   renameSession(input: RenameSessionInput): Promise<SessionRecord>
   archiveSession(sessionId: string): Promise<{ archivedId: string; activeSessionId: string | null }>
   setActiveSession(input: SetActiveSessionInput): Promise<{ agentId: string; activeSessionId: string | null }>
+  markSessionRead(sessionId: string): Promise<MarkSessionReadResponse>
+  getSidebarOrganization(): Promise<SidebarOrganization>
+  updateSidebarOrganization(input: UpdateSidebarOrganizationInput): Promise<SidebarOrganization>
   listMessages(params: { sessionId: string; limit?: number; offset?: number }): Promise<MessagesListResponse>
   startRun(input: StartRunInput): Promise<StartRunResponse>
   getRun(runId: string): Promise<RunRecord>

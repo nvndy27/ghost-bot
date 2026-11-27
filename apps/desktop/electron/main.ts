@@ -63,6 +63,8 @@ import {
   RoutineDiagnosticsDtoSchema,
   RoutineSimulationDtoSchema,
   RoutineStatsDtoSchema,
+  SidebarOrganizationSchema,
+  UpdateSidebarOrganizationInputSchema,
   RoutineImportPreviewDtoSchema,
   RoutineImportCommitDtoSchema,
   RoutineExportBundleDtoSchema,
@@ -593,6 +595,30 @@ function registerIpcHandlers(): void {
       z.object({ agentId: BotIdSchema, activeSessionId: SessionIdSchema.nullable() }),
       { method: 'PUT', body: parsed },
     )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SESSIONS_MARK_READ, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { sessionId } = SessionIdParamsSchema.parse(params)
+    return queryDaemon(
+      `/sessions/${encodeURIComponent(sessionId)}/read`,
+      z.object({ sessionId: SessionIdSchema, lastReadAt: z.string().min(1) }),
+      { method: 'POST' },
+    )
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SIDEBAR_GET_ORGANIZATION, async (event) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/sidebar/organization', SidebarOrganizationSchema)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SIDEBAR_UPDATE_ORGANIZATION, async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = UpdateSidebarOrganizationInputSchema.parse(params)
+    return queryDaemon('/sidebar/organization', SidebarOrganizationSchema, {
+      method: 'PUT',
+      body: parsed,
+    })
   })
 
   ipcMain.handle(IPC_CHANNELS.MESSAGES_LIST, async (event, params) => {
