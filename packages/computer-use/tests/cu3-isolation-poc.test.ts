@@ -40,7 +40,7 @@ describe('CU.3 OS Isolation, Chromium Sandbox & Weston PoC', () => {
   it('enforces filesystem, network, and desktop socket containment inside unprivileged bwrap', async () => {
     const runner = new BubblewrapIsolationRunner()
     const caps = await runner.probeCapabilities()
-    assert.equal(caps.bubblewrapAvailable, true)
+    assert.equal(caps.bubblewrapAvailable, true, caps.notes.join('\n'))
     assert.equal(caps.networkNamespaceSupported, true)
     assert.equal(caps.hostWaylandExposed, false)
     assert.equal(caps.hostHomeExposed, false)

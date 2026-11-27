@@ -1,8 +1,9 @@
 Ghost Bot
 Copyright 2026 Ghost Bot contributors
 
-Original Ghost Bot project code and documentation are licensed under the Apache
-License, Version 2.0. See LICENSE.
+Original Ghost Bot project code and documentation are offered under either
+MIT (LICENSE-MIT) or Apache License, Version 2.0 (LICENSE), at your option.
+SPDX-License-Identifier: MIT OR Apache-2.0
 
 This license applies only to material that the project's copyright holders
 have authority to license. Third-party dependencies and materials retain

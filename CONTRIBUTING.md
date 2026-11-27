@@ -1,7 +1,7 @@
 # Contributing to Ghost Bot
 
 Ghost Bot is an early-stage local-first AI workspace. Contributions to its
-Apache-2.0-licensed code and documentation are welcome.
+dual-licensed code and documentation are welcome.
 
 - Read [AGENTS.md](AGENTS.md), [roadmap](docs/ROADMAP.md), and
   [next steps](docs/NEXT_STEPS.md) before proposing a change.
@@ -13,11 +13,14 @@ Apache-2.0-licensed code and documentation are welcome.
 - Run the relevant offline lint, typecheck, build and tests described in
   [README.md](README.md) and [test plan](docs/TEST_PLAN.md); report actual
   results and limitations.
-- Submit only material that you are entitled to contribute under Apache-2.0.
+- Submit only material that you are entitled to contribute under both MIT and Apache-2.0.
   Disclose third-party material and preserve its applicable licenses and
   notices. Do not include secrets or unlicensed reference assets.
-- Contributions intentionally submitted for inclusion are governed by
-  Section 5 of the [Apache License 2.0](LICENSE), unless explicitly stated
-  otherwise in accordance with that license.
+- By intentionally submitting an original contribution for inclusion, you
+  agree to license it under both [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE)
+  so recipients may select either license, unless explicitly agreed otherwise
+  with maintainers before inclusion. Preserve third-party license terms.
 
 For security vulnerabilities, follow [SECURITY.md](SECURITY.md).
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).

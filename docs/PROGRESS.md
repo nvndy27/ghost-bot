@@ -1,5 +1,9 @@
 # Progress log
 
+## Open-source readiness — dual license and CI
+
+Owner approved MIT OR Apache-2.0 and repository health automation. Added MIT text, dual-license metadata and contributor terms, CI, CodeQL, Dependabot, OpenSSF Scorecard, SPDX dependency-graph SBOM export and community templates. First workflow results pending; no certification or test pass is claimed. Existing milestones unchanged.
+
 ## Repository licensing — Apache-2.0 (2026-11-27)
 
 Owner selected Apache License 2.0 for original Ghost Bot code and documentation. This change adds the standard license text from GitHub's Choose a License template, a scoped NOTICE, license metadata, contribution/security reporting guidance and public-repository README corrections. No runtime code, dependencies, migrations or feature gates changed. Documentation/metadata change only; application tests and live inference not run. Third-party dependency and reference-asset rights review and secret/history review remain open; public repository visibility is not a release-acceptance result.

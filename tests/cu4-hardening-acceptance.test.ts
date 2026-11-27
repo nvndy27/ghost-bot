@@ -341,9 +341,29 @@ describe('CU4-RUN-01 & CU4-PKG-03: Hardening Acceptance Regression', () => {
       assert.equal(stopRes.status, 200)
       assert.equal(stopRes.json.confirmed, true)
     } finally {
-      child.kill('SIGTERM')
-      await new Promise((r) => child.once('exit', r))
-      rmSync(dir, { recursive: true, force: true })
+      try {
+        // The process may already have exited during startup (e.g. missing bundle).
+        // Register before signalling and bound cleanup even if termination stalls.
+        if (child.exitCode === null && child.signalCode === null) {
+          await new Promise<void>((resolveStop, rejectStop) => {
+            const onExit = () => {
+              clearTimeout(forceTimer)
+              clearTimeout(deadline)
+              resolveStop()
+            }
+            const forceTimer = setTimeout(() => child.kill('SIGKILL'), 3_000)
+            const deadline = setTimeout(() => {
+              child.removeListener('exit', onExit)
+              clearTimeout(forceTimer)
+              rejectStop(new Error('Packaged daemon did not exit during test cleanup'))
+            }, 6_000)
+            child.once('exit', onExit)
+            child.kill('SIGTERM')
+          })
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     }
   })
 })

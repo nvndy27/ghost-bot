@@ -1,6 +1,17 @@
 # Ghost Bot
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
+![Status: Alpha development](https://img.shields.io/badge/status-alpha%20development-orange)
+![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)
+![Architecture: Local-first](https://img.shields.io/badge/architecture-local--first-green)
+
+[![CI](https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nvndy27/ghost-bot/badge)](https://scorecard.dev/viewer/?uri=github.com/nvndy27/ghost-bot)
+
+Workflow badges reflect actual status, not certification. See [Open-source readiness](docs/OPEN_SOURCE_READINESS.md) for SBOM and remaining checks.
 
 **Your AI team, in one local-first workspace.**
 
@@ -154,6 +165,6 @@ Coding agents and contributors should read [AGENTS.md](AGENTS.md), [CLAUDE.md](C
 
 ## License and privacy
 
-Ghost Bot's original project code and documentation are licensed under the [Apache License 2.0](LICENSE) (SPDX: `Apache-2.0`). See [NOTICE](NOTICE) for attribution and scope. Third-party material retains its own terms; reference screenshots under `design/references/` are not licensed by Ghost Bot and must not be redistributed without the applicable rights. The license does not grant rights to third-party trademarks or provider services. Dependency, asset-rights and secret/history review remain required before distributing release artifacts.
+Ghost Bot's original project code and documentation are dual-licensed under the [MIT License](LICENSE-MIT) **or** [Apache License 2.0](LICENSE), at your option (SPDX: `MIT OR Apache-2.0`). See [NOTICE](NOTICE) for attribution and scope. Third-party material retains its own terms; reference screenshots under `design/references/` are not licensed by Ghost Bot and must not be redistributed without the applicable rights. The license does not grant rights to third-party trademarks or provider services. Dependency, asset-rights and secret/history review remain required before distributing release artifacts.
 
 Local-first does not mean fully offline: external provider requests send necessary context to the selected service, subject to permissions and consent. Local models can be used where the runtime supports them. No central Ghost Bot service is required by the planned first release.
