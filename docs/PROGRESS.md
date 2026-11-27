@@ -1,5 +1,13 @@
 # Progress log
 
+## Alpha.3 hosted isolation and Output handoff
+
+Hosted PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541` reproduced the Computer Use Chrome SUID helper abort while passing Workspace. CI returns to the known-good Jammy runner with a checksum-pinned Bubblewrap 0.13.1 build and distinct namespace preflights. The runtime launches, containment tests and Chromium sandbox requirements stay in force.
+
+The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The exact hosted check remains required.
+
+Personal Workspace Output now excludes marked private-task sessions and legacy linked team sessions for listing and cancellation. Focused output module and Electron checks passed. The same targeted scenario passed in a rebuilt Fedora AppImage, including Linux sandbox checks and mock daemon restart. This evidence applies to the Workspace branch. See [cause, validation and unified handoff](extensions/alpha2g-workspace-convergence.md#alpha3-hosted-isolation-remediation).
+
 ## Alpha.2G Workspace convergence
 
 **Tested** on the provisional `integration/alpha2g-workspace` stack. Main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f` and PRs #33, #35, #36, #39, and #43 are preserved by ancestry. Fixed Output cancellation wiring and polling, protected output state across context switches, and updated the shell and discovery tests for the integrated surface. CI targets Ubuntu 24.04 with the required Bubblewrap and Poppler behavior. The six Alpha.3 Workspace scenarios now accept a real packaged executable and assert Linux renderer sandboxing, offline daemon startup and mock runtime availability. See [evidence and commands](extensions/alpha2g-workspace-convergence.md).

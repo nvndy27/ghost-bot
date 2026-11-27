@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.3 combined acceptance
+
+Integrate current PR #45 with PR #44 while retaining both histories. Resolve daemon shutdown ownership and make Private Task Chat an explicit right-panel and draft context. Once Agent 1 publishes the combined SHA, run targeted group/avatar, workspace scope, cancellation, restart and package checks from that exact tree. Check the hosted Ubuntu isolation run for the integrated head and use the existing Alpha.3 package harness on newly built artifacts.
+
 ## Alpha.2G to Alpha.3 handoff
 
 Review the consolidated Workspace draft against current main and confirm its hosted Ubuntu CI run. Use the [executable package acceptance harness](extensions/alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance) for fresh Ubuntu desktop and installed Fedora artifacts. Preserve the current mutation gates. Reconcile the independently reviewed Alpha.1 stack for full Alpha.3 and track the PR #42 fixture follow-up with Agent 1.

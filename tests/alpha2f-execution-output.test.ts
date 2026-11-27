@@ -8,6 +8,30 @@ import { openGhostBotDatabase } from '../apps/daemon/src/db/client.ts'
 import { DaemonError } from '../apps/daemon/src/errors.ts'
 import { WorkspaceOutputService } from '../apps/daemon/src/workspace/output-service.ts'
 
+function seedTaskOutput(
+  db: Awaited<ReturnType<typeof openGhostBotDatabase>>,
+  botId: string,
+  fixture: string,
+) {
+  const now = new Date().toISOString()
+  const sessionId = `${fixture}-session`
+  const runId = `${fixture}-run`
+  db.sqlite.prepare(`
+    INSERT INTO sessions (id, agent_id, account_id, runtime_id, title, created_at, updated_at)
+    VALUES (?, ?, 'local', 'mock', 'Synthetic private task', ?, ?)
+  `).run(sessionId, botId, now, now)
+  db.sqlite.prepare(`
+    INSERT INTO runs (id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode,
+      config_snapshot_json, status, started_at, created_at)
+    VALUES (?, ?, ?, ?, 'mock', 'mock-fast', 'medium', 'read-only', '{}', 'running', ?, ?)
+  `).run(runId, sessionId, botId, fixture, now, now)
+  db.sqlite.prepare(`
+    INSERT INTO run_events (id, run_id, seq, event_key, type, payload_json, timestamp)
+    VALUES (?, ?, 1, 'fixture-delta', 'message.delta', '{"delta":"PRIVATE_TASK_OUTPUT_CANARY"}', ?)
+  `).run(`${fixture}-event`, runId, now)
+  return { sessionId, runId, now }
+}
+
 test('Alpha.2F WorkspaceOutputService: chronological output, redaction, hidden reasoning exclusion, and isolation', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-alpha2f-db-'))
   const db = await openGhostBotDatabase(dataDir)
@@ -76,6 +100,25 @@ test('Alpha.2F WorkspaceOutputService: chronological output, redaction, hidden r
       )
       .run(dataDir, now, now, now)
 
+    const marked = seedTaskOutput(db, 'bot-a', 'task-marker')
+    db.sqlite.prepare('INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)')
+      .run(`teams.child-session:${marked.sessionId}`, '"fixture-identity"', marked.now)
+    const linked = seedTaskOutput(db, 'bot-a', 'legacy-task-link')
+    db.sqlite.exec(`
+      INSERT INTO teams (id, name) VALUES ('output-team-fixture', 'Synthetic Team');
+      INSERT INTO team_tasks (id, team_id, owner_id, root_task_id, depth, assigned_bot_id,
+        idempotency_key, prompt, prompt_hash, status, attempt, max_attempts, token_budget,
+        duration_budget_ms, created_at, updated_at)
+      VALUES ('output-task-fixture', 'output-team-fixture', 'local-user', 'output-task-fixture',
+        0, 'bot-a', 'output-task-fixture', 'fixture', 'fixture', 'running', 1, 1, 1, 1000,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    `)
+    db.sqlite.prepare(`
+      INSERT INTO team_execution_links (id, team_task_id, agent_id, session_id,
+        daemon_run_id, runtime_id, account_id, attempt, role, created_at)
+      VALUES ('output-task-link', 'output-task-fixture', 'bot-a', ?, ?, 'mock', 'local', 1, 'worker', ?)
+    `).run(linked.sessionId, linked.runId, linked.now)
+
     const service = new WorkspaceOutputService(db)
     const outA = service.listOutput({ botId: 'bot-a', limit: 50 })
     assert.equal(outA.authorized, true)
@@ -87,6 +130,18 @@ test('Alpha.2F WorkspaceOutputService: chronological output, redaction, hidden r
     assert.equal(serialized.includes('sk-secret1234567890123456'), false)
     assert.equal(serialized.includes('MUST_NOT_APPEAR'), false)
     assert.ok(outA.entries.some((e) => e.source === 'build' && e.exitCode === 0 && e.durationMs === 500))
+
+    assert.equal(JSON.stringify(outA).includes('PRIVATE_TASK_OUTPUT_CANARY'), false)
+    assert.deepEqual(service.listOutput({ teamId: 'output-team-fixture' }).entries, [])
+    for (const task of [marked, linked]) {
+      assert.throws(() => service.listOutput({ botId: 'bot-a', sessionId: task.sessionId }), {
+        code: 'OUTPUT_SESSION_UNAUTHORIZED',
+      })
+      assert.deepEqual(service.listOutput({ botId: 'bot-a', runId: task.runId }).runs, [])
+      await assert.rejects(service.cancelExecution({ botId: 'bot-a', runId: task.runId }, {
+        cancelRun: async () => assert.fail('Personal Output reached a private-task dispatch'),
+      }), { code: 'OUTPUT_RUN_NOT_FOUND' })
+    }
 
     // Cross-bot session rejected
     assert.throws(
@@ -179,6 +234,7 @@ test('Alpha.2F Electron Output filters, cancels, isolates and recovers persisted
     // Persist a stranded run to model a process interrupted before terminal status was written.
     const db = await openGhostBotDatabase(dataDir)
     const interruptedId = 'alpha2g-interrupted-fixture'
+    let privateTask: ReturnType<typeof seedTaskOutput>
     try {
       const now = new Date().toISOString()
       db.sqlite.prepare(`
@@ -186,6 +242,9 @@ test('Alpha.2F Electron Output filters, cancels, isolates and recovers persisted
           config_snapshot_json, status, started_at, created_at)
         VALUES (?, ?, ?, 'alpha2g-interrupted', 'mock', 'mock-fast', 'medium', 'read-only', '{}', 'running', ?, ?)
       `).run(interruptedId, fixture.pendingSession, fixture.botId, now, now)
+      privateTask = seedTaskOutput(db, fixture.botId, 'packaged-private-task')
+      db.sqlite.prepare('INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)')
+        .run(`teams.child-session:${privateTask.sessionId}`, '"fixture-identity"', privateTask.now)
     } finally {
       db.close()
     }
@@ -201,6 +260,18 @@ test('Alpha.2F Electron Output filters, cancels, isolates and recovers persisted
     await interrupted.getByText('uncertain', { exact: true }).waitFor()
     assert.equal(await interrupted.getByRole('button', { name: 'Cancel', exact: true }).count(), 0)
     assert.equal(await restarted.evaluate(async (id) => (await window.ghostBot!.getRun(id)).status, interruptedId), 'interrupted')
+    assert.equal(await restartedOutput.getByTestId(`output-entry-run-summary:${privateTask.runId}`).count(), 0)
+    const access = { botId: fixture.botId }
+    const listed = await restarted.evaluate((scope) => window.ghostBot!.listWorkspaceOutput(scope), access)
+    assert.equal(listed.entries.some((entry) => entry.runId === privateTask.runId ||
+      entry.message.includes('PRIVATE_TASK_OUTPUT_CANARY')), false)
+    await assert.rejects(restarted.evaluate((scope) => window.ghostBot!.listWorkspaceOutput(scope), {
+      ...access, sessionId: privateTask.sessionId,
+    }), /outside personal Workspace Output/)
+    await assert.rejects(restarted.evaluate((scope) => window.ghostBot!.cancelWorkspaceOutput(scope), {
+      ...access, runId: privateTask.runId,
+    }), /Run not found for authorized bot/)
+
   } finally {
     await app.close()
     await rm(dataDir, { recursive: true, force: true })
