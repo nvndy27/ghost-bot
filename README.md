@@ -1,10 +1,12 @@
 # Ghost Bot
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **Your AI team, in one local-first workspace.**
 
 Ghost Bot is a desktop AI workspace for personal agents, multi-model collaboration and developer workflows. Connect supported AI runtimes using your own accounts, API keys or local models, organize bots with independent configurations, and keep conversations and project data under your control.
 
-> **Development preview — targeting v0.1 Personal & Friends Alpha.** The application has a working Electron/daemon foundation and a verified Codex MVP. The complete Alpha is not yet released. The project is currently private, with an open-source-first direction; public distribution and licensing are pending.
+> **Development preview — targeting v0.1 Personal & Friends Alpha.** The application has a working Electron/daemon foundation and a verified Codex MVP. The complete Alpha is not yet released. The source repository is public; the application remains a development preview, not a stable or completed Alpha release.
 
 [Roadmap](docs/ROADMAP.md) · [Development progress](docs/PROGRESS.md) · [Provider matrix](docs/PROVIDER_MATRIX.md) · [Known issues](docs/KNOWN_ISSUES.md)
 
@@ -50,7 +52,7 @@ Ghost Bot does not include AI subscription access or API credits. Use only suppo
 
 ## Getting started — development build
 
-The repository is private during development. Access requires authorization. There is not yet a public installer for the Personal & Friends Alpha.
+The source repository is public. There is not yet a public installer for the Personal & Friends Alpha.
 
 ### Prerequisites
 
@@ -64,9 +66,11 @@ Use a normal user account. Do not run Ghost Bot as root or disable Electron sand
 
 ### Build and run
 
-From an authorized checkout of the relevant development branch:
+From a checkout of the relevant development branch:
 
 ```bash
+git clone https://github.com/nvndy27/ghost-bot.git
+cd ghost-bot
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
 corepack pnpm --filter @ghost-bot/desktop exec electron .
@@ -144,12 +148,12 @@ The renderer uses validated IPC; the daemon owns runtime authorization, sessions
 
 ## Development and contribution
 
-The project is being developed for personal use and a small group of testers first. Fedora with GNOME and Ubuntu are initial validation targets; Windows support will be claimed only after platform-specific testing. Public contributions and distribution are planned after the project is ready.
+The project is being developed for personal use and a small group of testers first. Fedora with GNOME and Ubuntu are initial validation targets; Windows support will be claimed only after platform-specific testing. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Stable distribution remains subject to release acceptance.
 
-Coding agents and contributors with repository access should read [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [roadmap](docs/ROADMAP.md), [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) before making changes. Use scoped branches/worktrees and reviewed PRs, preserve frozen migrations 0001–0013, and record actual test evidence.
+Coding agents and contributors should read [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [roadmap](docs/ROADMAP.md), [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) before making changes. Use scoped branches/worktrees and reviewed PRs, preserve frozen migrations 0001–0013, and record actual test evidence.
 
 ## License and privacy
 
-Ghost Bot is **open-source-first in direction**, but a production license has not yet been selected. The current repository is private and is not offered under an open-source license yet. Public release requires license selection, dependency and reference-asset rights review, and secret/history checks. Third-party design references must not be redistributed without permission.
+Ghost Bot's original project code and documentation are licensed under the [Apache License 2.0](LICENSE) (SPDX: `Apache-2.0`). See [NOTICE](NOTICE) for attribution and scope. Third-party material retains its own terms; reference screenshots under `design/references/` are not licensed by Ghost Bot and must not be redistributed without the applicable rights. The license does not grant rights to third-party trademarks or provider services. Dependency, asset-rights and secret/history review remain required before distributing release artifacts.
 
 Local-first does not mean fully offline: external provider requests send necessary context to the selected service, subject to permissions and consent. Local models can be used where the runtime supports them. No central Ghost Bot service is required by the planned first release.

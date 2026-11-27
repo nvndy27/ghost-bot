@@ -1,5 +1,10 @@
 # Next steps
 
+## Licensing follow-up (2026-11-27)
+
+- Review the Apache-2.0 license and attribution change through a scoped PR. Coordinate merging with the active Alpha integration branches. Verify GitHub license detection on the default branch after merge.
+- Before public binary distribution, complete dependency/asset-rights and secret/history review; confirm contributor licensing authority and required third-party notices. Existing Alpha assignments and acceptance gates are unchanged.
+
 ## Alpha.0B — Integrated Native Chat Release Candidate (Offline RC Ready)
 
 1. Agent 2 performs independent security review and Fedora GNOME / Ubuntu AppImage + RPM packaging smoke verification on `integration/alpha0-native-chat-rc`.

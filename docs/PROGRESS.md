@@ -1,5 +1,9 @@
 # Progress log
 
+## Repository licensing — Apache-2.0 (2026-11-27)
+
+Owner selected Apache License 2.0 for original Ghost Bot code and documentation. This change adds the standard license text from GitHub's Choose a License template, a scoped NOTICE, license metadata, contribution/security reporting guidance and public-repository README corrections. No runtime code, dependencies, migrations or feature gates changed. Documentation/metadata change only; application tests and live inference not run. Third-party dependency and reference-asset rights review and secret/history review remain open; public repository visibility is not a release-acceptance result.
+
 ## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
 
 2026-11-27. Executed the finalized bounded 3-prompt live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on `22b3b16` (`integration/alpha0-native-chat-rc`, production baseline `6779ab3`, PR #15) using the dedicated ChatGPT `plus` profile (`gpt-6.2-sol`, `effort: low`, `read-only` permission, isolated temp dirs). See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).
