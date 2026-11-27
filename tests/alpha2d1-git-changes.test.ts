@@ -186,6 +186,12 @@ test('Electron Changes tab renders native-granted status, file diffs and commit 
         t.skip('Optional isolated Git runtime is unavailable')
         return
       }
+      for (const name of ['Stage selected files', 'Unstage selected files', 'Revert file']) {
+        assert.equal(await panel.getByRole('button', { name, exact: true }).isDisabled(), true)
+      }
+      await panel.getByText(/Git writes are unavailable/).waitFor()
+      assert.equal(await page.evaluate(() =>
+        Object.keys(window.ghostBot!).some((key) => /^(mutateWorkspaceGit|authorizeWorkspaceGitMutation)$/.test(key))), false)
       await panel.getByRole('button', { name: 'tracked.txt' }).click()
       const diff = panel.getByTestId('workspace-git-diff')
       await diff.waitFor()
@@ -197,9 +203,23 @@ test('Electron Changes tab renders native-granted status, file diffs and commit 
       await commit.getByText('Fixture', { exact: false }).first().waitFor()
       assert.equal(await panel.getByRole('button', { name: /^(Stage|Commit|Push|Pull|Reset)$/ }).count(), 0)
 
+      // The third-party Git change is made by the fixture. Refresh must display it without rewriting the index.
+      git(root, 'add', 'new.txt')
+      await writeFile(join(root, 'tracked.txt'), 'external refresh\n')
+      const externalIndex = await readFile(join(root, '.git', 'index'))
+      await panel.getByRole('button', { name: 'Refresh Git changes' }).click()
+      await panel.getByRole('region', { name: 'Staged' }).getByRole('button', { name: 'new.txt' }).waitFor()
+      assert.equal(await commit.count(), 0)
+      await panel.getByRole('region', { name: 'Unstaged' }).getByRole('button', { name: 'tracked.txt' }).click()
+      await diff.getByText('+external refresh', { exact: true }).waitFor()
+      assert.deepEqual(await readFile(join(root, '.git', 'index')), externalIndex)
+      assert.equal(await readFile(join(root, 'new.txt'), 'utf8'), 'new file\n')
+      assert.equal(await readFile(join(root, 'secrets', '.env'), 'utf8'), 'hidden fixture\n')
+
       await page.evaluate((id) => window.ghostBot!.updateBot({ id, patch: { permission: 'read-only' } }), botId)
       await panel.getByRole('button', { name: 'Refresh Git changes' }).click()
       await consent.waitFor()
+      assert.equal(await panel.getByRole('button', { name: 'Revert file' }).isDisabled(), true)
       assert.equal(await diff.count(), 0)
       assert.equal(await commit.count(), 0)
     } finally {

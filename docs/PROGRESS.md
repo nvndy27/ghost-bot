@@ -1,5 +1,13 @@
 # Progress log
 
+## Alpha.2D.2 Git mutations
+
+**Blocked** for stage, unstage and revert on the provisional PR #39 base `963dde64c02f6f4287221a705aa438081b194203`. Changes shows disabled mutation controls and the reason. Dedicated daemon admission rejects Git write authorization and dispatch regardless of read or Files write grants. Renderer IPC carries only inspection and cancellation. Refresh rereads the repository in the existing read-only sandbox. The UI reports acknowledged, inactive or unconfirmed inspection cancellation.
+
+Lint, all workspace typechecks and build passed. Linux sandbox-required regressions passed 17/17, including real mock-runtime Electron Files, Changes, discovery and Output with stubbed native dialog decisions. The Git scenario refreshed an external index and working-tree edit without modifying the index or unrelated files. Daemon IPC and discovery passed 12/12, including mutation denial before consent, after native read and Files write grants, and after write revocation. Denial preserved the external index, pending lock and working-tree bytes. These checks cover read-only inspection and denial. Mutation execution and recovery from a partially committed Git write remain unverified.
+
+PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. Agent 1 owns follow-up.
+
 ## Alpha.2C.2 write hardening (PR #39)
 
 **Tested** on the provisional PR #39 base `dc449c8c834ea17107e404d5e1d72f0c2dd12509`. Save and empty-file/folder creation check the same native personal grant before staging, under the file lock, and at commit. Revocation and bot policy changes serialize with commit admission. Empty-file creation uses an exclusive open and keeps the returned descriptor through verification. Non-empty creation, rename, quarantine delete, Ask Approval writes and group writes are gated. Existing quarantine contents are preserved.

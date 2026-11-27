@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.2D.2 Git mutation handoff
+
+Reconcile the provisional stack before acceptance. Keep Git write admission denied until a separate native per-operation approval can be bound to the repository, selected paths and expected revisions, and used with a commit mechanism that preserves external writes. Verify race, revocation and partial-publication behavior in real repositories and Electron before enabling any action. Agent 1 can resolve the exact-SHA Private Task Chat findings independently.
+
 ## Alpha.2C.2 write handoff
 
 Review the hardened PR #39 head on the provisional stack. Preserve the same-grant admission checks and the new Electron watch and revocation regressions during reconciliation. Keep the gated operations disabled until their publication or authorization boundaries are enforceable.

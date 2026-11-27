@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -141,6 +142,70 @@ test('workspace discovery routes require and revalidate the native personal gran
   } finally {
     await daemon.stop()
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Git mutation admission is gated independently of native Files grants and preserves external state', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'ghost-git-mutation-gate-'))
+  const root = join(fixture, 'repository')
+  const socket = join(fixture, 'daemon.sock')
+  const token = randomUUID()
+  const daemon = new GhostBotDaemon({ authToken: token, socketPath: socket, dataDir: join(fixture, 'data'), runtimeMode: 'mock' })
+  try {
+    await mkdir(root)
+    const git = (...args: string[]) => execFileSync('/usr/bin/git', args, {
+      cwd: root, env: { PATH: '/usr/bin', HOME: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+      stdio: 'ignore',
+    })
+    git('init')
+    await writeFile(join(root, 'selected.txt'), 'external staged content')
+    await writeFile(join(root, 'unrelated.txt'), 'unrelated bytes')
+    git('add', '--', 'selected.txt')
+    await writeFile(join(root, 'selected.txt'), 'external draft')
+    // Represent an independent Git process holding its own lock during an interrupted update.
+    const indexPath = join(root, '.git', 'index')
+    const indexLockPath = join(root, '.git', 'index.lock')
+    const index = await readFile(indexPath)
+    await writeFile(indexLockPath, 'external pending index', { flag: 'wx' })
+    const request = (path: string, payload: unknown, method = 'POST') => requestSocket(socket, path, token, payload, method)
+    await daemon.start()
+    assert.equal((await request('/bots/chief', { workspacePath: root, permission: 'workspace' }, 'PATCH')).status, 200)
+    const selector = { botId: 'chief' }
+    const initial = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', selector)).body)
+    const workspaceId = initial.workspaceId
+    assert.ok(workspaceId)
+
+    const denied = async (scope: { botId: string; workspaceId: string; authGeneration: string }) => {
+      for (const action of ['stage', 'unstage', 'revert']) {
+        const payload = { ...scope, action, paths: ['selected.txt'], operationId: randomUUID() }
+        for (const route of ['/workspace/git/authorize-mutation', '/workspace/git/mutate']) {
+          const result = await request(route, payload)
+          assert.equal(result.status, 501)
+          assert.equal((result.body as { code?: string }).code, 'GIT_MUTATIONS_GATED')
+        }
+      }
+    }
+    const pending = { ...selector, workspaceId, authGeneration: 'ungranted' }
+    assert.equal((await requestSocket(socket, '/workspace/git/mutate', undefined, pending)).status, 401)
+    await denied(pending)
+
+    assert.equal((await request('/workspace/authorize-read', { ...selector, workspaceId, selectedRoot: root })).status, 200)
+    const read = WorkspaceContextIpcResponseSchema.parse((await request('/workspace/context', selector)).body)
+    assert.ok(read.authGeneration)
+    const scope = { ...selector, workspaceId, authGeneration: read.authGeneration }
+    await denied(scope)
+    assert.equal((await request('/workspace/authorize-write', scope)).status, 200)
+    await denied(scope)
+    assert.equal((await request('/workspace/revoke-write', selector)).status, 200)
+    await denied(scope)
+
+    assert.deepEqual(await readFile(indexPath), index)
+    assert.equal(await readFile(indexLockPath, 'utf8'), 'external pending index')
+    assert.equal(await readFile(join(root, 'selected.txt'), 'utf8'), 'external draft')
+    assert.equal(await readFile(join(root, 'unrelated.txt'), 'utf8'), 'unrelated bytes')
+  } finally {
+    await daemon.stop()
+    await rm(fixture, { recursive: true, force: true })
   }
 })
 

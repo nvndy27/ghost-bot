@@ -105,6 +105,27 @@ export function WorkspaceGitChanges({ botId }: { botId: string | null }) {
     return invalidate
   }, [run, invalidate])
 
+  async function cancelInspection() {
+    const operation = active.current
+    const sequence = ++generation.current
+    active.current = null
+    setBusy(false)
+    if (!operation) {
+      setMessage('Git inspection stopped before submission.')
+      return
+    }
+    setMessage('Stopping Git inspection…')
+    try {
+      const accepted = await window.ghostBot?.cancelWorkspaceGit(operation)
+      if (sequence !== generation.current) return
+      setMessage(accepted ? 'Git inspection cancelled.' : 'Git inspection is no longer active. Refresh to see changes.')
+    } catch {
+      if (sequence === generation.current) {
+        setMessage('Git inspection cancellation could not be confirmed. Refresh to see changes.')
+      }
+    }
+  }
+
   async function authorize() {
     if (!botId || !window.ghostBot) return
     invalidate()
@@ -131,12 +152,17 @@ export function WorkspaceGitChanges({ botId }: { botId: string | null }) {
       <IconButton label="Refresh Git changes" onClick={() => void run({ kind: 'status' })} disabled={!botId}>
         <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
       </IconButton>
-      {busy && <IconButton label="Cancel Git inspection" onClick={() => {
-        invalidate()
-        setBusy(false)
-        setMessage('Git inspection cancelled.')
-      }}><Square size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" /></IconButton>}
+      {busy && <IconButton label="Cancel Git inspection" onClick={() => void cancelInspection()}>
+        <Square size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </IconButton>}
     </div>
+    {botId && <div className="gb-git-mutations" role="group" aria-label="Git mutation controls"
+      aria-describedby="gb-git-mutation-gate">
+      <button type="button" className="gb-workspace-icon-btn" disabled>Stage selected files</button>
+      <button type="button" className="gb-workspace-icon-btn" disabled>Unstage selected files</button>
+      <button type="button" className="gb-workspace-icon-btn" disabled>Revert file</button>
+      <p className="gb-muted" id="gb-git-mutation-gate">Git writes are unavailable until the index and working tree can be protected during updates.</p>
+    </div>}
     {message && <p role="status">{message}</p>}
     {needsGrant && <button type="button" className="gb-workspace-icon-btn"
       disabled={busy} onClick={() => void authorize()}>Allow read access</button>}

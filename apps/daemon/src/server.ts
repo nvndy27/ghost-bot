@@ -1839,6 +1839,16 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'POST' &&
+          (url.pathname === '/workspace/git/authorize-mutation' || url.pathname === '/workspace/git/mutate')) {
+        // Git write admission is independent of workspace read and Files write grants.
+        throw new DaemonError(
+          'GIT_MUTATIONS_GATED',
+          'Git changes are read-only until index and working-tree writes can be protected.',
+          { statusCode: 501 },
+        )
+      }
+
       const workspaceGit = this.workspaceGitService
       if (workspaceGit && req.method === 'POST') {
         if (url.pathname === '/workspace/git/inspect') {
