@@ -1,5 +1,11 @@
 # Next steps
 
+## Open-source readiness follow-up
+
+- Review and merge the scoped readiness PR; confirm licensing authority for existing contributions and coordinate active Alpha branches.
+- Inspect CI, CodeQL, Scorecard and SBOM results; enable dependency graph, Dependabot alerts and private vulnerability reporting as appropriate.
+- Register OpenSSF Best Practices with actual evidence; complete per-file rights/REUSE inventory, reference asset and secret/history review, artifact SBOM and signing/provenance before public binary release. See [readiness](OPEN_SOURCE_READINESS.md).
+
 ## Licensing follow-up (2026-11-27)
 
 - Review the Apache-2.0 license and attribution change through a scoped PR. Coordinate merging with the active Alpha integration branches. Verify GitHub license detection on the default branch after merge.

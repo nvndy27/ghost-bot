@@ -1,6 +1,6 @@
 ## Licensing and public source distribution
 
-- Original project code and documentation are being licensed under Apache-2.0. This does not license third-party dependencies, screenshots, or trademarks. The tracked files under `design/references/` require separate rights review and must not be redistributed without permission. Review dependency notices and packaged attributions, contributor rights, and Git history for secrets before public binary distribution. No full provenance or security audit was performed by the licensing change.
+- Original project code and documentation are offered under MIT OR Apache-2.0, subject to copyright holders' authority. This does not license third-party dependencies, screenshots, or trademarks. The tracked files under `design/references/` require separate rights review and must not be redistributed without permission. Review dependency notices and packaged attributions, contributor rights, and Git history for secrets before public binary distribution. No full provenance or security audit was performed by the licensing change.
 
 ## Personal & Friends Alpha release risks (2026-11-27)
 
@@ -21,3 +21,7 @@
 - Codex `full-access` (`dangerFullAccess`) remains disabled by default; only `read-only`, `ask-approval`, and `workspace` (with `excludeSlashTmp: true` and `excludeTmpdirEnvVar: true`) are verified.
 - Prototype settings, usage, tools, routines and approvals in `prototype/` remain demonstration data until Phase 1/2 desktop integration.
 - The design screenshots under `design/references/` travel separately from Git while distribution rights are unresolved.
+
+## Open-source automation acceptance
+
+CI, CodeQL, Scorecard, Dependabot and dependency-graph SBOM export are configured; first successful runs and repository settings are pending verification. OpenSSF Best Practices and REUSE compliance have not been achieved. A graph SBOM is not a complete packaged-binary SBOM or legal attribution inventory.
