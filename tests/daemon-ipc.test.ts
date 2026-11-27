@@ -93,7 +93,11 @@ test('daemon rejects weak authToken and unauthenticated requests', async () => {
     assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', undefined, grant)).status, 401)
     assert.equal((await requestSocket(socketPath, '/workspace/authorize-read', token, grant)).status, 403)
     assert.equal((await requestSocket(socketPath, '/workspace/context', token, { ...grant, canWrite: true })).status, 400)
-    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {})).status, 403)
+    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {})).status, 400)
+    assert.equal((await requestSocket(socketPath, '/workspace/save', token, {
+      botId: 'bot-fixture', workspaceId: 'fixture', authGeneration: 'unknown',
+      relativePath: 'notes.txt', content: 'draft', expectedRevision: 'fixture',
+    })).status, 403)
 
     const notFound = await requestSocket(socketPath, '/unknown', token)
     assert.equal(notFound.status, 404)
