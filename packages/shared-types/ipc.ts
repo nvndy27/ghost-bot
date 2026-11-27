@@ -109,6 +109,7 @@ export const IPC_CHANNELS = {
   OPENROUTER_CREDENTIAL_SET: 'ghost:openrouter:credential:set',
   OPENROUTER_CREDENTIAL_DELETE: 'ghost:openrouter:credential:delete',
   OPENROUTER_AUTH_SET: 'ghost:openrouter:auth:set',
+  TEAM_AVATAR_PICK: 'ghost:teams:avatar-pick',
   TEAMS_LIST: 'ghost:teams:list',
   TEAMS_CREATE: 'ghost:teams:create',
   TEAMS_UPDATE: 'ghost:teams:update',
@@ -1396,6 +1397,18 @@ export const ListTeamsInputSchema = z
   })
   .strict()
 
+export const TeamAppearanceSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('auto') }).strict(),
+  z.object({ mode: z.literal('bot'), avatar: BotAvatarConfigSchema }).strict(),
+  z.object({
+    mode: z.literal('upload'),
+    dataUrl: z.string().max(107000).regex(/^data:image\/png;base64,[a-zA-Z0-9+/]+={0,2}$/),
+  }).strict(),
+])
+export type TeamAppearance = z.infer<typeof TeamAppearanceSchema>
+export const TeamAvatarPickResponseSchema = z.string().max(5600000)
+  .regex(/^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/]+={0,2}$/).nullable()
+
 export const CreateTeamIpcInputSchema = z
   .object({
     name: z.string().min(1).max(120),
@@ -1403,6 +1416,7 @@ export const CreateTeamIpcInputSchema = z
     leadBotId: BotIdSchema,
     memberBotIds: z.array(BotIdSchema).min(1).max(12),
     bounds: TeamBoundsInputSchema.optional(),
+    appearance: TeamAppearanceSchema.optional(),
   })
   .strict()
 
@@ -1414,6 +1428,7 @@ export const UpdateTeamIpcInputSchema = z
     leadBotId: BotIdSchema.optional(),
     memberBotIds: z.array(BotIdSchema).min(1).max(12).optional(),
     bounds: TeamBoundsInputSchema.optional(),
+    appearance: TeamAppearanceSchema.optional(),
   })
   .strict()
 
@@ -1627,6 +1642,7 @@ export const ListTeamMessagesIpcInputSchema = z
   .strict()
 
 export const TeamRecordDtoSchema = z.object({
+  appearance: TeamAppearanceSchema.optional(),
   id: z.string(),
   name: z.string(),
   description: z.string(),
@@ -2524,6 +2540,7 @@ export interface GhostBotBridge {
   cancelPrivateTaskChat(input: CancelPrivateTaskInput): Promise<{ teamRunId: string; cancelled: boolean }>
   getTeamMemberRouting(input: TeamMemberRoutingKey): Promise<TeamMemberRoutingDto>
   setTeamMemberRouting(input: SetTeamMemberRouting): Promise<TeamMemberRoutingDto>
+  pickTeamAvatar(): Promise<string | null>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>
   createTeam(input: CreateTeamIpcInput): Promise<TeamRecordDto>
   updateTeam(input: UpdateTeamIpcInput): Promise<TeamRecordDto>

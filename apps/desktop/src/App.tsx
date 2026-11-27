@@ -1629,6 +1629,7 @@ export function App() {
           />
         ) : activeTeam ? (
           <TeamWorkspaceView
+            key={activeTeam.id}
             team={activeTeam}
             bots={bots}
             runs={teamRuns}

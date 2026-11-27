@@ -21,6 +21,10 @@
 
 - Independent review of PR #20 and the convergence candidate remains pending. The read-only Git proposal is independent of the filesystem write gate and still requires maintainer approval.
 
+## Alpha.1 convergence
+
+- Issue #41 awaits independent acceptance and history-preserving convergence with Agent 2’s workspace stack. The successor introduces no database migration. Advance neither workspace permissions nor Alpha.3 acceptance during reconciliation.
+
 ## Existing issues
 
 - Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.

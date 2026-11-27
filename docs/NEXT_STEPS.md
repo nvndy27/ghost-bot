@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.1 integrity and Group Chat polish
+
+Review the integrity and UI drafts as a stack. Pin the accepted Agent 2 workspace head, reconcile shared daemon/Electron/App interfaces with both histories intact, then run the affected integration tests and CI. Alpha.3 acceptance awaits agreed scope.
+
 ## Alpha.1B and Alpha.1C
 
 Review the Alpha.1B draft against accepted main. Keep the approved Alpha.1C discussion feature on a separate branch with mock-only, tool-free execution; preserve advanced Teams runs as separate functionality.

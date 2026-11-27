@@ -1,3 +1,5 @@
+import type { TeamAppearance } from '@ghost-bot/shared-types/ipc'
+import { readTeamAppearance, writeTeamAppearance } from './appearance.ts'
 import {
   assertNonEmptyBounded,
   assertTeamOwner,
@@ -96,20 +98,25 @@ export class TeamsService {
     }
   }
 
+  private withAppearance(team: TeamRecord): TeamRecord & { appearance: TeamAppearance } {
+    return { ...team, appearance: readTeamAppearance(this.dbHandle, team.id) }
+  }
+
   listTeams(options?: { limit?: number; offset?: number; includeArchived?: boolean }): {
-    teams: TeamRecord[]
+    teams: Array<TeamRecord & { appearance: TeamAppearance }>
     total: number
   } {
     try {
-      return this.repository.listTeams(LOCAL_USER_ID, options)
+      const result = this.repository.listTeams(LOCAL_USER_ID, options)
+      return { ...result, teams: result.teams.map((team) => this.withAppearance(team)) }
     } catch (err) {
       mapTeamError(err)
     }
   }
 
-  getTeam(teamId: string): TeamRecord {
+  getTeam(teamId: string): TeamRecord & { appearance: TeamAppearance } {
     try {
-      return this.repository.getTeam(teamId, LOCAL_USER_ID)
+      return this.withAppearance(this.repository.getTeam(teamId, LOCAL_USER_ID))
     } catch (err) {
       mapTeamError(err)
     }
@@ -121,7 +128,8 @@ export class TeamsService {
     leadBotId: string
     memberBotIds: string[]
     bounds?: Partial<TeamExecutionBounds>
-  }): TeamRecord {
+    appearance?: TeamAppearance
+  }): TeamRecord & { appearance: TeamAppearance } {
     try {
       this.assertValidBots(input.leadBotId, input.memberBotIds)
       return this.repository.getDatabase().transaction(() => {
@@ -130,7 +138,8 @@ export class TeamsService {
           ownerId: LOCAL_USER_ID,
         })
         this.syncPhase1cTeamMembers(team.id, team.leadBotId, team.memberBotIds)
-        return team
+        if (input.appearance) writeTeamAppearance(this.dbHandle, team.id, input.appearance)
+        return this.withAppearance(team)
       })
     } catch (err) {
       mapTeamError(err)
@@ -144,7 +153,8 @@ export class TeamsService {
     leadBotId?: string
     memberBotIds?: string[]
     bounds?: Partial<TeamExecutionBounds>
-  }): TeamRecord {
+    appearance?: TeamAppearance
+  }): TeamRecord & { appearance: TeamAppearance } {
     try {
       const existing = this.repository.getTeam(input.teamId, LOCAL_USER_ID)
       assertTeamOwner(LOCAL_USER_ID, existing.ownerId)
@@ -155,7 +165,8 @@ export class TeamsService {
       if (input.memberBotIds && !input.memberBotIds.includes(nextLead)) {
         throw new DaemonError('TEAM_LEAD_REQUIRED', 'Select a lead from the retained team members', { statusCode: 400 })
       }
-      const nextMembers = new Set<string>([nextLead, ...(input.memberBotIds ?? existing.memberBotIds)])
+      const nextMembers = new Set(input.memberBotIds ?? existing.memberBotIds)
+      nextMembers.add(nextLead)
       this.assertValidBots(nextLead, [...nextMembers])
 
       const nextName =
@@ -186,14 +197,15 @@ export class TeamsService {
           )
         this.syncPhase1cTeamMembers(existing.id, nextLead, [...nextMembers])
         clearRemovedMemberRouting(this.dbHandle, existing.id, existing.memberBotIds, [...nextMembers])
-        return this.repository.getTeam(existing.id, LOCAL_USER_ID)
+        if (input.appearance) writeTeamAppearance(this.dbHandle, existing.id, input.appearance)
+        return this.withAppearance(this.repository.getTeam(existing.id, LOCAL_USER_ID))
       })
     } catch (err) {
       mapTeamError(err)
     }
   }
 
-  updateTeamMembers(teamId: string, memberBotIds: string[]): TeamRecord {
+  updateTeamMembers(teamId: string, memberBotIds: string[]): TeamRecord & { appearance: TeamAppearance } {
     try {
       const existing = this.repository.getTeam(teamId, LOCAL_USER_ID)
       if (!memberBotIds.includes(existing.leadBotId)) {
@@ -204,16 +216,16 @@ export class TeamsService {
         const updated = this.repository.updateTeamMembers(teamId, LOCAL_USER_ID, memberBotIds)
         this.syncPhase1cTeamMembers(updated.id, updated.leadBotId, updated.memberBotIds)
         clearRemovedMemberRouting(this.dbHandle, existing.id, existing.memberBotIds, updated.memberBotIds)
-        return updated
+        return this.withAppearance(updated)
       })
     } catch (err) {
       mapTeamError(err)
     }
   }
 
-  archiveTeam(teamId: string): TeamRecord {
+  archiveTeam(teamId: string): TeamRecord & { appearance: TeamAppearance } {
     try {
-      return this.repository.archiveTeam(teamId, LOCAL_USER_ID)
+      return this.withAppearance(this.repository.archiveTeam(teamId, LOCAL_USER_ID))
     } catch (err) {
       mapTeamError(err)
     }

@@ -30,8 +30,8 @@ try {
   await page.getByLabel('Task objective').fill('Audit mock isolation')
   await page.getByRole('button', { name: 'Confirm task delegation' }).click()
 
-  await page.getByText('Private Task Chats (1)', { exact: true }).waitFor()
-  await page.getByRole('button', { name: 'Open task chat' }).first().click()
+  const taskNav = page.locator('[data-sidebar-private-task]').filter({ hasText: 'Audit mock isolation' })
+  await taskNav.click()
   await page.getByTestId('private-task-header').waitFor()
   await page.getByText('Group Task · Task Delegation Group', { exact: true }).waitFor()
   await page.getByText(/\[Mock Developer\] Received your request: "Audit mock isolation"/).waitFor()

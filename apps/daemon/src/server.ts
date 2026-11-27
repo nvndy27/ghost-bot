@@ -2644,7 +2644,7 @@ export class GhostBotDaemon {
         }
 
         if (req.method === 'POST' && url.pathname === '/teams') {
-          const body = await readJsonBody(req)
+          const body = await readJsonBody(req, 128 * 1024)
           const parsed = CreateTeamIpcInputSchema.safeParse(body)
           if (!parsed.success) {
             throw new DaemonError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid team payload', {
@@ -2738,7 +2738,7 @@ export class GhostBotDaemon {
           if (!idCheck.success) {
             throw new DaemonError('VALIDATION_ERROR', 'Invalid team identifier', { statusCode: 400 })
           }
-          const body = await readJsonBody(req)
+          const body = await readJsonBody(req, 128 * 1024)
           const parsed = UpdateTeamIpcInputSchema.safeParse({
             teamId: idCheck.data.teamId,
             ...(body && typeof body === 'object' ? body : {}),

@@ -1,3 +1,4 @@
+import { readTeamAvatarImage } from './team-avatar-image.js'
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -34,6 +35,7 @@ import {
   PreviewTeamPlanIpcInputSchema,
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
+  TeamAvatarPickResponseSchema,
   TeamMemberRoutingKeySchema,
   CancelPrivateTaskInputSchema,
   CancelPrivateTaskResponseSchema,
@@ -1555,6 +1557,19 @@ function registerIpcHandlers(): void {
       method: 'POST',
       body: SetTeamMemberRoutingSchema.parse(input),
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_AVATAR_PICK, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    EmptyParamsSchema.parse(input)
+    if (!mainWindow || mainWindow.isDestroyed()) return null
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'Group avatar image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+    if (picked.canceled || !picked.filePaths[0]) return null
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return TeamAvatarPickResponseSchema.parse(await readTeamAvatarImage(picked.filePaths[0]))
   })
 
   ipcMain.handle(IPC_CHANNELS.TEAMS_LIST, async (event, params) => {

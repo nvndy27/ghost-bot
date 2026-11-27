@@ -1,10 +1,11 @@
+import { TeamAvatar } from './TeamAvatar.tsx'
+import { TeamMemberRouting } from './TeamMemberRouting.tsx'
 import { TeamDiscussionView } from './TeamDiscussionView.tsx'
 import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { PrivateTaskChatRecord, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
-import { PanelLeft, PanelRight, Pencil } from 'lucide-react'
+import { PanelLeft, PanelRight, Pencil, ListTodo, MessageSquare, UsersRound, Ellipsis } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
-import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface TeamWorkspaceViewProps {
@@ -79,6 +80,8 @@ export function TeamWorkspaceView({
   onToggleRight,
 }: TeamWorkspaceViewProps) {
   const [goalInput, setGoalInput] = useState('')
+  const [showMembers, setShowMembers] = useState(false)
+  const [showMore, setShowMore] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const [showDagPanel, setShowDagPanel] = useState(true)
   const [resolvingIds, setResolvingIds] = useState<Record<string, boolean>>({})
@@ -130,31 +133,70 @@ export function TeamWorkspaceView({
 
   return (
     <>
-      <header className="gb-chat-header">
+      <header className="gb-chat-header gb-team-chat-header">
         <div className="gb-chat-header-title">
           {leftCollapsed && (
             <IconButton label="Show sidebar" onClick={onToggleLeft} pressed={false}>
               <PanelLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
           )}
-          {leadBot && <BotAvatar config={leadBot.avatar} status={runIsActive ? 'working' : 'idle'} size={28} />}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <strong>{team.name}</strong>
-              <span className="gb-badge">Lead: {leadBot?.name ?? team.leadBotId}</span>
-              <span className="gb-badge">
-                {isMockMode ? 'Simulated (Mock)' : 'Live Teams Unavailable'}
-              </span>
-            </div>
-            {team.description && (
-              <div className="gb-muted" style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {team.description}
-              </div>
-            )}
+          <TeamAvatar appearance={team.appearance} memberIds={team.memberBotIds} bots={bots} size={34} />
+          <div className="gb-team-header-label">
+            <strong title={team.name}>{team.name}</strong>
+            <small className="gb-muted">
+              {team.memberBotIds.length} {team.memberBotIds.length === 1 ? 'member' : 'members'} · {isMockMode ? 'Offline mock' : 'Live discussion unavailable'}
+              {runIsActive ? ' · Task running' : ''}
+            </small>
           </div>
         </div>
+        <div className="gb-team-header-actions">
+          <IconButton label="Member model settings" pressed={showMembers} onClick={() => { setShowMembers(!showMembers); setShowMore(false) }}>
+            <UsersRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+          <IconButton label={advanced ? 'Back to discussion' : 'Advanced tasks'} pressed={advanced} onClick={() => setAdvanced(!advanced)}>
+            {advanced ? <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" /> :
+              <ListTodo size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+          </IconButton>
+          <IconButton label="Edit team" onClick={onEditTeam}>
+            <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+          <IconButton label="More group actions" pressed={showMore} onClick={() => { setShowMore(!showMore); setShowMembers(false) }}>
+            <Ellipsis size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
+          {rightCollapsed && (
+            <IconButton label="Show team panel" onClick={onToggleRight} pressed={false}>
+              <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
+          )}
+        </div>
+      </header>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {!advanced && (approvals.length > 0 || hasUncertain) && <button type="button"
+        className="gb-btn-outline gb-team-attention" onClick={() => setAdvanced(true)}>
+        {approvals.length > 0 ? `${approvals.length} worker approval${approvals.length === 1 ? '' : 's'} pending` : 'Uncertain task outcome'}
+      </button>}
+      {showMembers && <section className="gb-team-header-panel" aria-label="Group member settings">
+        <TeamMemberRouting key={team.id} team={team} bots={bots} expanded />
+      </section>}
+      {showMore && <div className="gb-team-header-panel">
+        <button type="button" className="gb-btn-outline" onClick={() => { onEditTeam(); setShowMore(false) }}>Edit group details</button>
+        <button type="button" className="gb-btn-outline" onClick={() => { onToggleRight(); setShowMore(false) }}>
+          {rightCollapsed ? 'Show team panel' : 'Hide team panel'}
+        </button>
+      </div>}
+      {!advanced ? (
+        <TeamDiscussionView
+          key={team.id}
+          team={team}
+          bots={bots}
+          isMockMode={isMockMode}
+          onOpenPrivateTask={onOpenPrivateTask}
+          onTasksChanged={onTasksChanged}
+        />
+      ) : (
+        <>
+      <div className="gb-messages" style={{ flex: 1, overflowY: 'auto' }}>
+        <div className="gb-messages-inner" style={{ display: 'grid', gap: 12 }}>
           {runs.length > 0 && (
             <select
               aria-label="Select team run"
@@ -184,34 +226,7 @@ export function TeamWorkspaceView({
             </select>
           )}
 
-          <button type="button" className="gb-btn-outline" aria-pressed={advanced} onClick={() => setAdvanced(!advanced)}>
-            {advanced ? 'Back to discussion' : 'Advanced tasks'}
-          </button>
-          <button type="button" className="gb-btn-outline gb-icon-inline" onClick={onEditTeam}>
-            <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            <span>Edit team</span>
-          </button>
-          {rightCollapsed && (
-            <IconButton label="Show team panel" onClick={onToggleRight} pressed={false}>
-              <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
-            </IconButton>
-          )}
-        </div>
-      </header>
 
-      {!advanced ? (
-        <TeamDiscussionView
-          key={team.id}
-          team={team}
-          bots={bots}
-          isMockMode={isMockMode}
-          onOpenPrivateTask={onOpenPrivateTask}
-          onTasksChanged={onTasksChanged}
-        />
-      ) : (
-        <>
-      <div className="gb-messages" style={{ flex: 1, overflowY: 'auto' }}>
-        <div className="gb-messages-inner" style={{ display: 'grid', gap: 12 }}>
           {runError && (
             <div
               role="alert"

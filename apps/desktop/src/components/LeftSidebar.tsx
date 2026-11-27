@@ -1,3 +1,4 @@
+import { TeamAvatar } from './TeamAvatar.tsx'
 import type { PrivateTaskChatRecord, SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { formatProviderLabel } from '@ghost-bot/shared-types/runtime'
 import {
@@ -8,7 +9,6 @@ import {
   Plus,
   Search,
   Settings,
-  UsersRound,
 } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { orderSidebarItems } from '../state/sidebarOrder.ts'
@@ -70,7 +70,6 @@ export function LeftSidebar({
   onCreateTeam,
   onOpenSettings,
   onCollapse,
-  isMockMode,
 }: LeftSidebarProps) {
   const pinnedBotSet = new Set(organization?.pinnedBotIds ?? [])
   const pinnedTeamSet = new Set(organization?.pinnedTeamIds ?? [])
@@ -288,19 +287,12 @@ export function LeftSidebar({
                     className="gb-icon-inline"
                     style={{ minWidth: 0, overflow: 'hidden', gap: '7px' }}
                   >
-                    <UsersRound
-                      size={ICON_SIZE.sm}
-                      strokeWidth={ICON_STROKE}
-                      aria-hidden="true"
-                      style={{ flexShrink: 0, color: 'var(--gb-muted)' }}
-                    />
+                    <TeamAvatar appearance={team.appearance} memberIds={team.memberBotIds} bots={bots} />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {team.name}
                     </span>
                   </span>
-                  <span className="gb-badge">
-                    {isMockMode ? `${team.memberBotIds.length} mock` : `${team.memberBotIds.length}`}
-                  </span>
+                  <small className="gb-muted gb-team-count">{team.memberBotIds.length}</small>
                 </button>
                 {(onTogglePinTeam || onMoveTeam) && (
                   <div className="gb-row-actions">

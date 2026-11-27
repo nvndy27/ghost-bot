@@ -27,7 +27,7 @@ try {
   })
   const openRouting = async () => {
     await page.locator(`[data-team-id="${teamId}"] .gb-team-item`).click()
-    await page.getByText('Member model settings', { exact: true }).click()
+    await page.getByRole('button', { name: 'Member model settings', exact: true }).click()
     await page.getByLabel('Member', { exact: true }).selectOption('developer')
     await page.getByLabel('Model', { exact: true }).waitFor()
   }

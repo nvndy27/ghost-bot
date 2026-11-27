@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { TeamMemberRoutingDto, TeamMemberRoutingOverride, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import type { WorkspaceBot } from '../types/workspace.ts'
 
-export function TeamMemberRouting({ team, bots }: { team: TeamRecordDto; bots: WorkspaceBot[] }) {
+export function TeamMemberRouting({ team, bots, expanded }: { team: TeamRecordDto; bots: WorkspaceBot[]; expanded?: boolean }) {
   const [selection, setSelection] = useState(team.leadBotId)
   const [routing, setRouting] = useState<TeamMemberRoutingDto | null>(null)
   const [override, setOverride] = useState<TeamMemberRoutingOverride>({})
@@ -47,7 +47,7 @@ export function TeamMemberRouting({ team, bots }: { team: TeamRecordDto; bots: W
   }
 
   return (
-    <details className="gb-team-card">
+    <details className="gb-team-card" open={expanded}>
       <summary>Member model settings</summary>
       <fieldset disabled={saving}>
         <legend>Team-scoped configuration</legend>

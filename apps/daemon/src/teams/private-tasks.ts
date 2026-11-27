@@ -232,15 +232,19 @@ export class PrivateTaskChatService {
     if (!meta || meta.teamId !== input.teamId || meta.taskId !== input.taskId) {
       throw new DaemonError('SCOPE_FORBIDDEN', 'Task does not belong to this group', { statusCode: 403 })
     }
+    const confirmed = () => this.db.sqlite.prepare(`
+      SELECT 1 FROM team_tasks WHERE id = ?
+        AND status IN ('cancelled', 'stopped_by_parent') AND termination_confirmed = 1
+    `).get(meta.taskId) !== undefined
     const current = this.list({ teamId: meta.teamId }).tasks.find((task) => task.taskId === meta.taskId)
     if (!current || TERMINAL_TASK_STATUSES.has(current.status)) {
-      return { teamRunId: input.teamRunId, cancelled: current?.status === 'cancelled' }
+      return { teamRunId: input.teamRunId, cancelled: this.teams.getTeamRun(input.teamRunId).status === 'cancelled' && confirmed() }
     }
     const res = await this.teams.cancelTeamRun(input.teamRunId)
     this.publishTerminalSummaryIfNeeded(input.teamRunId)
     return {
       teamRunId: input.teamRunId,
-      cancelled: res.run.status === 'cancelled' && res.uncertainCount === 0,
+      cancelled: res.run.status === 'cancelled' && res.uncertainCount === 0 && confirmed(),
     }
   }
 
@@ -310,7 +314,10 @@ export class PrivateTaskChatService {
         if (msg?.content_json) {
           try {
             const { text } = JSON.parse(msg.content_json) as { text?: unknown }
-            if (typeof text === 'string') assistantText = redactSecrets(text).trim().slice(0, 800)
+            if (typeof text === 'string') {
+              // Share the result paragraph without the worker transcript or runtime footer.
+              assistantText = redactSecrets(text.trim().split(/\r?\n\s*\r?\n/, 1)[0]).slice(0, 800)
+            }
           } catch {
             // Malformed outputs are omitted.
           }

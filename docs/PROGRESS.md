@@ -1,5 +1,9 @@
 # Progress log
 
+## Alpha.1 integrity and Issue #41
+
+**Tested** — Original Private Task findings fixed on Draft PR #42. Successor adds a compact Group Chat, native validated avatar selection and crop, and persisted Auto, bot snapshot and upload modes. Focused daemon integrity tests passed 4/4. Lint, affected typechecks/build, and combined offline Electron acceptance passed. Synthetic light/dark screenshots kept locally. Zero live inference.
+
 ## Alpha.1B — Group membership and model routing
 
 **Tested** on accepted main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`. Team-scoped settings validate daemon catalog choices without mutating bots. Membership edits prune overrides and require a retained lead. Offline dispatch snapshots effective routing and uses durable scoped child sessions. Lint, affected typechecks/build, focused tests 4/4, and two-launch offline Electron acceptance passed. Zero live inference.

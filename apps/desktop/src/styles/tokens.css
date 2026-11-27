@@ -999,3 +999,48 @@ hr.gb-divider {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Group Chat uses the same surfaces and focus treatment as personal Chat. */
+.gb-team-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--gb-border);
+  border-radius: 28%;
+  background: var(--gb-surface-elevated);
+}
+.gb-team-avatar > img { width: 100%; height: 100%; object-fit: cover; }
+.gb-team-avatar-grid { width: 100%; height: 100%; display: grid; grid-template: repeat(2, 1fr) / repeat(2, 1fr); }
+.gb-team-avatar-grid[data-count="1"] { grid-template: 1fr / 1fr; }
+.gb-team-avatar-grid[data-count="2"] { grid-template-rows: 1fr; }
+.gb-team-avatar-grid[data-count="3"] > :first-child { grid-row: span 2; }
+.gb-team-avatar-tile { display: grid; place-items: center; min-width: 0; min-height: 0; overflow: hidden; }
+.gb-team-avatar-tile:nth-child(even) { background: var(--gb-surface); }
+.gb-team-avatar-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border: 1px solid var(--gb-border); border-radius: 8px; }
+.gb-team-avatar-editor label { display: grid; gap: 4px; }
+.gb-team-editor-advanced > summary { padding: 8px 0; cursor: pointer; }
+.gb-team-header-label { min-width: 0; display: grid; gap: 2px; }
+.gb-team-header-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gb-team-header-actions { display: flex; align-items: center; flex: none; gap: 2px; }
+.gb-team-header-panel { border-bottom: 1px solid var(--gb-border); padding: 8px 14px; max-height: 35vh; overflow: auto; }
+.gb-team-attention { margin: 4px 12px; align-self: flex-start; }
+.gb-discussion-turn { display: grid; gap: 10px; margin: 0 0 16px; }
+.gb-discussion-reply { display: flex; align-items: flex-start; min-width: 0; gap: 7px; }
+.gb-discussion-content { min-width: 0; max-width: min(92%, 54ch); display: grid; justify-items: start; gap: 3px; }
+.gb-discussion-author { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.gb-discussion-bubble { background: var(--gb-surface); margin: 0; padding: 7px 11px; border-radius: 4px 14px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gb-discussion-user { justify-self: end; max-width: min(84%, 60ch); background: var(--gb-surface-elevated); border-radius: 14px 4px 14px 14px; }
+.gb-team-summary, .gb-task-strip { display: grid; gap: 5px; padding: 8px 10px; border: 1px solid var(--gb-border); border-radius: 8px; margin: 6px 0 12px; overflow-wrap: anywhere; }
+.gb-team-overview-section { padding: 9px 0; border-top: 1px solid var(--gb-border); font-size: 12px; }
+.gb-team-overview-section small { display: block; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gb-team-overview-section > summary { margin-bottom: 6px; cursor: pointer; }
+.gb-group-mention { display: inline-flex; align-items: center; position: relative; min-height: 32px; gap: 4px; }
+.gb-group-mention > select { max-width: 7em; }
+.gb-team-chat-header { justify-content: space-between; }
+.gb-team-chat-header .gb-chat-header-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.gb-team-count { flex: none; white-space: nowrap; }
+.gb-team-item .gb-icon-inline { min-width: 0; }
+.gb-sidebar-row[data-team-id] .gb-row-actions { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); }
+.gb-sidebar-row[data-team-id]:is(:hover, :focus-within, .pinned) .gb-team-item { padding-inline-end: 74px; }
+.gb-team-overview-section small { flex: 0 1 48%; text-align: end; }

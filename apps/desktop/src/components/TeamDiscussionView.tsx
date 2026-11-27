@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PrivateTaskChatRecord, TeamDiscussionTurn, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
-import { ListTodo } from 'lucide-react'
+import { AtSign, ListTodo, Send, Square } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
-import { ICON_SIZE, ICON_STROKE } from './IconButton.tsx'
-import { TeamMemberRouting } from './TeamMemberRouting.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 const ACTIVE_TASK_STATUSES = new Set(['pending', 'queued', 'running', 'awaiting_approval', 'cancelling'])
 
@@ -179,11 +178,10 @@ export function TeamDiscussionView({
     <>
       <div className="gb-messages">
         <div className="gb-messages-inner">
-          <TeamMemberRouting team={team} bots={bots} />
-          {privateTasks.length > 0 && (
-            <section className="gb-card" aria-label="Delegated private tasks" style={{ display: 'grid', gap: 6 }}>
-              <strong style={{ fontSize: 12.5 }}>Private Task Chats ({privateTasks.length})</strong>
-              {privateTasks.map((task) => {
+          {privateTasks.some((task) => ACTIVE_TASK_STATUSES.has(task.status) || task.status === 'uncertain') && (
+            <section className="gb-task-strip" aria-label="Delegated private tasks">
+              <strong style={{ fontSize: 12.5 }}>Private task activity</strong>
+              {privateTasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status) || task.status === 'uncertain').map((task) => {
                 const bot = bots.find((b) => b.id === task.assignedBotId)
                 const active = ACTIVE_TASK_STATUSES.has(task.status)
                 return (
@@ -226,7 +224,7 @@ export function TeamDiscussionView({
                         onClick={() => void bridge.cancelPrivateTaskChat({ teamId: team.id, teamRunId: task.teamRunId, taskId: task.taskId }).then(() => {
                           onTasksChanged?.()
                           return bridge.listPrivateTaskChats({ teamId: team.id }).then((r) => setPrivateTasks(r.tasks))
-                        })}
+                        }).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not cancel task'))}
                       >
                         Cancel
                       </button>
@@ -245,7 +243,7 @@ export function TeamDiscussionView({
               const linkedTask = privateTasks.find((t) => t.teamRunId === summary.teamRunId)
               return (
                 <section
-                  className="gb-card"
+                  className="gb-team-summary"
                   key={turn.id}
                   data-task-summary={summary.teamRunId}
                   style={{ display: 'grid', gap: 6 }}
@@ -285,19 +283,19 @@ export function TeamDiscussionView({
               )
             }
             return (
-              <section className="gb-card" key={turn.id}>
-                <strong>You</strong>
-                <p style={{ whiteSpace: 'pre-wrap' }}>{turn.text}</p>
+              <section className="gb-discussion-turn" key={turn.id}>
+                <p className="gb-discussion-bubble gb-discussion-user" aria-label="Your message">{turn.text}</p>
                 {turn.replies.map((reply, idx) => {
                   const bot = bots.find((entry) => entry.id === reply.botId)
-                  return <div key={`${reply.botId}-${reply.round ?? 1}-${idx}`} style={{ marginTop: 8 }}>
-                    <div className="gb-icon-inline" style={{ flexWrap: 'wrap', gap: 6 }}>
-                      {bot && <BotAvatar config={bot.avatar} status="idle" size={24} />}
-                      <strong>{bot?.name ?? reply.botId}</strong>
-                      <span className="gb-badge">{reply.routing.modelId}</span>
-                      {reply.round === 2 && <span className="gb-badge">Round 2</span>}
+                  return <div className="gb-discussion-reply" key={`${reply.botId}-${reply.round ?? 1}-${idx}`}>
+                    {bot && <BotAvatar config={bot.avatar} status="idle" size={24} />}
+                    <div className="gb-discussion-content">
+                      <div className="gb-discussion-author">
+                        <strong>{bot?.name ?? reply.botId}</strong>
+                        <small className="gb-muted">{reply.routing.modelId}{reply.round === 2 ? ' · Round 2' : ''}</small>
+                      </div>
+                      <p className="gb-discussion-bubble">{reply.text}</p>
                     </div>
-                    <p style={{ whiteSpace: 'pre-wrap' }}>{reply.text}</p>
                   </div>
                 })}
               </section>
@@ -371,35 +369,31 @@ export function TeamDiscussionView({
           <textarea aria-label="Group discussion message" placeholder="Message the group" maxLength={4000}
             disabled={!available || busy} value={draft} onChange={(event) => setDraft(event.target.value)} />
           <div className="gb-composer-footer">
+            <label className="gb-group-mention" title="Insert member mention">
+              <AtSign size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
             <select aria-label="Insert member mention" value="" disabled={!available || busy}
               onChange={(event) => setDraft((previous) => `${previous.trimEnd()}${previous.trim() ? ' ' : ''}@${event.target.value} `.slice(0, 4000))}>
               <option value="" disabled>Mention</option>
               <option value="all">Everyone</option>
               {team.memberBotIds.map((id) => <option key={id} value={id}>{bots.find((bot) => bot.id === id)?.name ?? id}</option>)}
             </select>
+            </label>
             <select aria-label="Discussion rounds" value={String(rounds)} disabled={!available || busy}
               onChange={(event) => setRounds(event.target.value === '2' ? 2 : 1)}>
               <option value="1">1 round</option>
               <option value="2">2 rounds</option>
             </select>
-            <button
-              type="button"
-              className="gb-btn-outline gb-icon-inline"
-              disabled={!available}
-              aria-pressed={delegateOpen}
-              onClick={() => setDelegateOpen((v) => !v)}
-            >
-              <ListTodo size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <span>Delegate task</span>
-            </button>
+            <IconButton label="Delegate task" disabled={!available} pressed={delegateOpen} onClick={() => setDelegateOpen(!delegateOpen)}>
+              <ListTodo size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+            </IconButton>
             {busy ? (
-              <button type="button" className="gb-btn-outline" onClick={() => void cancelDiscussion()}>
-                Stop
-              </button>
+              <IconButton label="Stop" onClick={() => void cancelDiscussion()}>
+                <Square size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              </IconButton>
             ) : (
-              <button type="submit" className="gb-btn-accent" disabled={!available || !draft.trim()}>
-                Send to group
-              </button>
+              <IconButton label="Send to group" type="submit" variant="outline" disabled={!available || !draft.trim()}>
+                <Send size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              </IconButton>
             )}
           </div>
         </div>

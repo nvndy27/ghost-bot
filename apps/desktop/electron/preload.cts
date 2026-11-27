@@ -128,6 +128,7 @@ const bridge: GhostBotBridge = {
   cancelPrivateTaskChat: (input) => ipcRenderer.invoke('ghost:teams:tasks:cancel-private', input),
   getTeamMemberRouting: (input) => ipcRenderer.invoke('ghost:teams:member-routing:get', input),
   setTeamMemberRouting: (input) => ipcRenderer.invoke('ghost:teams:member-routing:set', input),
+  pickTeamAvatar: () => ipcRenderer.invoke('ghost:teams:avatar-pick'),
   listTeams: (input) => ipcRenderer.invoke('ghost:teams:list', input ?? {}),
   createTeam: (input) => ipcRenderer.invoke('ghost:teams:create', input),
   updateTeam: (input) => ipcRenderer.invoke('ghost:teams:update', input),
