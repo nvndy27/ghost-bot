@@ -1,5 +1,17 @@
 # Progress log
 
+## Alpha.2C.1 — Workspace search and previews
+
+The maintainer authorized the read-only feature branch from `c91ebcba34a9308ce5e3645417f5afaacd56e472` (PR #19). Workspace-owned modules implement descriptor-relative name and text search, matching-line navigation, preview loading, Markdown text rendering, sanitized SVG and bounded static PNG/GIF data, isolated PDF rasterization, and a draft insertion callback. Search limits are 8 levels, 96 directory visits, 4,000 scanned entries, 600 files, 100 results, 64 KiB per text file and a 2.5-second cooperative deadline. An in-flight filesystem operation completes before the deadline or cancellation can be observed. Preview inputs are capped at 1 MiB, with a lower SVG limit and a raster pixel limit.
+
+Agent 1 owns shared DTOs, daemon grant checks and route registration, preload/main, and draft insertion. The workspace UI reports the integration as unavailable until those capabilities are wired. PDF rasterization runs through fixed system Poppler commands in Bubblewrap with separate network and PID namespaces, read-only system runtime files and fonts, an empty environment and no workspace or home bind. The process receives at most 1 MiB on stdin. Each job is limited to 20 source pages, one 1000-pixel page and 1 MiB output, a shared three-second wall deadline, and one concurrent job. The sandbox child also has CPU, address-space, file-size and descriptor limits. Missing runtime or isolation fails closed. Save, create, rename, delete and group filesystem access stay gated.
+
+| State | Evidence |
+|---|---|
+| Tested | Three isolated discovery tests passed. They cover filename and text results, matching lines, search bounds, cancellation, stale context, sensitive files, validated raster input and missing preview files. The continuation adds real sandboxed Poppler fixtures, operation grant and cancellation tests, and raster admission tests for animation, compressed metadata and oversized frames. |
+| Tested | Seven scoped Electron and daemon IPC baseline checks passed, including read-only file opening and the Alpha.2C.1 unavailable UI without shared wiring. Lint, recursive typecheck and recursive build passed. |
+| Blocked | Integrated search, preview, cancellation and composer acceptance require Agent 1's shared wiring and the refreshed convergence baseline. PDF is verified at the workspace module boundary on the recorded host, and end-to-end preview acceptance is pending. |
+
 ## Alpha.2A–B — Shared Workspace Integration
 
 The integration branch preserves the merge at `d3dc3c3`. The reconciliation follow-up binds native read grants to the bot, workspace identity, and current authorization generation. A workspace or permission change clears the grant. The staged save service checks the pinned inode, staged entry metadata, and bytes before rename. Regression coverage includes restoring a prior root, replacing the stage entry, and modifying staged bytes without changing their length. See the coordination handoff for the exact tested revision and acceptance results.

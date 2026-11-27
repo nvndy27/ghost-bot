@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { highlightCodeLines } from './syntaxHighlight.tsx'
 
 export interface OpenEditorTab {
@@ -19,6 +19,8 @@ export interface WorkspaceCodeEditorProps {
   activePath: string | null
   loadingFilePath: string | null
   loadError: string | null
+  jumpTo?: { relativePath: string; lineNumber: number } | null
+  onSendSelection?: (relativePath: string, text: string) => Promise<void>
   onSelectTab: (relativePath: string) => void
   onChangeContent: (relativePath: string, nextContent: string) => void
   onSaveFile: (relativePath: string) => void
@@ -32,6 +34,8 @@ export function WorkspaceCodeEditor({
   activePath,
   loadingFilePath,
   loadError,
+  jumpTo,
+  onSendSelection,
   onSelectTab,
   onChangeContent,
   onSaveFile,
@@ -41,6 +45,9 @@ export function WorkspaceCodeEditor({
 }: WorkspaceCodeEditorProps) {
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null)
   const [confirmReloadPath, setConfirmReloadPath] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [selectionLength, setSelectionLength] = useState(0)
+  const [sendStatus, setSendStatus] = useState('')
   const highlightRef = useRef<HTMLPreElement | null>(null)
   const gutterRef = useRef<HTMLDivElement | null>(null)
 
@@ -56,6 +63,36 @@ export function WorkspaceCodeEditor({
     if (!activeTab) return null
     return highlightCodeLines(activeTab.draftContent, activeTab.language)
   }, [activeTab])
+
+  useEffect(() => {
+    setSelectionLength(0)
+    setSendStatus('')
+  }, [activePath])
+
+  useEffect(() => {
+    const editor = textareaRef.current
+    if (!editor || !jumpTo || jumpTo.lineNumber < 1 || jumpTo.relativePath !== activePath) return
+    const lineIndex = Math.min(jumpTo.lineNumber - 1, lines.length - 1)
+    let offset = 0
+    for (const line of lines.slice(0, lineIndex)) offset += line.length + 1
+    editor.focus()
+    editor.setSelectionRange(offset, offset + lines[lineIndex].length)
+    const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight)
+    if (Number.isFinite(lineHeight)) editor.scrollTop = lineIndex * lineHeight
+  }, [jumpTo, activePath, lines])
+
+  async function sendSelection() {
+    const editor = textareaRef.current
+    if (!editor || !activeTab || !onSendSelection) return
+    const selection = editor.value.slice(editor.selectionStart, editor.selectionEnd)
+    if (!selection.trim() || selection.length > 8000) return
+    try {
+      await onSendSelection(activeTab.relativePath, selection)
+      setSendStatus('Selection added to the chat draft.')
+    } catch (err) {
+      setSendStatus(err instanceof Error ? err.message : 'The chat draft is unavailable.')
+    }
+  }
 
   const handleRequestClose = (tab: OpenEditorTab) => {
     if (tab.draftContent !== tab.savedContent) {
@@ -208,6 +245,16 @@ export function WorkspaceCodeEditor({
             </div>
           </div>
 
+          {onSendSelection && <div className="gb-workspace-discovery-controls">
+            <button type="button" className="gb-workspace-icon-btn"
+              disabled={!selectionLength || selectionLength > 8000}
+              onClick={() => void sendSelection()}>
+              Add selection to chat draft
+            </button>
+            {(sendStatus || selectionLength > 8000) && (
+              <span role="status">{selectionLength > 8000 ? 'Select at most 8,000 characters.' : sendStatus}</span>
+            )}
+          </div>}
           {confirmReloadPath === activeTab.relativePath && (
             <div className="gb-editor-banner" data-testid="editor-dirty-reload-confirm">
               <span>Unsaved edits in {activeTab.name} will be discarded on reload.</span>
@@ -276,6 +323,8 @@ export function WorkspaceCodeEditor({
                 {activeTab.draftContent.endsWith('\n') ? '\n' : ''}
               </pre>
               <textarea
+                ref={textareaRef}
+                onSelect={(event) => setSelectionLength(event.currentTarget.selectionEnd - event.currentTarget.selectionStart)}
                 className="gb-editor-textarea"
                 aria-label={`Code editor for ${activeTab.relativePath}`}
                 data-testid="workspace-editor-textarea"

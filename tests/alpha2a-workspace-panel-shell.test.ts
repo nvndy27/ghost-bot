@@ -74,7 +74,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
 
   let app = await launch()
   try {
-    const page = await app.firstWindow()
+    let page = await app.firstWindow()
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.waitForSelector('[data-testid="workspace-panel-shell"]')
 
@@ -133,10 +133,15 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const initialWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
     const resizeHandle = page.getByRole('separator', { name: 'Resize right workspace panel' })
     await resizeHandle.focus()
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('ArrowLeft')
+    for (const steps of [1, 2]) {
+      await resizeHandle.press('ArrowLeft')
+      const expectedWidth = Math.min(420, initialWidth + 16 * steps)
+      await page.waitForFunction((width) => {
+        const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
+        return panel?.getBoundingClientRect().width === width
+      }, expectedWidth)
+    }
     const resizedWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
-    assert.ok(resizedWidth > initialWidth, `Expected right panel width to increase on ArrowLeft (${initialWidth} -> ${resizedWidth})`)
 
     // 6. Maximize and restore (button + Escape)
     const maxBtn = page.getByTestId('workspace-maximize-btn')
@@ -198,7 +203,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
         memberBotIds: [bot.id, bots[1].id],
       })
     }, workspace)
-    await page.reload()
+    await app.close()
+    app = await launch()
+    page = await app.firstWindow()
+    page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
+    page.on('pageerror', (err) => consoleErrors.push(err.message))
     await page.getByTestId('workspace-tab-files').click()
     await page.getByText('Allow read access to this bot workspace', { exact: false }).waitFor()
     const authorize = page.getByRole('button', { name: 'Allow read access', exact: true })
@@ -216,6 +225,8 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await editor.waitFor()
     assert.equal(await editor.inputValue(), 'Initial fixture\n')
 
+    await page.getByText('Workspace search and preview are unavailable.', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Add selection to chat draft' }).count(), 0)
     assert.equal(await editor.getAttribute('readonly'), '')
     assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
 
@@ -254,6 +265,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     )
     assert.equal(await readFile(file, 'utf8'), 'External edit\n')
 
+    const reopenBotWorkspace = async () => {
+      const options = page.getByRole('listbox', { name: 'Bots' }).getByRole('option')
+      await options.nth(1).click()
+      await options.first().click()
+    }
     const replacement = join(dataDir, 'replacement-workspace')
     await mkdir(replacement)
     await page.evaluate(async ({ id, workspacePath }) => {
@@ -263,7 +279,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       page.evaluate((target) => window.ghostBot!.readWorkspaceFile(target), original),
       /authorization changed/i,
     )
-    await page.reload()
+    await reopenBotWorkspace()
     await page.getByTestId('workspace-files-unavailable').waitFor()
     assert.equal(await editor.count(), 0)
 
@@ -282,7 +298,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       window.ghostBot!.resolveWorkspaceContext({ botId })
     ), original.botId)
     assert.equal(restoredContext.authorized, false, 'Restoring a root must not revive the old grant')
-    await page.reload()
+    await reopenBotWorkspace()
     await authorize.click()
     await page.getByTestId('workspace-tree-entry-sample.txt').waitFor()
     await app.close()

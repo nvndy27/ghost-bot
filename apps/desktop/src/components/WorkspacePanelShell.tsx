@@ -2,6 +2,7 @@ import { PanelRight } from 'lucide-react'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { WorkspaceFilesTab } from './workspace/WorkspaceFilesTab.tsx'
+import type { WorkspaceDraftSelection } from './workspace/workspaceDiscoveryClient.ts'
 import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
 import { WorkspacePlaceholderTab } from './workspace/WorkspacePlaceholderTab.tsx'
 import {
@@ -24,6 +25,7 @@ export interface WorkspacePanelShellProps {
   onCollapse: () => void
   overviewContent: ReactNode
   filesTransport?: WorkspaceFilesTransport | null
+  onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
 }
 
 export function WorkspacePanelShell({
@@ -39,6 +41,7 @@ export function WorkspacePanelShell({
   onCollapse,
   overviewContent,
   filesTransport,
+  onAddSelectionToDraft,
 }: WorkspacePanelShellProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<WorkspaceTabId>('overview')
   const [maximized, setMaximized] = useState(false)
@@ -203,6 +206,8 @@ export function WorkspacePanelShell({
             workspacePath={workspacePath}
             isMockMode={isMockMode}
             transport={filesTransport}
+            visible={activeTabDef.id === 'files'}
+            onAddSelectionToDraft={onAddSelectionToDraft}
           />
         </div>
       )}
