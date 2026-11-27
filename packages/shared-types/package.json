@@ -9,6 +9,7 @@
     "./permissions": "./permissions.ts",
     "./workspace-discovery": "./workspace-discovery.ts",
     "./workspace-git": "./workspace-git.ts",
+    "./workspace-browser": "./workspace-browser.ts",
     "./ipc": "./ipc.ts"
   },
   "dependencies": {

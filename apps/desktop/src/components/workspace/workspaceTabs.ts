@@ -39,9 +39,9 @@ export const WORKSPACE_TABS: readonly WorkspaceTabDefinition[] = [
     id: 'browser',
     label: 'Browser',
     shortLabel: 'Browser',
-    implemented: false,
-    milestone: 'Alpha.2E',
-    summary: 'Embedded live preview browser is not yet enabled in Alpha.2A.',
+    implemented: true,
+    milestone: 'Alpha.2E.1',
+    summary: 'Isolated user-controlled localhost and HTTP/HTTPS preview browser.',
   },
   {
     id: 'output',

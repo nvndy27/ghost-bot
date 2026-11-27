@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { WorkspaceBrowserController } from './workspace-browser/controller.js'
 import {
   AppearanceSettingsSchema,
   AppInfoResponseSchema,
@@ -107,6 +108,8 @@ import {
   SetGeminiCredentialInputSchema,
   WorkspaceAuthorizeReadInputSchema,
   WorkspaceContextIpcResponseSchema,
+  WorkspaceBrowserBoundsSchema,
+  WorkspaceBrowserCommandSchema,
   WorkspaceGitInspectSchema,
   WorkspaceGitOperationSchema,
   WorkspaceGitResponseSchema,
@@ -207,6 +210,7 @@ const distIndexPath = join(appRoot, 'dist', 'index.html')
 const distIndexUrl = pathToFileURL(distIndexPath).href
 
 let mainWindow: BrowserWindow | null = null
+let workspaceBrowser: WorkspaceBrowserController | null = null
 let daemonChild: ChildProcessWithoutNullStreams | null = null
 let runtimeDir = ''
 let daemonSocketPath = ''
@@ -610,6 +614,19 @@ function registerIpcHandlers(): void {
       method: 'POST',
       body: parsed,
     })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_COMMAND, async (event, input) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    return workspaceBrowser.command(WorkspaceBrowserCommandSchema.parse(input))
+  })
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_BOUNDS, (event, bounds) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    workspaceBrowser.setBounds(WorkspaceBrowserBoundsSchema.parse(bounds))
+  })
+  ipcMain.handle(IPC_CHANNELS.WORKSPACE_BROWSER_SCREENSHOT, async (event, id) => {
+    if (!isAuthorizedSender(event) || !workspaceBrowser) throw new Error('Workspace browser is unavailable.')
+    return workspaceBrowser.screenshot(z.uuid().parse(id))
   })
 
   ipcMain.handle(IPC_CHANNELS.WORKSPACE_GIT_INSPECT, async (event, params) => {
@@ -2142,6 +2159,10 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers()
   mainWindow = createMainWindow()
+  workspaceBrowser = new WorkspaceBrowserController(mainWindow)
+  mainWindow.webContents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) workspaceBrowser?.closeAll()
+  })
 
   if (process.env.GHOST_BOT_SMOKE_EXIT === '1') {
     const consoleErrors: string[] = []
@@ -2181,6 +2202,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  workspaceBrowser?.closeAll()
   quitting = true
 })
 

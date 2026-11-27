@@ -2,6 +2,7 @@ import { PanelRight } from 'lucide-react'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { WorkspaceGitChanges } from './workspace/WorkspaceGitChanges.tsx'
+import { WorkspaceBrowserTab } from './workspace/WorkspaceBrowserTab.tsx'
 import { WorkspaceFilesTab } from './workspace/WorkspaceFilesTab.tsx'
 import type { WorkspaceDraftSelection } from './workspace/workspaceDiscoveryClient.ts'
 import type { WorkspaceFilesTransport } from './workspace/workspaceFilesClient.ts'
@@ -181,6 +182,8 @@ export function WorkspacePanelShell({
             overviewContent
           ) : activeTabDef.id === 'changes' ? (
             <WorkspaceGitChanges key={contextKey} botId={contextKind === 'bot' ? ownerId : null} />
+          ) : activeTabDef.id === 'browser' ? (
+            <WorkspaceBrowserTab visible={activeTabDef.id === 'browser'} isMockMode={isMockMode} />
           ) : (
             <WorkspacePlaceholderTab
               tab={activeTabDef}

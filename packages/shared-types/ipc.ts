@@ -4,6 +4,8 @@ import {
 } from '@ghost-bot/shared-types/workspace-discovery'
 export * from '@ghost-bot/shared-types/workspace-discovery'
 import { z } from 'zod'
+import type { WorkspaceBrowserBounds, WorkspaceBrowserCommand, WorkspaceBrowserState } from '@ghost-bot/shared-types/workspace-browser'
+export * from '@ghost-bot/shared-types/workspace-browser'
 import type { WorkspaceGitInspect, WorkspaceGitOperation, WorkspaceGitResponse } from '@ghost-bot/shared-types/workspace-git'
 export * from '@ghost-bot/shared-types/workspace-git'
 
@@ -27,6 +29,9 @@ export const IPC_CHANNELS = {
   WORKSPACE_CANCEL_DISCOVERY: 'ghost:workspace:cancel-discovery',
   WORKSPACE_READ_FILE: 'ghost:workspace:read-file',
   WORKSPACE_SAVE_FILE: 'ghost:workspace:save-file',
+  WORKSPACE_BROWSER_COMMAND: 'ghost:workspace:browser-command',
+  WORKSPACE_BROWSER_BOUNDS: 'ghost:workspace:browser-bounds',
+  WORKSPACE_BROWSER_SCREENSHOT: 'ghost:workspace:browser-screenshot',
   WORKSPACE_GIT_INSPECT: 'ghost:workspace:git-inspect',
   WORKSPACE_GIT_CANCEL: 'ghost:workspace:git-cancel',
   SETTINGS_GET: 'ghost:settings:get',
@@ -2285,6 +2290,10 @@ export interface GhostBotBridge {
   ): Promise<WorkspaceListDirectoryIpcResponse>
   readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
   saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
+  workspaceBrowserCommand(input: WorkspaceBrowserCommand): Promise<WorkspaceBrowserState>
+  setWorkspaceBrowserBounds(bounds: WorkspaceBrowserBounds): Promise<void>
+  captureWorkspaceBrowser(tabId: string): Promise<string>
+  onWorkspaceBrowserState(listener: (state: WorkspaceBrowserState) => void): () => void
   inspectWorkspaceGit(params: WorkspaceGitInspect): Promise<WorkspaceGitResponse>
   cancelWorkspaceGit(params: WorkspaceGitOperation): Promise<boolean>
   getSettings(): Promise<AppSettings>
