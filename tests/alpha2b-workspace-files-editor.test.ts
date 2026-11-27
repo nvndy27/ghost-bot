@@ -60,6 +60,7 @@ async function createTempDaemonAndWorkspaces() {
   )
   insertBot.run('bot-ws1', 'Bot WS1', ws1, 'workspace', now, now)
   insertBot.run('bot-shared-ws1', 'Bot Shared WS1', ws1, 'workspace', now, now)
+  insertBot.run('bot-nested-src', 'Bot Nested Src', join(ws1, 'src'), 'workspace', now, now)
   insertBot.run('bot-ro', 'Bot ReadOnly', ws1, 'read-only', now, now)
   insertBot.run('bot-ws2', 'Bot WS2', ws2, 'workspace', now, now)
   insertBot.run('bot-full', 'Bot FullAccess', ws1, 'full-access', now, now)
@@ -541,6 +542,38 @@ test('Alpha.2B.1 Final Closure: cross-bot physical file serialization, external 
     await assert.rejects(
       () => ctx.service.resolveContext({ botId: 'bot-ws1', teamId: 'team-1' }),
     )
+
+    // 6. Nested workspace roots serialize saves to the same physical file (ws1/src/index.ts vs nested src/index.ts)
+    const refreshedWs1 = await ctx.service.resolveContext({ botId: 'bot-ws1' })
+    const nestedCtx = await ctx.service.resolveContext({ botId: 'bot-nested-src' })
+    assert.ok(refreshedWs1.workspaceId && refreshedWs1.authGeneration)
+    assert.ok(nestedCtx.workspaceId && nestedCtx.authGeneration)
+    const nestedInitial = await ctx.service.readFile({
+      botId: 'bot-nested-src',
+      workspaceId: nestedCtx.workspaceId,
+      authGeneration: nestedCtx.authGeneration,
+      relativePath: 'index.ts',
+    })
+    const nestedResults = await Promise.allSettled([
+      ctx.service.saveFile({
+        botId: 'bot-ws1',
+        workspaceId: refreshedWs1.workspaceId,
+        authGeneration: refreshedWs1.authGeneration,
+        relativePath: 'src/index.ts',
+        content: 'export const nested = "ws1"\n',
+        expectedRevision: nestedInitial.revision,
+      }),
+      ctx.service.saveFile({
+        botId: 'bot-nested-src',
+        workspaceId: nestedCtx.workspaceId,
+        authGeneration: nestedCtx.authGeneration,
+        relativePath: 'index.ts',
+        content: 'export const nested = "nested"\n',
+        expectedRevision: nestedInitial.revision,
+      }),
+    ])
+    assert.equal(nestedResults.filter((r) => r.status === 'fulfilled').length, 1)
+    assert.equal(nestedResults.filter((r) => r.status === 'rejected').length, 1)
   } finally {
     await ctx.cleanup()
   }

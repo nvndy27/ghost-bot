@@ -186,8 +186,8 @@ export class WorkspaceFilesService {
       )
     }
 
-    // Serialize saves by canonical physical file identity (dev:ino + path) across all bots/teams.
-    const lockKey = `${preAuth.rootDev}:${preAuth.rootIno}::${normalizedPath}`
+    // Serialize saves by canonical physical file path across nested or overlapping workspace roots.
+    const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
 
     return this.withFileLock(lockKey, async () => {
       const auth = await this.authorizeWorkspace(input)

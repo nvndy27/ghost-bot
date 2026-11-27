@@ -695,6 +695,7 @@ export async function saveContainedTextFile(
         statusCode: 500,
       })
     }
+    const stagedIno = stagedStat.ino
     await tmpHandle.sync()
     await tmpHandle.close()
     tmpHandle = null
@@ -758,6 +759,13 @@ export async function saveContainedTextFile(
           })
         }
         const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
+        if (updatedStat.ino !== stagedIno || Buffer.compare(verifyBytes, nextBytes) !== 0) {
+          throw new DaemonError(
+            'SAVE_OUTCOME_UNCERTAIN',
+            'Post-commit file identity or content did not match staged write',
+            { statusCode: 500 },
+          )
+        }
         const newRevision = computeRevisionToken(updatedStat, verifyBytes)
         return {
           revision: newRevision,
