@@ -1,4 +1,4 @@
-import type { SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import type { PrivateTaskChatRecord, SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { formatProviderLabel } from '@ghost-bot/shared-types/runtime'
 import {
   ChevronDown,
@@ -23,6 +23,8 @@ export interface LeftSidebarProps {
   activeBotId: string | null
   teams: TeamRecordDto[]
   activeTeamId: string | null
+  privateTasks?: PrivateTaskChatRecord[]
+  activePrivateTaskId?: string | null
   organization?: SidebarOrganization
   unreadCountByBot?: Record<string, number>
   teamsLoading?: boolean
@@ -31,6 +33,7 @@ export interface LeftSidebarProps {
   onSearchChange: (value: string) => void
   onSelectBot: (botId: string) => void
   onSelectTeam: (teamId: string) => void
+  onSelectPrivateTask?: (task: PrivateTaskChatRecord) => void
   onTogglePinBot?: (botId: string) => void
   onMoveBot?: (botId: string, direction: 'up' | 'down') => void
   onTogglePinTeam?: (teamId: string) => void
@@ -48,6 +51,8 @@ export function LeftSidebar({
   activeBotId,
   teams,
   activeTeamId,
+  privateTasks = [],
+  activePrivateTaskId = null,
   organization,
   unreadCountByBot = {},
   teamsLoading = false,
@@ -56,6 +61,7 @@ export function LeftSidebar({
   onSearchChange,
   onSelectBot,
   onSelectTeam,
+  onSelectPrivateTask,
   onTogglePinBot,
   onMoveBot,
   onTogglePinTeam,
@@ -341,6 +347,47 @@ export function LeftSidebar({
           })
         )}
       </div>
+
+      {privateTasks.length > 0 && onSelectPrivateTask && (
+        <>
+          <hr className="gb-divider" />
+          <div>
+            <div className="gb-section-label">
+              <span>Private Tasks</span>
+            </div>
+            {privateTasks.slice(0, 8).map((task) => {
+              const bot = bots.find((b) => b.id === task.assignedBotId)
+              const isActive = task.teamRunId === activePrivateTaskId
+              return (
+                <button
+                  key={task.teamRunId}
+                  type="button"
+                  data-sidebar-private-task={task.teamRunId}
+                  className={`gb-team-item${isActive ? ' active' : ''}`}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    background: isActive ? 'var(--gb-surface-elevated)' : 'transparent',
+                    border: isActive ? '1px solid var(--gb-border)' : '1px solid transparent',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    color: 'inherit',
+                  }}
+                  onClick={() => onSelectPrivateTask(task)}
+                >
+                  <span className="gb-icon-inline" style={{ minWidth: 0, overflow: 'hidden', gap: '6px' }}>
+                    {bot && <BotAvatar config={bot.avatar} status="idle" size={18} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+                      {bot?.name ?? task.assignedBotId}: {task.objective}
+                    </span>
+                  </span>
+                  <span className="gb-badge">{task.status}</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
 

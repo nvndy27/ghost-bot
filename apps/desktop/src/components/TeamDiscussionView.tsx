@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import type { TeamDiscussionTurn, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import type { PrivateTaskChatRecord, TeamDiscussionTurn, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import { ListTodo } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE } from './IconButton.tsx'
 import { TeamMemberRouting } from './TeamMemberRouting.tsx'
 
-export function TeamDiscussionView({ team, bots, isMockMode }: {
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'queued', 'running', 'awaiting_approval', 'cancelling'])
+
+export function TeamDiscussionView({
+  team,
+  bots,
+  isMockMode,
+  onOpenPrivateTask,
+  onTasksChanged,
+}: {
   team: TeamRecordDto
   bots: WorkspaceBot[]
   isMockMode: boolean
+  onOpenPrivateTask?: (task: PrivateTaskChatRecord) => void
+  onTasksChanged?: () => void
 }) {
   const [turns, setTurns] = useState<TeamDiscussionTurn[]>([])
   const [beforeSeq, setBeforeSeq] = useState<number | null>(null)
@@ -16,9 +28,19 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
   const [busy, setBusy] = useState(false)
   const [statusLabel, setStatusLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [delegateOpen, setDelegateOpen] = useState(false)
+  const [delegateBotId, setDelegateBotId] = useState<string>(team.memberBotIds[0] ?? team.leadBotId)
+  const [delegateObjective, setDelegateObjective] = useState('')
+  const [delegating, setDelegating] = useState(false)
+  const [privateTasks, setPrivateTasks] = useState<PrivateTaskChatRecord[]>([])
   const requestRef = useRef<{ text: string; operationId: string } | null>(null)
+  const delegateOpRef = useRef<{ key: string; operationId: string } | null>(null)
   const bridge = window.ghostBot
   const available = Boolean(bridge && isMockMode)
+
+  useEffect(() => {
+    setDelegateBotId((cur) => (team.memberBotIds.includes(cur) ? cur : (team.memberBotIds[0] ?? team.leadBotId)))
+  }, [team.id, team.leadBotId, team.memberBotIds])
 
   useEffect(() => {
     if (!bridge) return
@@ -35,6 +57,30 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
     })
     return () => { active = false }
   }, [bridge, team.id])
+
+  const hasActiveTasks = privateTasks.some((t) => ACTIVE_TASK_STATUSES.has(t.status))
+
+  useEffect(() => {
+    if (!bridge) return
+    let cancelled = false
+    const loadTasks = async () => {
+      try {
+        const res = await bridge.listPrivateTaskChats({ teamId: team.id })
+        if (!cancelled) setPrivateTasks(res.tasks)
+      } catch {
+        // ignore transient refresh failure
+      }
+    }
+    void loadTasks()
+    if (!hasActiveTasks) return () => { cancelled = true }
+    const timer = window.setInterval(() => {
+      void loadTasks()
+    }, 150)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [bridge, team.id, hasActiveTasks])
 
   async function send() {
     const text = draft.trim()
@@ -55,6 +101,35 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
       setStatusLabel(null)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function confirmDelegation() {
+    const objective = delegateObjective.trim()
+    if (!bridge || !available || !objective || delegating) return
+    const opKey = `${delegateBotId}:${objective}`
+    const op = delegateOpRef.current?.key === opKey
+      ? delegateOpRef.current
+      : { key: opKey, operationId: crypto.randomUUID() }
+    delegateOpRef.current = op
+    setDelegating(true)
+    setError(null)
+    try {
+      const created = await bridge.delegateTeamTask({
+        teamId: team.id,
+        assignedBotId: delegateBotId,
+        objective,
+        operationId: op.operationId,
+      })
+      setPrivateTasks((prev) => [created, ...prev.filter((t) => t.teamRunId !== created.teamRunId)])
+      setDelegateObjective('')
+      setDelegateOpen(false)
+      delegateOpRef.current = null
+      onTasksChanged?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delegate task')
+    } finally {
+      setDelegating(false)
     }
   }
 
@@ -89,6 +164,62 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
       <div className="gb-messages">
         <div className="gb-messages-inner">
           <TeamMemberRouting team={team} bots={bots} />
+          {privateTasks.length > 0 && (
+            <section className="gb-card" aria-label="Delegated private tasks" style={{ display: 'grid', gap: 6 }}>
+              <strong style={{ fontSize: 12.5 }}>Private Task Chats ({privateTasks.length})</strong>
+              {privateTasks.map((task) => {
+                const bot = bots.find((b) => b.id === task.assignedBotId)
+                const active = ACTIVE_TASK_STATUSES.has(task.status)
+                return (
+                  <div
+                    key={task.teamRunId}
+                    data-private-task-id={task.teamRunId}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      fontSize: 12,
+                      padding: '4px 0',
+                      borderTop: '1px solid var(--gb-border)',
+                    }}
+                  >
+                    <div className="gb-icon-inline" style={{ minWidth: 0, gap: 6, flex: 1 }}>
+                      {bot && <BotAvatar config={bot.avatar} status={active ? 'working' : 'idle'} size={20} />}
+                      <span style={{ fontWeight: 500 }}>{bot?.name ?? task.assignedBotId}</span>
+                      <span className="gb-muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {task.objective}
+                      </span>
+                    </div>
+                    <span className="gb-badge">{task.status}</span>
+                    {onOpenPrivateTask && (
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        style={{ fontSize: 11.5, padding: '2px 8px' }}
+                        onClick={() => onOpenPrivateTask(task)}
+                      >
+                        Open task chat
+                      </button>
+                    )}
+                    {active && bridge && (
+                      <button
+                        type="button"
+                        className="gb-btn-outline"
+                        style={{ fontSize: 11.5, padding: '2px 8px' }}
+                        onClick={() => void bridge.cancelPrivateTaskChat({ teamId: team.id, teamRunId: task.teamRunId }).then(() => {
+                          onTasksChanged?.()
+                          return bridge.listPrivateTaskChats({ teamId: team.id }).then((r) => setPrivateTasks(r.tasks))
+                        })}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </section>
+          )}
           {beforeSeq !== null && <button className="gb-btn-outline" disabled={busy} onClick={() => void loadEarlier()}>Load earlier messages</button>}
           {!available && <p className="gb-muted">Group replies are available in offline mock mode.</p>}
           {turns.map((turn) => (
@@ -113,6 +244,65 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
           {error && <p role="alert">{error}</p>}
         </div>
       </div>
+      {delegateOpen && (
+        <div style={{ padding: '0 24px 8px' }}>
+          <div className="gb-card" role="region" aria-label="Delegate private task" style={{ display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong style={{ fontSize: 12.5 }}>Delegate Private Task Chat</strong>
+              <button
+                type="button"
+                className="gb-btn-outline"
+                style={{ fontSize: 11.5, padding: '2px 8px' }}
+                onClick={() => setDelegateOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select
+                aria-label="Delegate member"
+                value={delegateBotId}
+                disabled={delegating}
+                onChange={(e) => setDelegateBotId(e.target.value)}
+              >
+                {team.memberBotIds.map((id) => (
+                  <option key={id} value={id}>
+                    {bots.find((b) => b.id === id)?.name ?? id}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                aria-label="Task objective"
+                placeholder="Bounded task objective..."
+                value={delegateObjective}
+                maxLength={2000}
+                disabled={delegating}
+                onChange={(e) => setDelegateObjective(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 200,
+                  height: 30,
+                  padding: '0 8px',
+                  borderRadius: 6,
+                  border: '1px solid var(--gb-border)',
+                  background: 'var(--gb-surface-elevated)',
+                  color: 'var(--gb-text)',
+                }}
+              />
+              <button
+                type="button"
+                className="gb-btn-accent"
+                aria-label="Confirm task delegation"
+                disabled={!available || delegating || !delegateObjective.trim()}
+                onClick={() => void confirmDelegation()}
+              >
+                {delegating ? 'Delegating…' : 'Confirm delegation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <form className="gb-composer-wrap" onSubmit={(event) => { event.preventDefault(); void send() }}>
         <div className="gb-composer">
           <textarea aria-label="Group discussion message" placeholder="Message the group" maxLength={4000}
@@ -129,6 +319,16 @@ export function TeamDiscussionView({ team, bots, isMockMode }: {
               <option value="1">1 round</option>
               <option value="2">2 rounds</option>
             </select>
+            <button
+              type="button"
+              className="gb-btn-outline gb-icon-inline"
+              disabled={!available}
+              aria-pressed={delegateOpen}
+              onClick={() => setDelegateOpen((v) => !v)}
+            >
+              <ListTodo size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              <span>Delegate task</span>
+            </button>
             {busy ? (
               <button type="button" className="gb-btn-outline" onClick={() => void cancelDiscussion()}>
                 Stop

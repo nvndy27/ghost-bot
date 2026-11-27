@@ -77,6 +77,9 @@ import {
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
   TeamMemberRoutingKeySchema,
+  CancelPrivateTaskInputSchema,
+  DelegateTeamTaskInputSchema,
+  ListPrivateTasksInputSchema,
   TeamDiscussionCancelSchema,
   TeamDiscussionListSchema,
   TeamDiscussionSendSchema,
@@ -115,6 +118,7 @@ import { SessionRepository } from './sessions/repository.ts'
 import { SettingsRepository } from './settings/repository.ts'
 import { SidebarOrganizationRepository } from './sidebar/repository.ts'
 import { TeamDiscussion } from './teams/discussion.ts'
+import { PrivateTaskChatService } from './teams/private-tasks.ts'
 import { TeamMemberRoutingService } from './teams/member-routing.ts'
 import { TeamsExecutionBridge } from './teams/execution-bridge.ts'
 import { TeamsService } from './teams/service.ts'
@@ -209,6 +213,7 @@ export class GhostBotDaemon {
   private settingsRepo: SettingsRepository | null = null
   private sessionRepo: SessionRepository | null = null
   private teamDiscussion: TeamDiscussion | null = null
+  private privateTasks: PrivateTaskChatService | null = null
   private teamMemberRouting: TeamMemberRoutingService | null = null
   private sidebarRepo: SidebarOrganizationRepository | null = null
   private memoryService: MemoryService | null = null
@@ -356,6 +361,13 @@ export class GhostBotDaemon {
     this.teamsService = new TeamsService(dbHandle, this.botRepo, teamsBridge)
     this.teamsService.reconcileOnStartup()
     this.teamDiscussion = new TeamDiscussion(dbHandle, this.teamsService, memberRouting, this.runtimeRegistry)
+    this.privateTasks = new PrivateTaskChatService(
+      dbHandle,
+      this.teamsService,
+      memberRouting,
+      this.sessionRepo,
+      () => this.runtimeMode === 'mock',
+    )
 
     this.schedulerService = new SchedulerService(dbHandle, this.botRepo, this.teamsService, {
       tickIntervalMs: 5_000,
@@ -987,6 +999,7 @@ export class GhostBotDaemon {
     this.teamMemberRouting = null
     await this.teamDiscussion?.abortAll()
     this.teamDiscussion = null
+    this.privateTasks = null
     this.workspaceReadGrants.clear()
     this.workspaceFilesService = null
     if (this.memoryService) {
@@ -2554,6 +2567,27 @@ export class GhostBotDaemon {
 
       if (this.teamsService) {
         const teamsService = this.teamsService
+
+        if (req.method === 'POST' && this.privateTasks &&
+            (url.pathname === '/teams/tasks/delegate' ||
+              url.pathname === '/teams/tasks/list-private' ||
+              url.pathname === '/teams/tasks/cancel-private')) {
+          const body = await readJsonBody(req)
+          if (url.pathname.endsWith('/delegate')) {
+            const parsed = DelegateTeamTaskInputSchema.safeParse(body)
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid task delegation payload', { statusCode: 400 })
+            sendJson(res, 201, await this.privateTasks.delegate(parsed.data))
+          } else if (url.pathname.endsWith('/list-private')) {
+            const parsed = ListPrivateTasksInputSchema.safeParse(body ?? {})
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid private tasks query', { statusCode: 400 })
+            sendJson(res, 200, this.privateTasks.list(parsed.data))
+          } else {
+            const parsed = CancelPrivateTaskInputSchema.safeParse(body)
+            if (!parsed.success) throw new DaemonError('VALIDATION_ERROR', 'Invalid private task cancel payload', { statusCode: 400 })
+            sendJson(res, 200, await this.privateTasks.cancel(parsed.data))
+          }
+          return
+        }
 
         if (req.method === 'POST' && this.teamDiscussion &&
             (url.pathname === '/teams/discussion/list' ||

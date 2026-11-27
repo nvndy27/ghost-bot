@@ -11,6 +11,7 @@ import type {
   DaemonHealthResponse,
   GhostBotBridge,
   PersistedMessage,
+  PrivateTaskChatRecord,
   ProviderSummary,
   RoutineRecordDto,
   RunRecord,
@@ -32,6 +33,7 @@ import { ComputerUseLiveViewerModal } from './components/ComputerUseLiveViewerMo
 import { ScopedTerminalModal } from './components/ScopedTerminalModal.tsx'
 import { DiffPreviewModal } from './components/DiffPreviewModal.tsx'
 import { LeftSidebar, orderSidebarItems } from './components/LeftSidebar.tsx'
+import { PrivateTaskChatView } from './components/PrivateTaskChatView.tsx'
 import { MessageList } from './components/MessageList.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { SettingsModal } from './components/SettingsModal.tsx'
@@ -209,6 +211,8 @@ export function App() {
   const [teamRunError, setTeamRunError] = useState<string | null>(null)
   const [startingTeamRun, setStartingTeamRun] = useState(false)
   const [cancellingTeamRun, setCancellingTeamRun] = useState(false)
+  const [privateTasks, setPrivateTasks] = useState<PrivateTaskChatRecord[]>([])
+  const [activePrivateTaskId, setActivePrivateTaskId] = useState<string | null>(null)
   const [sidebarOrg, setSidebarOrg] = useState<SidebarOrganization>({
     pinnedBotIds: [],
     botOrder: [],
@@ -310,6 +314,12 @@ export function App() {
           .listRoutines({ includeArchived: false })
           .then((res) => {
             setRoutines(res.routines as RoutineRecordDto[])
+          })
+          .catch(() => {})
+        bridge
+          .listPrivateTaskChats({})
+          .then((res) => {
+            setPrivateTasks(res.tasks)
           })
           .catch(() => {})
       })
@@ -812,7 +822,17 @@ export function App() {
     setTeamRunError(null)
   }
 
+  const refreshPrivateTasks = () => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    void bridge
+      .listPrivateTaskChats({})
+      .then((res) => setPrivateTasks(res.tasks))
+      .catch(() => {})
+  }
+
   const handleSelectTeam = (teamId: string) => {
+    setActivePrivateTaskId(null)
     clearTeamWorkspaceState()
     setActiveTeamId(teamId)
     void loadTeamWorkspace(teamId)
@@ -913,6 +933,7 @@ export function App() {
 
   const handleSelectBot = (id: string) => {
     clearTeamWorkspaceState()
+    setActivePrivateTaskId(null)
     setActiveTeamId(null)
     setActiveBotId(id)
     const bridge = window.ghostBot
@@ -1536,6 +1557,9 @@ export function App() {
     if (count > 0) unreadCountByBot[bId] = count
   }
 
+  const activePrivateTask =
+    privateTasks.find((t) => t.teamRunId === activePrivateTaskId) ?? null
+
   return (
     <div className="gb-shell">
       {!prefs.leftCollapsed && (
@@ -1543,9 +1567,11 @@ export function App() {
           <LeftSidebar
             width={prefs.leftWidth}
             bots={bots}
-            activeBotId={activeTeam ? null : (activeBot?.id ?? null)}
+            activeBotId={activeTeam || activePrivateTask ? null : (activeBot?.id ?? null)}
             teams={teams}
-            activeTeamId={activeTeam?.id ?? null}
+            activeTeamId={activePrivateTask ? null : (activeTeam?.id ?? null)}
+            privateTasks={privateTasks}
+            activePrivateTaskId={activePrivateTask?.teamRunId ?? null}
             organization={sidebarOrg}
             unreadCountByBot={unreadCountByBot}
             teamsLoading={hasBridge && !teamsLoaded}
@@ -1554,6 +1580,11 @@ export function App() {
             onSearchChange={setSearchQuery}
             onSelectBot={handleSelectBot}
             onSelectTeam={handleSelectTeam}
+            onSelectPrivateTask={(task) => {
+              clearTeamWorkspaceState()
+              setActiveTeamId(null)
+              setActivePrivateTaskId(task.teamRunId)
+            }}
             onTogglePinBot={handleTogglePinBot}
             onMoveBot={handleMoveBot}
             onTogglePinTeam={handleTogglePinTeam}
@@ -1577,7 +1608,26 @@ export function App() {
       )}
 
       <main className="gb-center">
-        {activeTeam ? (
+        {activePrivateTask ? (
+          <PrivateTaskChatView
+            task={activePrivateTask}
+            bot={bots.find((b) => b.id === activePrivateTask.assignedBotId) ?? null}
+            leftCollapsed={prefs.leftCollapsed}
+            rightCollapsed={prefs.rightCollapsed}
+            onBackToGroup={() => {
+              const targetTeamId = activePrivateTask.teamId
+              setActivePrivateTaskId(null)
+              handleSelectTeam(targetTeamId)
+            }}
+            onTaskUpdated={(updated) => {
+              setPrivateTasks((prev) =>
+                prev.map((t) => (t.teamRunId === updated.teamRunId ? updated : t)),
+              )
+            }}
+            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
+          />
+        ) : activeTeam ? (
           <TeamWorkspaceView
             team={activeTeam}
             bots={bots}
@@ -1601,6 +1651,13 @@ export function App() {
             onCancelRun={handleCancelTeamRun}
             onResolveApproval={handleResolveTeamApproval}
             onEditTeam={() => setTeamEditor({ open: true, mode: 'edit' })}
+            onOpenPrivateTask={(task) => {
+              clearTeamWorkspaceState()
+              setActiveTeamId(null)
+              setPrivateTasks((prev) => [task, ...prev.filter((t) => t.teamRunId !== task.teamRunId)])
+              setActivePrivateTaskId(task.teamRunId)
+            }}
+            onTasksChanged={refreshPrivateTasks}
             onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
             onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
           />

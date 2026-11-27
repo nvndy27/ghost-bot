@@ -35,6 +35,12 @@ import {
   StartTeamRunIpcInputSchema,
   TeamIdParamSchema,
   TeamMemberRoutingKeySchema,
+  CancelPrivateTaskInputSchema,
+  CancelPrivateTaskResponseSchema,
+  DelegateTeamTaskInputSchema,
+  ListPrivateTasksInputSchema,
+  ListPrivateTasksResponseSchema,
+  PrivateTaskChatRecordSchema,
   TeamDiscussionCancelSchema,
   TeamDiscussionCancelResponseSchema,
   TeamDiscussionListSchema,
@@ -1508,6 +1514,30 @@ function registerIpcHandlers(): void {
     return queryDaemon('/teams/discussion/cancel', TeamDiscussionCancelResponseSchema, {
       method: 'POST',
       body: TeamDiscussionCancelSchema.parse(input),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_TASKS_DELEGATE, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/tasks/delegate', PrivateTaskChatRecordSchema, {
+      method: 'POST',
+      body: DelegateTeamTaskInputSchema.parse(input),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_TASKS_LIST_PRIVATE, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/tasks/list-private', ListPrivateTasksResponseSchema, {
+      method: 'POST',
+      body: ListPrivateTasksInputSchema.parse(input ?? {}),
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.TEAM_TASKS_CANCEL_PRIVATE, async (event, input) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    return queryDaemon('/teams/tasks/cancel-private', CancelPrivateTaskResponseSchema, {
+      method: 'POST',
+      body: CancelPrivateTaskInputSchema.parse(input),
     })
   })
 

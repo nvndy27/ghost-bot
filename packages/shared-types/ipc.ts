@@ -14,6 +14,9 @@ export const IPC_CHANNELS = {
   TEAM_DISCUSSION_LIST: 'ghost:teams:discussion:list',
   TEAM_DISCUSSION_SEND: 'ghost:teams:discussion:send',
   TEAM_DISCUSSION_CANCEL: 'ghost:teams:discussion:cancel',
+  TEAM_TASKS_DELEGATE: 'ghost:teams:tasks:delegate',
+  TEAM_TASKS_LIST_PRIVATE: 'ghost:teams:tasks:list-private',
+  TEAM_TASKS_CANCEL_PRIVATE: 'ghost:teams:tasks:cancel-private',
   TEAM_MEMBER_ROUTING_GET: 'ghost:teams:member-routing:get',
   TEAM_MEMBER_ROUTING_SET: 'ghost:teams:member-routing:set',
   WORKSPACE_PICK: 'ghost:workspace:pick',
@@ -1492,6 +1495,74 @@ export type TeamDiscussionList = z.infer<typeof TeamDiscussionListSchema>
 export type TeamDiscussionSend = z.infer<typeof TeamDiscussionSendSchema>
 export type TeamDiscussionCancel = z.infer<typeof TeamDiscussionCancelSchema>
 export type TeamDiscussionCancelResponse = z.infer<typeof TeamDiscussionCancelResponseSchema>
+
+export const DelegateTeamTaskInputSchema = TeamIdParamSchema.extend({
+  assignedBotId: BotIdSchema,
+  objective: z.string().trim().min(1).max(2000),
+  operationId: z.uuid(),
+}).strict()
+
+export const PrivateTaskStatusSchema = z.enum([
+  'queued',
+  'running',
+  'awaiting_approval',
+  'completed',
+  'failed',
+  'cancelled',
+  'blocked',
+  'denied',
+  'uncertain',
+  'budget_exhausted',
+  'stopped_by_parent',
+  'pending',
+  'cancelling',
+])
+
+export type TeamMemberRoutingTuple = z.infer<typeof TeamMemberRoutingTupleSchema>
+
+export const PrivateTaskChatRecordSchema = z.object({
+  taskId: z.string().min(1),
+  teamRunId: TeamIpcIdSchema,
+  teamId: TeamIpcIdSchema,
+  teamName: z.string(),
+  assignedBotId: BotIdSchema,
+  objective: z.string(),
+  sessionId: SessionIdSchema.nullable(),
+  daemonRunId: RunIdSchema.nullable(),
+  status: PrivateTaskStatusSchema,
+  routing: TeamMemberRoutingTupleSchema.nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const ListPrivateTasksInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema.optional(),
+    botId: BotIdSchema.optional(),
+  })
+  .strict()
+
+export const ListPrivateTasksResponseSchema = z.object({
+  tasks: z.array(PrivateTaskChatRecordSchema),
+})
+
+export const CancelPrivateTaskInputSchema = z
+  .object({
+    teamId: TeamIpcIdSchema,
+    teamRunId: TeamIpcIdSchema,
+  })
+  .strict()
+
+export const CancelPrivateTaskResponseSchema = z.object({
+  teamRunId: TeamIpcIdSchema,
+  cancelled: z.boolean(),
+})
+
+export type DelegateTeamTaskInput = z.infer<typeof DelegateTeamTaskInputSchema>
+export type PrivateTaskChatRecord = z.infer<typeof PrivateTaskChatRecordSchema>
+export type ListPrivateTasksInput = z.infer<typeof ListPrivateTasksInputSchema>
+export type CancelPrivateTaskInput = z.infer<typeof CancelPrivateTaskInputSchema>
 export type TeamDiscussionTurn = z.infer<typeof TeamDiscussionTurnSchema>
 export type TeamDiscussionPage = z.infer<typeof TeamDiscussionPageSchema>
 
@@ -2435,6 +2506,9 @@ export interface GhostBotBridge {
   listTeamDiscussion(input: TeamDiscussionList): Promise<TeamDiscussionPage>
   sendTeamDiscussion(input: TeamDiscussionSend): Promise<TeamDiscussionTurn>
   cancelTeamDiscussion(input: TeamDiscussionCancel): Promise<TeamDiscussionCancelResponse>
+  delegateTeamTask(input: DelegateTeamTaskInput): Promise<PrivateTaskChatRecord>
+  listPrivateTaskChats(input?: ListPrivateTasksInput): Promise<{ tasks: PrivateTaskChatRecord[] }>
+  cancelPrivateTaskChat(input: CancelPrivateTaskInput): Promise<{ teamRunId: string; cancelled: boolean }>
   getTeamMemberRouting(input: TeamMemberRoutingKey): Promise<TeamMemberRoutingDto>
   setTeamMemberRouting(input: SetTeamMemberRouting): Promise<TeamMemberRoutingDto>
   listTeams(input?: z.infer<typeof ListTeamsInputSchema>): Promise<{ teams: TeamRecordDto[]; total: number }>

@@ -1,7 +1,7 @@
 import { TeamDiscussionView } from './TeamDiscussionView.tsx'
 import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import type { TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import type { PrivateTaskChatRecord, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { PanelLeft, PanelRight, Pencil } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
@@ -30,6 +30,8 @@ export interface TeamWorkspaceViewProps {
   onCancelRun: (teamRunId: string) => Promise<void>
   onResolveApproval: (runId: string, approvalId: string, decision: 'approved' | 'denied') => Promise<void>
   onEditTeam: () => void
+  onOpenPrivateTask?: (task: PrivateTaskChatRecord) => void
+  onTasksChanged?: () => void
   onToggleLeft: () => void
   onToggleRight: () => void
 }
@@ -71,6 +73,8 @@ export function TeamWorkspaceView({
   onCancelRun,
   onResolveApproval,
   onEditTeam,
+  onOpenPrivateTask,
+  onTasksChanged,
   onToggleLeft,
   onToggleRight,
 }: TeamWorkspaceViewProps) {
@@ -195,7 +199,17 @@ export function TeamWorkspaceView({
         </div>
       </header>
 
-      {!advanced ? <TeamDiscussionView key={team.id} team={team} bots={bots} isMockMode={isMockMode} /> : <>
+      {!advanced ? (
+        <TeamDiscussionView
+          key={team.id}
+          team={team}
+          bots={bots}
+          isMockMode={isMockMode}
+          onOpenPrivateTask={onOpenPrivateTask}
+          onTasksChanged={onTasksChanged}
+        />
+      ) : (
+        <>
       <div className="gb-messages" style={{ flex: 1, overflowY: 'auto' }}>
         <div className="gb-messages-inner" style={{ display: 'grid', gap: 12 }}>
           {runError && (
@@ -481,7 +495,8 @@ export function TeamWorkspaceView({
           </div>
         </div>
       </div>
-      </>}
+      </>
+      )}
     </>
   )
 }
