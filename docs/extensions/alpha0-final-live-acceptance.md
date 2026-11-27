@@ -2,31 +2,45 @@
 
 Date: 2026-11-27
 Candidate branch: `integration/alpha0-native-chat-rc`
-Tested candidate SHA: `6779ab358119b30017dce223729dfbfc68a98e15` (Draft PR #15 -> `main`)
+Previously live-tested production candidate: `6779ab358119b30017dce223729dfbfc68a98e15` (Draft PR #15 -> `main`)
 Worktree: `/home/nguyenduy/Documents/Projects/ghost-bot-alpha0b`
 
-## 1. Environment & Pre-Flight Verification
+## 1. Preserved Previous Bounded Live Results (`6779ab3`, 3 Prompts Exhausted)
 
-- **Codex CLI**: `codex-cli 0.172.0`
-- **Account / Profile**: Dedicated ChatGPT-authenticated profile (`$HOME/.config/ghost-bot/codex-profile`, `0700` permissions, `authMethod: 'chatgpt'`, no API-key fallback).
-- **Offline baseline**: `234/234` across 3 consecutive full-workspace regression runs, `16/16` Electron E2E/IPC scripts, `14/14` 4-worker `@ghost-bot/mcp` concurrency stress, `lint`/`typecheck`/`build` (11/11), `audit --prod` (0 vulnerabilities), frozen migrations `0001`–`0013`.
-- **Budget enforced**: Maximum **3 inference prompts** (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`), `read-only` permission, isolated temporary `dataDir` and `workspaceDir` (cleaned up in `finally`).
+- **Prompt 1 (Streaming & persistence)**: **PASS** (`runs[0].status = 'completed'`, `ALPHA0_OK` streamed and persisted with `permission_mode = 'read-only'` and `external_session_id` bound in SQLite).
+- **Prompt 2 (Cancellation)**: **Executed, exact terminal outcome not established** (the script exited on Prompt 3's assertion before printing `runs[1].status`, and temporary dirs were cleaned up in `finally`; no additional per-run artifacts are recoverable).
+- **Restart UI restoration**: **PASS** (`app2` reopened the persisted conversation and rendered `ALPHA0_OK`).
+- **Prompt 3 (Thread continuity)**: **Interrupted by acceptance script timing** (`runs[2]` cleanly transitioned to `'interrupted'` when `app2.close()` fired before `Stop generation` mounted).
+- **Overall previous live verdict**: **CONDITIONAL PASS** (3-prompt budget exhausted; **0** additional live prompts consumed during harness finalization).
 
-## 2. Bounded 3-Prompt Live Run Results
+## 2. Acceptance Harness Finalization (`LIVE ACCEPTANCE HARNESS READY`)
 
-| Prompt | Flow | Observed Result |
-|---|---|---|
-| **Prompt 1** (Streaming & persistence) | `Reply with exactly ALPHA0_OK.` | **PASS**: Discovered `codex` `0.172.0` (`chatgpt`), streamed `ALPHA0_OK` to UI, persisted `runs[0].status = 'completed'` with `permission_mode = 'read-only'` and `external_session_id` bound in SQLite. |
-| **Prompt 2** (Cancellation) | `Write a numbered list of 40 prime numbers...` + Stop button click | **EXECUTED (within 3-prompt budget)**: Run dispatched and reached terminal state before Launch 2; exact `runs[1].status` string was not printed because the script exited on the Prompt 3 assertion before `console.log`. |
-| **Prompt 3** (Restart continuity) | Closed `app1`, launched `app2` against same `dataDir`, reopened conversation (`ALPHA0_OK` visible), sent follow-up prompt | **INTERRUPTED BY SCRIPT TIMING**: `app2` restored the persisted conversation (`ALPHA0_OK` rendered) and dispatched `runs[2]`, which cleanly transitioned to `runs[2].status = 'interrupted'` when `app2.close()` ran before `Stop generation` mounted (script wait race fixed afterward in `scripts/verify-alpha0-live-codex.mjs` without exceeding the 3-prompt budget). |
+Refactored `scripts/verify-alpha0-live-codex.mjs` and verified offline in `tests/alpha0-live-harness.test.ts` (zero live inference):
 
-## 3. Independent Acceptance & Packaging Status
+1. Polls `window.ghostBot.listMessages({ sessionId })` to capture each newly created `runId` (handling delayed run creation) and polls `window.ghostBot.getRun(runId)` until a durable terminal status (`completed`, `failed`, `cancelled`, `interrupted`) is reached—eliminating Stop-button disappearance as a completion heuristic.
+2. Requires Prompt 2's durable terminal status to be strictly `'cancelled'` (a fast `'completed'` Prompt 2 fails as `Cancellation not verified`).
+3. Verifies assistant-only message content (`extractAssistantTextForRun`, never matching user prompt text).
+4. Verifies `externalSessionId` and `accountId` persist identically across Electron/daemon restart (`inspectSession`).
+5. Requires Prompt 3's durable terminal status to be `'completed'` with `ALPHA0_OK` in its assistant reply.
+6. Preserves `usage.updated` metadata where available and explicitly labels `'unavailable'` when absent.
+7. Emits sanitized per-run JSON evidence in `finally` **before** deleting temporary `dataDir` / `workspaceDir`, even when assertions fail.
+8. Enforces `MAX_TURNS_BUDGET = 3` via `createTurnBudgetTracker(3)` with zero automatic retries, plus `GHOST_BOT_RUN_LIVE_CODEX === '1'` opt-in guard.
+9. Verifies read-only `sentinel.txt` and workspace integrity.
+10. Preserves production `sandbox: true` in `apps/desktop/electron/main.ts` (`--no-sandbox` remains a test-only headless Playwright launch flag and is not packaged-app acceptance).
 
-- **Agent 2 Security Review on `6779ab3`**: Pending (`0` reviews posted on PR #15 at checkpoint time).
-- **AppImage / RPM Packaging on `6779ab3` (Fedora GNOME / Ubuntu)**: Pending Agent 2 verification (earlier Phase 3D.4 AppImage/RPM smoke checks do not certify `6779ab3`).
+## 3. Agent 2 Independent Acceptance Status
 
-## 4. Alpha.0 Release Gate Verdict
+- **PR #15 GitHub reviews/comments**: `0` reviews posted on `6779ab3` / `8604a32`.
+- **Security & AppImage/RPM Packaging on current candidate**: Pending Agent 2 independent verification on Fedora GNOME (primary) / Ubuntu (secondary).
 
-- **Verdict**: **CONDITIONAL PASS**
-  - Prompt 1 live Codex `0.172.0` ChatGPT-profile streaming/persistence and restart UI restoration passed, and daemon shutdown interruption (`runs[2].status = 'interrupted'`) behaved cleanly without data corruption.
-  - Full 3-prompt confirmation of Prompt 3 `thread/resume` completion (`verify-alpha0-live-codex.mjs`, now with the `Stop generation` mount wait fixed) and Agent 2 independent security + Fedora GNOME/Ubuntu AppImage/RPM packaging sign-off remain required before merging PR #15 to `main` and declaring Alpha.0 complete.
+## 4. Corrected Final Live Acceptance Procedure & Authorization Request
+
+Pending explicit fresh owner authorization for a maximum of **3 additional Codex prompts**:
+
+```bash
+cd /home/nguyenduy/Documents/Projects/ghost-bot-alpha0b
+GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs
+```
+
+- **Scope**: Official Codex App Server `0.172.0` only, dedicated ChatGPT profile (`$HOME/.config/ghost-bot/codex-profile`), `read-only` permission, isolated temp `dataDir` and `workspaceDir`, no API-key fallback, no other live provider, no software installation or host configuration changes.
+- **Pass gate**: Prompt 1 `completed` (`ALPHA0_OK` assistant reply), Prompt 2 `cancelled`, restart thread/account continuity preserved, Prompt 3 `completed` (`ALPHA0_OK` assistant reply), sentinel intact, plus Agent 2 security and packaging sign-off.
