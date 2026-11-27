@@ -7,12 +7,10 @@ import {
   assertDescriptorContainmentSupported,
   computeWorkspaceId,
   createContainedEntry,
-  deleteContainedFile,
   detectLanguageFromPath,
   listContainedDirectory,
   normalizeWorkspaceRelativePath,
   readContainedTextFile,
-  renameContainedFile,
   saveContainedTextFile,
   type SaveHookOptions,
 } from './containment.ts'
@@ -71,16 +69,18 @@ export interface AuthorizedWorkspace {
   authGeneration: string
 }
 
+type MutationAuthorization = AuthorizedWorkspace & { writeGrant: object }
+
 export class WorkspaceFilesService {
   private readonly db: DatabaseHandle
   private readonly fileLocks = new Map<string, Promise<unknown>>()
-  private writeGrantChecker: ((auth: AuthorizedWorkspace) => void) | null = null
+  private writeGrantChecker: ((auth: AuthorizedWorkspace) => object) | null = null
 
   constructor(db: DatabaseHandle) {
     this.db = db
   }
 
-  setWriteGrantChecker(checker: (auth: AuthorizedWorkspace) => void): void {
+  setWriteGrantChecker(checker: (auth: AuthorizedWorkspace) => object): void {
     this.writeGrantChecker = checker
   }
 
@@ -239,49 +239,11 @@ export class WorkspaceFilesService {
   async saveFile(rawInput: unknown, hooks?: SaveHookOptions): Promise<WorkspaceSaveFileResponse> {
     const input = WorkspaceSaveFileInputSchema.parse(rawInput)
     const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
-    const preAuth = await this.authorizeWorkspace(input)
-    if (input.workspaceId !== preAuth.workspaceId) {
-      throw new DaemonError(
-        'WORKSPACE_CONTEXT_MISMATCH',
-        'Workspace authorization changed; cannot save to a different workspace',
-        { statusCode: 409 },
-      )
-    }
-    if (input.authGeneration !== preAuth.authGeneration) {
-      throw new DaemonError(
-        'STALE_AUTHORIZATION_TOKEN',
-        'Workspace authorization generation is stale; refresh workspace context',
-        { statusCode: 409 },
-      )
-    }
-
-    // Serialize saves by canonical physical file path across nested or overlapping workspace roots.
+    const preAuth = await this.authorizeMutationTargetLocked(input)
     const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
 
     return this.withFileLock(lockKey, async () => {
-      const auth = await this.authorizeWorkspace(input)
-      if (input.workspaceId !== auth.workspaceId) {
-        throw new DaemonError(
-          'WORKSPACE_CONTEXT_MISMATCH',
-          'Workspace authorization changed; cannot save to a different workspace',
-          { statusCode: 409 },
-        )
-      }
-      if (input.authGeneration !== auth.authGeneration) {
-        throw new DaemonError(
-          'STALE_AUTHORIZATION_TOKEN',
-          'Workspace authorization generation is stale; refresh workspace context',
-          { statusCode: 409 },
-        )
-      }
-      if (!auth.canWrite) {
-        throw new DaemonError(
-          'WORKSPACE_READ_ONLY',
-          `Saving is blocked because workspace permission mode is '${auth.permissionMode}'`,
-          { statusCode: 403 },
-        )
-      }
-
+      const auth = await this.authorizeMutationTargetLocked(input, preAuth)
       const res = await saveContainedTextFile(
         auth.canonicalRoot,
         auth.rootDev,
@@ -289,17 +251,7 @@ export class WorkspaceFilesService {
         normalizedPath,
         input.content,
         input.expectedRevision,
-        {
-          injectWriteError: hooks?.injectWriteError,
-          onBeforeCommit: async () => {
-            if (hooks?.onBeforeCommit) {
-              await hooks.onBeforeCommit()
-            }
-            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
-              await this.assertMutationStillAuthorized(input, auth)
-            })
-          },
-        },
+        this.mutationHooks(input, auth, hooks),
       )
 
       return {
@@ -318,11 +270,11 @@ export class WorkspaceFilesService {
   ): Promise<WorkspaceCreateEntryResponse> {
     const input = WorkspaceCreateEntryInputSchema.parse(rawInput)
     const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
-    const preAuth = await this.authorizeMutationTarget(input)
+    const preAuth = await this.authorizeMutationTargetLocked(input)
     const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
 
     return this.withFileLock(lockKey, async () => {
-      const auth = await this.authorizeMutationTarget(input)
+      const auth = await this.authorizeMutationTargetLocked(input, preAuth)
       const res = await createContainedEntry(
         auth.canonicalRoot,
         auth.rootDev,
@@ -330,15 +282,7 @@ export class WorkspaceFilesService {
         normalizedPath,
         input.kind,
         input.content ?? '',
-        {
-          injectWriteError: hooks?.injectWriteError,
-          onBeforeCommit: async () => {
-            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
-            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
-              await this.assertMutationStillAuthorized(input, auth)
-            })
-          },
-        },
+        this.mutationHooks(input, auth, hooks),
       )
       return {
         workspaceId: auth.workspaceId,
@@ -350,53 +294,55 @@ export class WorkspaceFilesService {
     })
   }
 
-  async renameEntry(
-    rawInput: unknown,
-    _hooks?: SaveHookOptions,
-  ): Promise<WorkspaceRenameEntryResponse> {
+  async renameEntry(rawInput: unknown): Promise<WorkspaceRenameEntryResponse> {
     WorkspaceRenameEntryInputSchema.parse(rawInput)
-    const res = await renameContainedFile('', 0, 0, '', '', '')
+    throw new DaemonError('WORKSPACE_RENAME_GATED', 'Safe workspace rename is unavailable.', { statusCode: 501 })
+  }
+
+  async deleteFile(rawInput: unknown): Promise<WorkspaceDeleteFileResponse> {
+    WorkspaceDeleteFileInputSchema.parse(rawInput)
+    throw new DaemonError('WORKSPACE_DELETE_GATED', 'Safe workspace quarantine is unavailable.', { statusCode: 501 })
+  }
+
+  private mutationHooks(
+    input: { botId?: string; teamId?: string; workspaceId: string; authGeneration: string },
+    auth: MutationAuthorization,
+    hooks?: SaveHookOptions,
+  ) {
     return {
-      workspaceId: '',
-      fromPath: res.normalizedFromPath,
-      toPath: res.normalizedToPath,
-      revision: res.revision,
+      ...hooks,
+      commit: <T>(validate: () => Promise<void>, operation: () => Promise<T>) => this.withOwnerMutationBarrier(auth.ownerId, async () => {
+        const current = await this.authorizeMutationTarget(input, auth)
+        if (current.rootDev !== auth.rootDev || current.rootIno !== auth.rootIno) {
+          throw new DaemonError('WORKSPACE_CONTEXT_MISMATCH', 'Workspace root changed before commit', { statusCode: 409 })
+        }
+        await validate()
+        this.assertSameWriteGrant(auth, this.requireWriteGrant(current))
+        return operation()
+      }),
     }
   }
 
-  async deleteFile(
-    rawInput: unknown,
-    hooks?: SaveHookOptions,
-  ): Promise<WorkspaceDeleteFileResponse> {
-    const input = WorkspaceDeleteFileInputSchema.parse(rawInput)
-    const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
-    const preAuth = await this.authorizeMutationTarget(input)
-    const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
+  private requireWriteGrant(auth: AuthorizedWorkspace): object {
+    if (!this.writeGrantChecker || auth.ownerKind !== 'bot') {
+      throw new DaemonError('WORKSPACE_WRITE_UNAUTHORIZED', 'A personal native write grant is required', { statusCode: 403 })
+    }
+    return this.writeGrantChecker(auth)
+  }
 
-    return this.withFileLock(lockKey, async () => {
-      const auth = await this.authorizeMutationTarget(input)
-      const res = await deleteContainedFile(
-        auth.canonicalRoot,
-        auth.rootDev,
-        auth.rootIno,
-        normalizedPath,
-        input.expectedRevision,
-        {
-          onBeforeCommit: async () => {
-            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
-            await this.withOwnerMutationBarrier(auth.ownerId, async () => {
-              await this.assertMutationStillAuthorized(input, auth)
-            })
-          },
-        },
-      )
-      return {
-        workspaceId: auth.workspaceId,
-        relativePath: res.normalizedRelativePath,
-        quarantined: res.quarantined,
-        quarantinePath: res.quarantinePath,
-      }
-    })
+  private assertSameWriteGrant(original: MutationAuthorization, current: object): void {
+    if (current !== original.writeGrant) {
+      throw new DaemonError('WORKSPACE_WRITE_UNAUTHORIZED', 'The original write grant was replaced', { statusCode: 403 })
+    }
+  }
+
+  private authorizeMutationTargetLocked(input: {
+    botId?: string
+    teamId?: string
+    workspaceId: string
+    authGeneration: string
+  }, original?: MutationAuthorization): Promise<MutationAuthorization> {
+    return this.withOwnerMutationBarrier(input.botId ?? input.teamId!, () => this.authorizeMutationTarget(input, original))
   }
 
   private async authorizeMutationTarget(input: {
@@ -404,19 +350,14 @@ export class WorkspaceFilesService {
     teamId?: string
     workspaceId: string
     authGeneration: string
-  }): Promise<AuthorizedWorkspace> {
+  }, original?: MutationAuthorization): Promise<MutationAuthorization> {
     const auth = await this.authorizeWorkspace(input)
+    const writeGrant = this.requireWriteGrant(auth)
+    if (original) this.assertSameWriteGrant(original, writeGrant)
     if (input.workspaceId !== auth.workspaceId) {
       throw new DaemonError(
         'WORKSPACE_CONTEXT_MISMATCH',
         'Workspace authorization changed; refresh workspace context',
-        { statusCode: 409 },
-      )
-    }
-    if (input.authGeneration !== auth.authGeneration) {
-      throw new DaemonError(
-        'STALE_AUTHORIZATION_TOKEN',
-        'Workspace authorization generation is stale; refresh workspace context',
         { statusCode: 409 },
       )
     }
@@ -427,42 +368,14 @@ export class WorkspaceFilesService {
         { statusCode: 403 },
       )
     }
-    this.writeGrantChecker?.(auth)
-    return auth
-  }
-
-  private async assertMutationStillAuthorized(
-    input: { botId?: string; teamId?: string },
-    original: AuthorizedWorkspace,
-  ): Promise<void> {
-    const rechecked = await this.authorizeWorkspace(input)
-    if (!rechecked.canWrite) {
+    if (input.authGeneration !== auth.authGeneration) {
       throw new DaemonError(
-        'WORKSPACE_READ_ONLY',
-        `Workspace became read-only ('${rechecked.permissionMode}') during mutation`,
-        { statusCode: 403 },
-      )
-    }
-    if (
-      rechecked.workspaceId !== original.workspaceId ||
-      rechecked.authGeneration !== original.authGeneration
-    ) {
-      throw new DaemonError(
-        'WORKSPACE_CONTEXT_MISMATCH',
-        'Workspace authorization changed during mutation; aborting commit',
+        'STALE_AUTHORIZATION_TOKEN',
+        'Workspace authorization generation is stale; refresh workspace context',
         { statusCode: 409 },
       )
     }
-    this.writeGrantChecker?.(rechecked)
-  }
-
-  private async withMultiFileLock<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
-    const unique = [...new Set(keys)].sort()
-    const run = (idx: number): Promise<T> => {
-      if (idx >= unique.length) return fn()
-      return this.withFileLock(unique[idx], () => run(idx + 1))
-    }
-    return run(0)
+    return { ...auth, writeGrant }
   }
 
   private async withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {

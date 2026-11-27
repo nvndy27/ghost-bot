@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -9,152 +9,133 @@ import { DaemonError } from '../apps/daemon/src/errors.ts'
 import { WorkspaceFilesService } from '../apps/daemon/src/workspace/files-service.ts'
 import { WorkspaceOutputService } from '../apps/daemon/src/workspace/output-service.ts'
 
-test('Alpha.2C.2 WorkspaceFilesService: atomic create, no-clobber rename, and quarantined delete', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ghost-alpha2c2-svc-'))
-  const dataDir = join(root, 'data')
-  const ws = join(root, 'ws')
-  await mkdir(dataDir, { recursive: true })
-  await mkdir(ws, { recursive: true })
-  await writeFile(join(ws, 'existing.txt'), 'existing\n', 'utf8')
+test('Alpha.2C.2 create uses no-clobber publication and preserves external entries', async () => {
+  await withWorkspace(async ({ ws, service, access }) => {
+    const create = { ...access, kind: 'file', relativePath: 'new.txt' }
+    await assert.rejects(service.createEntry({ ...create, content: 'data' }), { code: 'WORKSPACE_CREATE_CONTENT_GATED' })
+    assert.deepEqual(await readdir(ws), [])
+    await assert.rejects(service.createEntry(create, {
+      onBeforeCommit: () => writeFile(join(ws, 'new.txt'), 'external'),
+    }), { code: 'FILE_EXISTS' })
+    assert.equal(await readFile(join(ws, 'new.txt'), 'utf8'), 'external')
 
-  const db = await openGhostBotDatabase(dataDir)
+    const second = { ...create, relativePath: 'second.txt' }
+    await assert.rejects(service.createEntry(second, {
+      onAfterCommit: async () => {
+        await rename(join(ws, 'second.txt'), join(ws, 'original'))
+        await writeFile(join(ws, 'second.txt'), 'replacement')
+      },
+    }), { code: 'CREATE_OUTCOME_UNCERTAIN' })
+    assert.equal(await readFile(join(ws, 'second.txt'), 'utf8'), 'replacement')
+    assert.equal((await stat(join(ws, 'original'))).size, 0)
+
+    await assert.rejects(service.createEntry({ ...create, relativePath: 'grown.txt' }, {
+      onAfterCommit: () => writeFile(join(ws, 'grown.txt'), 'x'.repeat(2_000_000)),
+    }), { code: 'CREATE_OUTCOME_UNCERTAIN' })
+    assert.equal((await stat(join(ws, 'grown.txt'))).size, 2_000_000)
+
+    assert.equal((await service.createEntry({ ...create, relativePath: 'empty.txt' })).sizeBytes, 0)
+    assert.equal((await service.createEntry({ ...access, relativePath: 'notes', kind: 'directory' })).kind, 'directory')
+    const moved = join(ws, 'relocated')
+    await assert.rejects(service.createEntry({ ...create, relativePath: 'notes/moved.txt' }, {
+      onBeforeCommit: async () => {
+        await rename(join(ws, 'notes'), moved)
+        await mkdir(join(ws, 'notes'))
+      },
+    }), { code: 'FILE_CONFLICT' })
+    assert.deepEqual(await readdir(moved), [])
+    assert.deepEqual(await readdir(join(ws, 'notes')), [])
+  })
+})
+
+test('Alpha.2C.2 revocation, expiry, policy and root changes stop queued publication', async () => {
+  for (const change of ['revoke', 'regrant', 'expire', 'policy', 'root'] as const) {
+    await withWorkspace(async ({ root, ws, db, service, access }) => {
+      let revoked = false
+      let now = 0
+      let grant = {}
+      service.setWriteGrantChecker(() => {
+        if (revoked || now >= 10) throw new DaemonError('WORKSPACE_WRITE_UNAUTHORIZED', 'Grant unavailable', { statusCode: 403 })
+        return grant
+      })
+      const create = { ...access, kind: 'file', relativePath: 'blocked.txt' }
+      const started = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const save = service.createEntry(create, {
+        onBeforeCommit: async () => {
+          started.resolve()
+          await release.promise
+        },
+      })
+      const rejected = assert.rejects(save, change === 'root' ? { code: 'WORKSPACE_CONTEXT_MISMATCH' } :
+        change === 'policy' ? { code: 'WORKSPACE_READ_ONLY' } : { code: 'WORKSPACE_WRITE_UNAUTHORIZED' })
+      await started.promise
+      await service.withOwnerMutationBarrier(access.botId, async () => {
+        if (change === 'revoke') revoked = true
+        if (change === 'regrant') grant = {}
+        if (change === 'expire') now = 10
+        if (change === 'policy') db.sqlite.prepare("UPDATE agents SET permission_mode = 'read-only'").run()
+        if (change === 'root') {
+          await rename(ws, join(root, 'old'))
+          await mkdir(ws)
+        }
+      })
+      release.resolve()
+      await rejected
+      assert.deepEqual(await readdir(ws), [])
+      if (change === 'root') assert.deepEqual(await readdir(join(root, 'old')), [])
+    })
+  }
+})
+
+test('Alpha.2C.2 rename and quarantine stay gated and preserve source and recovered files', async () => {
+  await withWorkspace(async ({ ws, service, access }) => {
+    await writeFile(join(ws, 'keep.txt'), 'original')
+    const target = { ...access, relativePath: 'keep.txt' }
+    const { revision } = await service.readFile(target)
+    await assert.rejects(service.renameEntry({
+      ...access, fromPath: 'keep.txt', toPath: 'renamed.txt', expectedRevision: revision,
+    }), { code: 'WORKSPACE_RENAME_GATED' })
+    await assert.rejects(service.deleteFile({ ...target, expectedRevision: revision }), { code: 'WORKSPACE_DELETE_GATED' })
+    assert.deepEqual(await readdir(ws), ['keep.txt'])
+    const quarantine = join(ws, '.ghost-bot-trash')
+    await mkdir(quarantine, { mode: 0o700 })
+    await writeFile(join(quarantine, 'recovered.txt'), 'recoverable')
+    await assert.rejects(service.deleteFile({ ...target, expectedRevision: revision }), { code: 'WORKSPACE_DELETE_GATED' })
+    assert.equal(await readFile(join(ws, 'keep.txt'), 'utf8'), 'original')
+    assert.equal(await readFile(join(quarantine, 'recovered.txt'), 'utf8'), 'recoverable')
+  })
+})
+
+async function withWorkspace(run: (fixture: {
+  root: string
+  ws: string
+  db: Awaited<ReturnType<typeof openGhostBotDatabase>>
+  service: WorkspaceFilesService
+  access: { botId: string; workspaceId: string; authGeneration: string }
+}) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), 'ghost-alpha2c2-svc-'))
+  const ws = join(root, 'ws')
+  await mkdir(ws)
+  const db = await openGhostBotDatabase(join(root, 'data'))
   try {
     const now = new Date().toISOString()
-    db.sqlite
-      .prepare(
-        `INSERT INTO agents (id, name, description, instructions, avatar_json, runtime_id, model_id, effort, workspace_path, permission_mode, created_at, updated_at, archived_at)
-         VALUES ('bot-w', 'Bot W', '', '', '{}', 'codex', 'gpt-5', 'medium', ?, 'workspace', ?, ?, NULL)`,
-      )
-      .run(ws, now, now)
-
+    db.sqlite.prepare(
+      `INSERT INTO agents (id, name, description, instructions, avatar_json, runtime_id, model_id, effort, workspace_path, permission_mode, created_at, updated_at, archived_at)
+       VALUES ('bot-w', 'Bot W', '', '', '{}', 'codex', 'gpt-5', 'medium', ?, 'workspace', ?, ?, NULL)`,
+    ).run(ws, now, now)
     const service = new WorkspaceFilesService(db)
-    const ctx = await service.resolveContext({ botId: 'bot-w' })
-    assert.ok(ctx.workspaceId && ctx.authGeneration)
-
-    // Create directory & file
-    const dirRes = await service.createEntry({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      relativePath: 'notes',
-      kind: 'directory',
-    })
-    assert.equal(dirRes.kind, 'directory')
-
-    const fileRes = await service.createEntry({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      relativePath: 'notes/new.txt',
-      kind: 'file',
-      content: 'hello\n',
-    })
-    assert.equal(fileRes.kind, 'file')
-    assert.ok(fileRes.revision)
-
-    // No-clobber create rejects existing file
-    await assert.rejects(
-      () =>
-        service.createEntry({
-          botId: 'bot-w',
-          workspaceId: ctx.workspaceId!,
-          authGeneration: ctx.authGeneration!,
-          relativePath: 'existing.txt',
-          kind: 'file',
-          content: 'clobber',
-        }),
-      (err: unknown) => err instanceof DaemonError && err.code === 'FILE_EXISTS',
-    )
-
-    // WRITE-03: rename is fail-closed gated with WORKSPACE_RENAME_GATED (501)
-    await assert.rejects(
-      () =>
-        service.renameEntry({
-          botId: 'bot-w',
-          workspaceId: ctx.workspaceId!,
-          authGeneration: ctx.authGeneration!,
-          fromPath: 'notes/new.txt',
-          toPath: 'notes/renamed.txt',
-          expectedRevision: fileRes.revision!,
-        }),
-      (err: unknown) => err instanceof DaemonError && err.code === 'WORKSPACE_RENAME_GATED' && err.statusCode === 501,
-    )
-    assert.equal(await readFile(join(ws, 'notes', 'new.txt'), 'utf8'), 'hello\n')
-
-    // WRITE-04: Quarantined delete moves file to .ghost-bot-trash (hidden from listing) & returns quarantinePath
-    const deleted = await service.deleteFile({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      relativePath: 'notes/new.txt',
-      expectedRevision: fileRes.revision!,
-    })
-    assert.equal(deleted.quarantined, true)
-    assert.ok(deleted.quarantinePath?.startsWith('.ghost-bot-trash/'))
-    const trashEntries = await readdir(join(ws, '.ghost-bot-trash'))
-    assert.equal(trashEntries.length, 1)
-    const trashStat = await stat(join(ws, '.ghost-bot-trash'))
-    assert.equal(trashStat.mode & 0o077, 0)
-    const listedRoot = await service.listDirectory({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      relativePath: '',
-    })
-    assert.equal(listedRoot.entries.some((e) => e.name === '.ghost-bot-trash'), false)
-
-    // WRITE-04: Unsafe .ghost-bot-trash permissions (0o777) fail closed
-    await writeFile(join(ws, 'notes', 'keep.txt'), 'keep\n', 'utf8')
-    const keepOpened = await service.readFile({
-      botId: 'bot-w',
-      workspaceId: ctx.workspaceId,
-      authGeneration: ctx.authGeneration,
-      relativePath: 'notes/keep.txt',
-    })
-    await chmod(join(ws, '.ghost-bot-trash'), 0o777)
-    await assert.rejects(
-      () =>
-        service.deleteFile({
-          botId: 'bot-w',
-          workspaceId: ctx.workspaceId!,
-          authGeneration: ctx.authGeneration!,
-          relativePath: 'notes/keep.txt',
-          expectedRevision: keepOpened.revision,
-        }),
-      (err: unknown) =>
-        err instanceof DaemonError && err.code === 'QUARANTINE_UNSAFE_PERMISSIONS' && err.statusCode === 403,
-    )
-    assert.equal(await readFile(join(ws, 'notes', 'keep.txt'), 'utf8'), 'keep\n')
-    await chmod(join(ws, '.ghost-bot-trash'), 0o700)
-
-    // WRITE-01: Write grant revocation serialized via writeGrantChecker + withOwnerMutationBarrier
-    let writeAllowed = true
-    service.setWriteGrantChecker(() => {
-      if (!writeAllowed) {
-        throw new DaemonError('WORKSPACE_WRITE_UNAUTHORIZED', 'Write grant revoked', { statusCode: 403 })
-      }
-    })
-    await service.withOwnerMutationBarrier('bot-w', async () => {
-      writeAllowed = false
-    })
-    await assert.rejects(
-      () =>
-        service.createEntry({
-          botId: 'bot-w',
-          workspaceId: ctx.workspaceId!,
-          authGeneration: ctx.authGeneration!,
-          relativePath: 'notes/revoked.txt',
-          kind: 'file',
-          content: 'blocked',
-        }),
-      (err: unknown) =>
-        err instanceof DaemonError && err.code === 'WORKSPACE_WRITE_UNAUTHORIZED' && err.statusCode === 403,
-    )
+    const fixtureGrant = {}
+    service.setWriteGrantChecker(() => fixtureGrant)
+    const botId = 'bot-w'
+    const { workspaceId, authGeneration } = await service.resolveContext({ botId })
+    assert.ok(workspaceId && authGeneration)
+    await run({ root, ws, db, service, access: { botId, workspaceId, authGeneration } })
   } finally {
     db.close()
     await rm(root, { recursive: true, force: true })
   }
-})
+}
 
 test('Alpha.2C.2 Task 2 Output corrections: actual cancel outcomes, safe-field allowlist, and session scope', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-alpha2c2-out-'))
@@ -213,7 +194,7 @@ test('Alpha.2C.2 Task 2 Output corrections: actual cancel outcomes, safe-field a
   }
 })
 
-test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename, conflict, delete, and revocation', async () => {
+test('Alpha.2C.2 Electron E2E: native consent, create, save, watch, dirty draft and revocation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ghost-alpha2c2-e2e-'))
   const dataDir = join(root, 'data')
   const ws = join(root, 'ws')
@@ -227,7 +208,6 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
     args: [join(desktop, 'dist-electron', 'main.js')],
     cwd: desktop,
     env: {
-      ...process.cwd(),
       ...process.env,
       GHOST_BOT_DATA_DIR: dataDir,
       GHOST_BOT_RUNTIME_MODE: 'mock',
@@ -257,6 +237,15 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
     await page.waitForSelector('[data-testid="workspace-files-permission-badge"]')
     assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
 
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+    })
+    assert.equal(await page.evaluate((id) => window.ghostBot!.authorizeWorkspaceWrite(id), botId), false)
+    assert.equal(await page.getByTestId('workspace-files-permission-badge').innerText(), 'Read-only')
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
+    })
+
     // Native write grant unlocks Writable state + file mutations
     await page.getByTestId('workspace-authorize-write-btn').click()
     await page.waitForFunction(
@@ -281,25 +270,18 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
     // WRITE-03: Rename button is gated/removed from editor toolbar
     assert.equal(await page.getByTestId('editor-rename-btn').count(), 0)
 
-    // External modification triggers conflict & preserves dirty draft
-    await writeFile(join(ws, 'created.txt'), 'external-change\n', 'utf8')
+    await writeFile(join(ws, 'created.txt'), 'external-clean\n', 'utf8')
+    await page.waitForFunction(() =>
+      document.querySelector<HTMLTextAreaElement>('[data-testid="workspace-editor-textarea"]')?.value === 'external-clean\n',
+    )
     await textarea.fill('dirty-draft\n')
-    await page.getByTestId('editor-save-btn').click()
-    await page.waitForSelector('[data-testid="editor-conflict-banner"]')
+    await writeFile(join(ws, 'created.txt'), 'external-dirty\n', 'utf8')
+    await page.getByTestId('editor-conflict-banner').waitFor()
     assert.equal(await textarea.inputValue(), 'dirty-draft\n')
-    await page.getByTestId('editor-conflict-reload-btn').click()
-    await page.waitForFunction(
-      () =>
-        (document.querySelector('[data-testid="workspace-editor-textarea"]') as HTMLTextAreaElement | null)?.value ===
-        'external-change\n',
-    )
-
-    // Delete into quarantine
-    await page.getByTestId('editor-delete-btn').click()
-    await page.getByTestId('editor-delete-confirm-btn').click()
-    await page.waitForFunction(
-      () => !document.querySelector('[data-testid="workspace-tree-entry-created.txt"]'),
-    )
+    await page.getByTestId('editor-save-btn').click()
+    await page.getByTestId('editor-conflict-banner').waitFor()
+    assert.equal(await readFile(join(ws, 'created.txt'), 'utf8'), 'external-dirty\n')
+    assert.equal(await page.getByTestId('editor-delete-btn').count(), 0)
 
     // Revoke write access and verify mutation fails closed
     await page.getByTestId('workspace-revoke-write-btn').click()
@@ -324,6 +306,11 @@ test('Alpha.2C.2 Electron E2E: separate native write grant, create, save, rename
         )
     }, botId)
     assert.equal(deniedAfterRevoke, true)
+    await page.waitForFunction(() =>
+      document.querySelector<HTMLTextAreaElement>('[data-testid="workspace-editor-textarea"]')?.readOnly,
+    )
+    assert.equal(await textarea.inputValue(), 'dirty-draft\n')
+    await assert.rejects(stat(join(ws, 'blocked.txt')), { code: 'ENOENT' })
   } finally {
     await app.close()
     await rm(root, { recursive: true, force: true })

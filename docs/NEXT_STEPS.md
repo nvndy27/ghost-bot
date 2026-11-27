@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.2C.2 write handoff
+
+Review the hardened PR #39 head on the provisional stack. Preserve the same-grant admission checks and the new Electron watch and revocation regressions during reconciliation. Keep the gated operations disabled until their publication or authorization boundaries are enforceable.
+
 ## Open-source readiness follow-up
 
 - Review and merge the scoped readiness PR; confirm licensing authority for existing contributions and coordinate active Alpha branches.

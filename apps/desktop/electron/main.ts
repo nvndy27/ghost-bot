@@ -698,12 +698,12 @@ function registerIpcHandlers(): void {
       type: 'warning',
       title: 'Authorize workspace write access',
       message: `Allow ${context.ownerName || botId} to modify files in ${context.canonicalRoot}?`,
-      detail: 'Allows Save, Create, Rename, and Quarantined Delete for 30 minutes.',
+      detail: 'Allows saving text files, creating empty files, and creating folders for 30 minutes.',
       buttons: ['Allow write access', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
     })
-    if (promptRes.response !== 0) return false
+    if (promptRes.response !== 0 || !isAuthorizedSender(event)) return false
     return queryDaemon('/workspace/authorize-write', z.literal(true), {
       method: 'POST',
       body: {

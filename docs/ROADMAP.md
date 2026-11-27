@@ -28,7 +28,8 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - **Not Started** — [Alpha.2C read-only Git proposal](extensions/alpha-shared-convergence.md) awaits approval.
 - **In Progress** — Retain current three-panel Chat shell, light/dark/system theme and resizable/collapsible sidebars. Existing Bot Workspace / Team Activity becomes the default Overview tab; keep Live Computer, Active Tasks, Routines, Connected Tools and Account Usage. New tabs are Files/Editor, Changes, Browser and Output. Reuse the panel later in Terminal Mode.
 - **Tested** — Alpha.2A/B integration candidate provides daemon-authorized personal workspace list and read over Electron IPC, with persisted tab selection and Team Activity in Group Chat.
-- **Blocked** — File writes and group filesystem access await write-boundary and task authorization resolution.
+- **Tested** — Alpha.2C.2 provisional PR #39 supports native-granted personal text save and empty file/folder creation. Exact-SHA integration acceptance remains pending.
+- **Blocked** — Non-empty create, rename, quarantine delete, Ask Approval writes and group writes await safe publication or dedicated authorization.
 - **In Progress** — Alpha.2C.1 workspace search, previews, and selection-to-chat. Workspace modules, isolated PDF rendering and UI await Agent 1 shared integration before end-to-end acceptance.
 - **Tested** — Alpha.2D.1 native-granted, read-only Git Changes. Draft review and convergence remain pending.
 - Files/Editor: authorized workspace tree, open multiple files in tabs, syntax highlighting, edit/save, create/rename/delete with appropriate confirmation, file and content search, file-change watching, explicit send-selection-to-chat, preview Markdown/images/SVG/PDF. Handle unsaved/external-change conflicts; root/symlink/path traversal protections, bounded file sizes, binary/secret handling and no privileged renderer filesystem access.

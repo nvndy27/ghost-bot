@@ -192,6 +192,58 @@ export function WorkspaceFilesTab({
     void refreshContextAndRoot()
   }, [refreshContextAndRoot])
 
+  const watchedPath = currentState?.activePath
+  const watchedWorkspace = currentState?.workspaceId
+  const watchedGeneration = currentState?.contextInfo.authGeneration
+  const watchedKey = currentState?.storageKey
+  useEffect(() => {
+    if (!visible || !transport || !selector || !watchedPath ||
+        !watchedWorkspace || !watchedGeneration || !watchedKey) return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout>
+    const check = async () => {
+      const starting = store.getActiveWorkspaceState(contextKey)?.tabs.find((tab) => tab.relativePath === watchedPath)
+      try {
+        if (!starting || starting.saving) return
+        const result = await transport.readFile({
+          ...selector,
+          relativePath: watchedPath,
+          workspaceId: watchedWorkspace,
+          authGeneration: watchedGeneration,
+        })
+        if (disposed || result.workspaceId !== watchedWorkspace || result.relativePath !== watchedPath) return
+        store.updateWorkspace(watchedKey, (state) => {
+          const tab = state.tabs.find((candidate) => candidate.relativePath === watchedPath)
+          if (state.contextInfo.authGeneration !== watchedGeneration ||
+              !tab || tab.saving || tab.revision !== starting.revision) return state
+          const changed = tab.revision !== result.revision
+          const dirty = tab.draftContent !== tab.savedContent
+          const conflict = 'This file changed on disk. Reload or keep editing your draft.'
+          if (tab.readOnly === result.readOnly && (!changed || (dirty && tab.conflictMessage === conflict))) return state
+          const updated = { ...tab, readOnly: result.readOnly }
+          if (changed && dirty) {
+            updated.conflictMessage = conflict
+          } else if (changed) {
+            updated.revision = result.revision
+            updated.savedContent = result.content
+            updated.draftContent = result.content
+            updated.conflictMessage = null
+          }
+          return { ...state, tabs: state.tabs.map((candidate) => candidate === tab ? updated : candidate) }
+        })
+      } catch {
+        // The explicit reload and save paths report unavailable or unauthorized files.
+      } finally {
+        if (!disposed) timer = setTimeout(() => void check(), 1000)
+      }
+    }
+    timer = setTimeout(() => void check(), 1000)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+    }
+  }, [contextKey, selector, store, transport, visible, watchedGeneration, watchedKey, watchedPath, watchedWorkspace])
+
   const handleToggleDir = (relativePath: string) => {
     if (!selector || !currentState) return
     const isExpanded = currentState.expandedDirs.includes(relativePath)
@@ -399,9 +451,10 @@ export function WorkspaceFilesTab({
         <span className="gb-badge" data-testid="workspace-files-permission-badge">
           {currentState.contextInfo.canWrite ? 'Writable' : 'Read-only'}
         </span>
+        {currentState.contextInfo.canWrite && <span className="gb-muted">Rename and delete unavailable</span>}
         {contextKind === 'bot' &&
           ownerId &&
-          currentState.contextInfo.permissionMode !== 'read-only' &&
+          currentState.contextInfo.permissionMode === 'workspace' &&
           transport.authorizeWrite &&
           !currentState.contextInfo.canWrite && (
             <button
@@ -539,78 +592,6 @@ export function WorkspaceFilesTab({
                 t.relativePath === path ? { ...t, conflictMessage: null } : t,
               ),
             }))
-          }
-          onRenameFile={
-            selector && transport.renameEntry && currentState.contextInfo.authGeneration
-              ? (fromPath, toPath) => {
-                  const tab = currentState.tabs.find((t) => t.relativePath === fromPath)
-                  if (!tab) return
-                  void (async () => {
-                    setLoadFileError(null)
-                    try {
-                      const res = await transport.renameEntry!({
-                        ...selector,
-                        workspaceId: currentState.workspaceId,
-                        authGeneration: currentState.contextInfo.authGeneration!,
-                        fromPath,
-                        toPath,
-                        expectedRevision: tab.revision,
-                      })
-                      store.updateWorkspace(currentState.storageKey, (prev) => ({
-                        ...prev,
-                        activePath: prev.activePath === fromPath ? res.toPath : prev.activePath,
-                        tabs: prev.tabs.map((t) =>
-                          t.relativePath === fromPath
-                            ? {
-                                ...t,
-                                relativePath: res.toPath,
-                                name: res.toPath.split('/').pop() ?? res.toPath,
-                                revision: res.revision,
-                              }
-                            : t,
-                        ),
-                      }))
-                      await refreshContextAndRoot()
-                    } catch (err) {
-                      setLoadFileError(err instanceof Error ? err.message : 'Rename failed')
-                    }
-                  })()
-                }
-              : undefined
-          }
-          onDeleteFile={
-            selector && transport.deleteFile && currentState.contextInfo.authGeneration
-              ? (relativePath) => {
-                  const tab = currentState.tabs.find((t) => t.relativePath === relativePath)
-                  if (!tab) return
-                  void (async () => {
-                    setLoadFileError(null)
-                    try {
-                      await transport.deleteFile!({
-                        ...selector,
-                        workspaceId: currentState.workspaceId,
-                        authGeneration: currentState.contextInfo.authGeneration!,
-                        relativePath,
-                        expectedRevision: tab.revision,
-                      })
-                      store.updateWorkspace(currentState.storageKey, (prev) => {
-                        const remaining = prev.tabs.filter((t) => t.relativePath !== relativePath)
-                        return {
-                          ...prev,
-                          tabs: remaining,
-                          activePath:
-                            prev.activePath === relativePath
-                              ? remaining[remaining.length - 1]?.relativePath ?? null
-                              : prev.activePath,
-                        }
-                      })
-                      await refreshContextAndRoot()
-                    } catch (err) {
-                      setLoadFileError(err instanceof Error ? err.message : 'Delete failed')
-                    }
-                  })()
-                }
-              : undefined
           }
           onCloseTab={(path) =>
             store.updateWorkspace(currentState.storageKey, (prev) => {

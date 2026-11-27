@@ -1,5 +1,11 @@
 # Progress log
 
+## Alpha.2C.2 write hardening (PR #39)
+
+**Tested** on the provisional PR #39 base `dc449c8c834ea17107e404d5e1d72f0c2dd12509`. Save and empty-file/folder creation check the same native personal grant before staging, under the file lock, and at commit. Revocation and bot policy changes serialize with commit admission. Empty-file creation uses an exclusive open and keeps the returned descriptor through verification. Non-empty creation, rename, quarantine delete, Ask Approval writes and group writes are gated. Existing quarantine contents are preserved.
+
+Lint, all workspace typechecks and build, and 14/14 focused tests passed. Focused regressions cover grant revocation, expiry and reissuance, policy/root changes, parent replacement, destination collision, post-create substitution and growth, and existing save conflicts. Real Electron verified native consent, clean-file refresh, dirty-draft preservation and revocation using an offline mock runtime and stubbed native dialog decisions. Save keeps staged atomic replacement, bounded verification and an uncertain outcome if verification fails. Arbitrary external mutation can race POSIX path checks and rename.
+
 ## Alpha.2C.1 shared discovery integration
 
 **Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance is pending with Agent 2. Reconcile against accepted main before merge. Zero live inference.

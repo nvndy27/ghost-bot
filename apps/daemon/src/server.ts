@@ -229,6 +229,7 @@ export class GhostBotDaemon {
   private readonly workspaceWriteGrants = new Map<string, { workspaceId: string; authGeneration: string; expiresAtMs: number }>()
   private workspaceGitService: WorkspaceGitService | null = null
   private workspaceOutputService: WorkspaceOutputService | null = null
+  private workspaceWritesStopping = false
   private workspaceFilesService: WorkspaceFilesService | null = null
   private providerSecretStore: SecretStore | null = null
   private runOrchestrator: RunOrchestrator | null = null
@@ -386,16 +387,14 @@ export class GhostBotDaemon {
     this.terminalService = new ScopedTerminalService(dbHandle, this.botRepo)
     this.terminalService.reconcileOnStartup()
     this.skillsService = new LocalSkillsService(dbHandle)
+    this.workspaceWritesStopping = false
     this.workspaceFilesService = new WorkspaceFilesService(dbHandle)
     this.workspaceFilesService.setWriteGrantChecker((auth) => {
-      if (auth.ownerKind !== 'bot') {
-        throw new DaemonError(
-          'WORKSPACE_WRITE_UNAUTHORIZED',
-          'Group and task workspace writes remain gated',
-          { statusCode: 403 },
-        )
+      const grant = this.workspaceWriteGrants.get(auth.ownerId)
+      if (grant && (grant.workspaceId !== auth.workspaceId || grant.authGeneration !== auth.authGeneration)) {
+        this.workspaceWriteGrants.delete(auth.ownerId)
       }
-      this.assertActiveWriteGrant({
+      return this.assertActiveWriteGrant({
         botId: auth.ownerId,
         workspaceId: auth.workspaceId,
         authGeneration: auth.authGeneration,
@@ -987,7 +986,7 @@ export class GhostBotDaemon {
     teamId?: string
     workspaceId: string
     authGeneration: string
-  }): void {
+  }) {
     if (input.teamId || !input.botId) {
       throw new DaemonError(
         'WORKSPACE_WRITE_UNAUTHORIZED',
@@ -997,6 +996,7 @@ export class GhostBotDaemon {
     }
     const writeGrant = this.workspaceWriteGrants.get(input.botId)
     if (
+      this.workspaceWritesStopping ||
       !writeGrant ||
       writeGrant.workspaceId !== input.workspaceId ||
       writeGrant.authGeneration !== input.authGeneration ||
@@ -1011,6 +1011,7 @@ export class GhostBotDaemon {
         { statusCode: 403 },
       )
     }
+    return writeGrant
   }
 
   private async requireDiscoveryGrant(input: z.infer<typeof PersonalWorkspaceAccessSchema>): Promise<void> {
@@ -1029,6 +1030,7 @@ export class GhostBotDaemon {
     this.workspaceDiscovery?.abortAll()
     this.workspaceDiscovery = null
     this.workspaceReadGrants.clear()
+    this.workspaceWritesStopping = true
     this.workspaceWriteGrants.clear()
     this.workspaceGitService?.abortAll()
     this.workspaceGitService = null
@@ -1737,13 +1739,18 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
-          const updatedBot = await repo.updateBot(parsed.data)
-          this.workspaceDiscovery?.abortForBot(idCheck.data)
-          if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
-            this.workspaceReadGrants.delete(idCheck.data)
-          this.workspaceWriteGrants.delete(idCheck.data)
+          const update = async () => {
+            const bot = await repo.updateBot(parsed.data)
+            this.workspaceDiscovery?.abortForBot(idCheck.data)
             this.workspaceWriteGrants.delete(idCheck.data)
+            if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
+              this.workspaceReadGrants.delete(idCheck.data)
+            }
+            return bot
           }
+          const updatedBot = this.workspaceFilesService
+            ? await this.workspaceFilesService.withOwnerMutationBarrier(idCheck.data, update)
+            : await update()
           if (parsed.data.patch.permission === 'read-only' || parsed.data.patch.workspacePath) {
             await this.terminalService?.revokeByBotId(idCheck.data, 'bot_policy_updated').catch(() => {})
           }
@@ -1752,20 +1759,26 @@ export class GhostBotDaemon {
         }
         if (req.method === 'DELETE') {
           let archivedMcpIds: string[] = []
-          const result = repo.deleteBot(idCheck.data, {
-            onArchiveBot: (botId, now) => {
-              this.memoryService?.archiveMemoriesForBotInTx(botId, now)
-              this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
-              this.sidebarRepo?.pruneBotInTx(botId, now)
-              this.sessionRepo?.pruneReadStateForBotInTx(botId, now)
-              if (this.mcpService) {
-                archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
-              }
-            },
-          })
-          this.workspaceReadGrants.delete(idCheck.data)
-          this.workspaceWriteGrants.delete(idCheck.data)
-          this.workspaceDiscovery?.abortForBot(idCheck.data)
+          const remove = () => {
+            const deleted = repo.deleteBot(idCheck.data, {
+              onArchiveBot: (botId, now) => {
+                this.memoryService?.archiveMemoriesForBotInTx(botId, now)
+                this.knowledgeService?.archiveKnowledgeForBotInTx(botId, now)
+                this.sidebarRepo?.pruneBotInTx(botId, now)
+                this.sessionRepo?.pruneReadStateForBotInTx(botId, now)
+                if (this.mcpService) {
+                  archivedMcpIds = this.mcpService.archiveMcpForBotInTx(botId)
+                }
+              },
+            })
+            this.workspaceReadGrants.delete(idCheck.data)
+            this.workspaceWriteGrants.delete(idCheck.data)
+            this.workspaceDiscovery?.abortForBot(idCheck.data)
+            return deleted
+          }
+          const result = this.workspaceFilesService
+            ? await this.workspaceFilesService.withOwnerMutationBarrier(idCheck.data, remove)
+            : remove()
           await this.terminalService?.revokeByBotId(idCheck.data, 'bot_deleted').catch(() => {})
           if (this.mcpService && archivedMcpIds.length > 0) {
             await this.mcpService.invalidateBotConnections(archivedMcpIds)
@@ -1906,7 +1919,16 @@ export class GhostBotDaemon {
               statusCode: 403,
             })
           }
-          const context = await this.workspaceFilesService.resolveContext(selector)
+          const files = this.workspaceFilesService
+          const context = await files.withOwnerMutationBarrier(selector.botId!, async () => {
+            const resolved = await files.resolveContext(selector)
+            const existing = this.workspaceWriteGrants.get(selector.botId!)
+            if (existing && (!resolved.authorized || existing.workspaceId !== resolved.workspaceId ||
+                existing.authGeneration !== resolved.authGeneration)) {
+              this.workspaceWriteGrants.delete(selector.botId!)
+            }
+            return resolved
+          })
           const grant = this.workspaceReadGrants.get(context.ownerId)
           const authorized = context.authorized &&
             grant !== undefined &&
@@ -1936,27 +1958,32 @@ export class GhostBotDaemon {
             req,
             WorkspaceWriteGrantSchema,
           )
-          const readGrant = this.workspaceReadGrants.get(botId)
-          const context = await this.workspaceFilesService.resolveContext({ botId })
-          if (
-            !context.authorized ||
-            !context.canWrite ||
-            context.workspaceId !== workspaceId ||
-            context.authGeneration !== authGeneration ||
-            !readGrant ||
-            readGrant.workspaceId !== workspaceId ||
-            readGrant.authGeneration !== authGeneration
-          ) {
-            throw new DaemonError(
-              'WORKSPACE_WRITE_UNAUTHORIZED',
-              'Write consent requires an active read grant and writable bot policy',
-              { statusCode: 403 },
-            )
-          }
-          this.workspaceWriteGrants.set(botId, {
-            workspaceId,
-            authGeneration,
-            expiresAtMs: Date.now() + 30 * 60_000,
+          const files = this.workspaceFilesService
+          await files.withOwnerMutationBarrier(botId, async () => {
+            const readGrant = this.workspaceReadGrants.get(botId)
+            const context = await files.resolveContext({ botId })
+            if (
+              this.workspaceWritesStopping ||
+              !context.authorized ||
+              context.permissionMode !== 'workspace' ||
+              !context.canWrite ||
+              context.workspaceId !== workspaceId ||
+              context.authGeneration !== authGeneration ||
+              !readGrant ||
+              readGrant.workspaceId !== workspaceId ||
+              readGrant.authGeneration !== authGeneration
+            ) {
+              throw new DaemonError(
+                'WORKSPACE_WRITE_UNAUTHORIZED',
+                'Write consent requires an active read grant and writable bot policy',
+                { statusCode: 403 },
+              )
+            }
+            this.workspaceWriteGrants.set(botId, {
+              workspaceId,
+              authGeneration,
+              expiresAtMs: Date.now() + 30 * 60_000,
+            })
           })
           sendJson(res, 200, true)
           return

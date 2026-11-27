@@ -6,7 +6,7 @@
 
 - Alpha.0 is accepted for scoped internal Codex Chat through PR #15. Public distribution remains blocked by CU4-PKG-02. Live Teams, autonomous Scheduler, Computer Use, and the remaining provider gates stay in force.
 - The Alpha.2A/B candidate exposes personal workspace list and read after native directory confirmation. Read grants expire when the daemon stops or the bot authorization changes. Group filesystem access requires an authorized task scope.
-- Workspace file containment requires Linux with `/proc/self/fd` and fails closed without it. Save is blocked at the daemon boundary. Staged-file identity and revision checks cannot make POSIX rename conditional on an unchanged target and source entry when another process writes concurrently. Ask Approval also requires an explicit grant before the write path can be exposed.
+- The PR #39 checkpoint allows native-granted personal Workspace mode to save text and create empty files/folders on Linux. Save performs bounded verification after atomic replacement. External processes can race POSIX namespace operations. Non-empty creation needs descriptor-bound publication and cleanup. Rename and delete need source identity guarantees, and delete also needs safe quarantine creation and recovery. Existing quarantine entries stay recoverable. Ask Approval and group writes remain gated.
 - Final Personal & Friends Alpha integrated packaging, platform, and remaining live acceptance gates are open.
 
 ## Alpha.1A limits
