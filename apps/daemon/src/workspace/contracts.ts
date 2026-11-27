@@ -42,6 +42,7 @@ export const WorkspaceListDirectoryInputSchema = z
     botId: z.string().min(1).max(128).optional(),
     teamId: z.string().min(1).max(128).optional(),
     workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
     relativePath: WorkspaceRelativePathSchema,
   })
   .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
@@ -74,6 +75,7 @@ export const WorkspaceReadFileInputSchema = z
     botId: z.string().min(1).max(128).optional(),
     teamId: z.string().min(1).max(128).optional(),
     workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
     relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
   })
   .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
@@ -98,12 +100,16 @@ export const WorkspaceSaveFileInputSchema = z
     botId: z.string().min(1).max(128).optional(),
     teamId: z.string().min(1).max(128).optional(),
     workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
     relativePath: z.string().min(1).max(WORKSPACE_LIMITS.maxRelativePathLength),
     content: z.string().max(WORKSPACE_LIMITS.maxFileBytes),
     expectedRevision: z.string().min(1).max(256),
   })
   .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
     message: 'Exactly one of botId or teamId is required',
+  })
+  .refine((v) => Buffer.byteLength(v.content, 'utf8') <= WORKSPACE_LIMITS.maxFileBytes, {
+    message: 'Content exceeds maximum UTF-8 byte limit',
   })
 
 export const WorkspaceSaveFileResponseSchema = z.object({

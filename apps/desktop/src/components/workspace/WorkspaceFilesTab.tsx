@@ -82,6 +82,8 @@ export function WorkspaceFilesTab({
         const res = await transport.listDirectory({
           ...sel,
           workspaceId,
+          authGeneration:
+            store.getActiveWorkspaceState(targetContextKey)?.contextInfo.authGeneration ?? '',
           relativePath,
         })
         if (activeKeyRef.current !== targetContextKey) return
@@ -209,6 +211,7 @@ export function WorkspaceFilesTab({
       const res = await transport.readFile({
         ...selector,
         workspaceId: targetWorkspaceId,
+        authGeneration: currentState.contextInfo.authGeneration ?? '',
         relativePath,
       })
       if (activeKeyRef.current !== targetContextKey) return

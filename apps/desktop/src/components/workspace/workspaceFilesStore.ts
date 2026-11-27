@@ -167,6 +167,7 @@ export class WorkspaceFilesStore {
     const contentAtStart = tab.draftContent
     const expectedRevision = tab.revision
     const originWorkspaceId = snapshot.workspaceId
+    const originAuthGeneration = snapshot.contextInfo.authGeneration ?? ''
 
     this.updateWorkspace(storageKey, (curr) => ({
       ...curr,
@@ -181,6 +182,7 @@ export class WorkspaceFilesStore {
       const res = await transport.saveFile({
         ...selector,
         workspaceId: originWorkspaceId,
+        authGeneration: originAuthGeneration,
         relativePath,
         content: contentAtStart,
         expectedRevision,

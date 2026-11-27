@@ -107,6 +107,13 @@ export class WorkspaceFilesService {
         { statusCode: 409 },
       )
     }
+    if (input.authGeneration !== auth.authGeneration) {
+      throw new DaemonError(
+        'STALE_AUTHORIZATION_TOKEN',
+        'Workspace authorization generation is stale; refresh workspace context',
+        { statusCode: 409 },
+      )
+    }
 
     const res = await listContainedDirectory(
       auth.canonicalRoot,
@@ -134,6 +141,13 @@ export class WorkspaceFilesService {
         { statusCode: 409 },
       )
     }
+    if (input.authGeneration !== auth.authGeneration) {
+      throw new DaemonError(
+        'STALE_AUTHORIZATION_TOKEN',
+        'Workspace authorization generation is stale; refresh workspace context',
+        { statusCode: 409 },
+      )
+    }
 
     const res = await readContainedTextFile(
       auth.canonicalRoot,
@@ -156,8 +170,24 @@ export class WorkspaceFilesService {
   async saveFile(rawInput: unknown, hooks?: SaveHookOptions): Promise<WorkspaceSaveFileResponse> {
     const input = WorkspaceSaveFileInputSchema.parse(rawInput)
     const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
-    const ownerKey = input.teamId ? `team:${input.teamId}` : `bot:${input.botId}`
-    const lockKey = `${ownerKey}::${normalizedPath}`
+    const preAuth = await this.authorizeWorkspace(input)
+    if (input.workspaceId !== preAuth.workspaceId) {
+      throw new DaemonError(
+        'WORKSPACE_CONTEXT_MISMATCH',
+        'Workspace authorization changed; cannot save to a different workspace',
+        { statusCode: 409 },
+      )
+    }
+    if (input.authGeneration !== preAuth.authGeneration) {
+      throw new DaemonError(
+        'STALE_AUTHORIZATION_TOKEN',
+        'Workspace authorization generation is stale; refresh workspace context',
+        { statusCode: 409 },
+      )
+    }
+
+    // Serialize saves by canonical physical file identity (dev:ino + path) across all bots/teams.
+    const lockKey = `${preAuth.rootDev}:${preAuth.rootIno}::${normalizedPath}`
 
     return this.withFileLock(lockKey, async () => {
       const auth = await this.authorizeWorkspace(input)
@@ -165,6 +195,13 @@ export class WorkspaceFilesService {
         throw new DaemonError(
           'WORKSPACE_CONTEXT_MISMATCH',
           'Workspace authorization changed; cannot save to a different workspace',
+          { statusCode: 409 },
+        )
+      }
+      if (input.authGeneration !== auth.authGeneration) {
+        throw new DaemonError(
+          'STALE_AUTHORIZATION_TOKEN',
+          'Workspace authorization generation is stale; refresh workspace context',
           { statusCode: 409 },
         )
       }

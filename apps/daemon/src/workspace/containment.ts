@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import {
-  chmod,
   constants as fsConstants,
   lstat,
   open,
@@ -653,6 +652,8 @@ export async function saveContainedTextFile(
     }
 
     const origMode = st.mode & 0o777
+    const origDev = st.dev
+    const origIno = st.ino
     tmpName = `.ghost-tmp-${randomUUID()}`
     const tmpChildPath = procFdChildPath(dirHandle.fd, tmpName)
 
@@ -685,7 +686,15 @@ export async function saveContainedTextFile(
       }
       written += res.bytesWritten
     }
-    await chmod(tmpChildPath, origMode).catch(() => {})
+    // Descriptor-based chmod + staged identity validation before closing and replacing.
+    await tmpHandle.chmod(origMode).catch(() => {})
+    const stagedStat = await tmpHandle.stat()
+    assertRegularFileStats(stagedStat, tmpName)
+    if (stagedStat.dev !== rootDev || stagedStat.size !== nextBytes.length) {
+      throw new DaemonError('STAGED_FILE_INVALID', 'Staged temporary file failed integrity verification', {
+        statusCode: 500,
+      })
+    }
     await tmpHandle.sync()
     await tmpHandle.close()
     tmpHandle = null
@@ -694,24 +703,77 @@ export async function saveContainedTextFile(
       await hooks.onBeforeCommit()
     }
 
+    // Revalidate target identity (dev, ino) and expectedRevision immediately before atomic rename.
+    const preCommitHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock).catch(
+      (err) => {
+        const code = (err as NodeJS.ErrnoException)?.code
+        throw new DaemonError(
+          code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'FILE_CONFLICT',
+          'Target file could not be revalidated before commit',
+          { statusCode: code === 'ELOOP' ? 403 : 409 },
+        )
+      },
+    )
+    try {
+      const preCommitStat = await preCommitHandle.stat()
+      assertRegularFileStats(preCommitStat, fileName)
+      if (preCommitStat.dev !== origDev || preCommitStat.ino !== origIno) {
+        throw new DaemonError(
+          'FILE_CONFLICT',
+          'Target file identity changed on disk during save staging',
+          { statusCode: 409 },
+        )
+      }
+      if (preCommitStat.size > WORKSPACE_LIMITS.maxFileBytes) {
+        throw new DaemonError('FILE_TOO_LARGE', 'Target file grew beyond editable limit during staging', {
+          statusCode: 413,
+        })
+      }
+      const preCommitBytes = await readExactFromHandle(preCommitHandle, preCommitStat.size)
+      const preCommitRevision = computeRevisionToken(preCommitStat, preCommitBytes)
+      if (preCommitRevision !== expectedRevision) {
+        throw new DaemonError(
+          'FILE_CONFLICT',
+          'File was modified on disk while staging save. Reload before saving.',
+          { statusCode: 409 },
+        )
+      }
+    } finally {
+      await preCommitHandle.close().catch(() => {})
+    }
+
     // Atomic replacement inside the pinned directory descriptor; never truncates the live file first.
     await rename(tmpChildPath, targetChildPath)
     tmpName = null
     await dirHandle.sync().catch(() => {})
 
-    const verifyHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
     try {
-      const updatedStat = await verifyHandle.stat()
-      const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
-      const newRevision = computeRevisionToken(updatedStat, verifyBytes)
-      return {
-        revision: newRevision,
-        sizeBytes: verifyBytes.length,
-        normalizedRelativePath: segments.join('/'),
-        savedAt: new Date().toISOString(),
+      const verifyHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
+      try {
+        const updatedStat = await verifyHandle.stat()
+        assertRegularFileStats(updatedStat, fileName)
+        if (updatedStat.size > WORKSPACE_LIMITS.maxFileBytes) {
+          throw new DaemonError('FILE_TOO_LARGE', 'Post-commit file exceeds readable limit', {
+            statusCode: 500,
+          })
+        }
+        const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
+        const newRevision = computeRevisionToken(updatedStat, verifyBytes)
+        return {
+          revision: newRevision,
+          sizeBytes: verifyBytes.length,
+          normalizedRelativePath: segments.join('/'),
+          savedAt: new Date().toISOString(),
+        }
+      } finally {
+        await verifyHandle.close().catch(() => {})
       }
-    } finally {
-      await verifyHandle.close().catch(() => {})
+    } catch (postErr) {
+      throw new DaemonError(
+        'SAVE_OUTCOME_UNCERTAIN',
+        `File replacement committed, but post-commit verification failed: ${postErr instanceof Error ? postErr.message : String(postErr)}`,
+        { statusCode: 500 },
+      )
     }
   } finally {
     if (readHandle) {
