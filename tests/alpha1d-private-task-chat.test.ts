@@ -154,18 +154,82 @@ test('Alpha.1D gates live Teams and marks interrupted tasks uncertain on restart
   // Startup reconciliation marks running tasks uncertain (never silently replayed)
   const fx = await createFixture('mock')
   try {
-    const started = await fx.teams.startTeamRun({
-      teamId: fx.team.id,
-      goal: 'In-flight before crash',
-      idempotencyKey: 'private-task:00000000-0000-4000-8000-000000000104',
-      autoExecute: false,
-    })
-    fx.db.sqlite.prepare(`UPDATE team_runs SET status = 'running' WHERE id = ?`).run(started.run.id)
-    fx.db.sqlite.prepare(`UPDATE team_tasks SET status = 'running' WHERE team_run_id = ?`).run(started.run.id)
+    let dispatches = 0
+    fx.teams.executeTeamRunToCompletion = async (runId) => {
+      dispatches++
+      return fx.teams.getAggregateUsage(runId)
+    }
+    const input = {
+      teamId: fx.team.id, assignedBotId: 'developer', objective: 'In-flight before crash',
+      operationId: '00000000-0000-4000-8000-000000000104',
+    }
+    const delegated = await fx.privateTasks.delegate(input)
+    fx.db.sqlite.prepare("UPDATE team_tasks SET status = 'running' WHERE id = ?").run(delegated.taskId)
     const rec = fx.teams.reconcileOnStartup()
-    assert.ok(rec.tasksMarkedUncertain >= 1)
+    assert.equal(rec.tasksMarkedUncertain, 1)
     assert.equal(rec.runsMarkedUncertain, 1)
+    const recovered = await fx.privateTasks.delegate(input)
+    assert.equal(recovered.status, 'uncertain')
+    assert.equal(recovered.taskId, delegated.taskId)
+    assert.equal(recovered.sessionId, delegated.sessionId)
+    assert.equal(dispatches, 1)
+    assert.equal(fx.db.sqlite.prepare('SELECT COUNT(*) AS count FROM runs').get()?.count, 0)
   } finally {
+    fx.db.close()
+    await rm(fx.dataDir, { recursive: true, force: true })
+  }
+})
+
+
+test('overlapping private delegations with one operation ID preserve the winning assignee and dispatch once', { timeout: 5000 }, async () => {
+  const fx = await createFixture()
+  const plannersEntered = Promise.withResolvers<void>()
+  const winnerGate = Promise.withResolvers<void>()
+  const loserGate = Promise.withResolvers<void>()
+  try {
+    const start = fx.teams.startTeamRun.bind(fx.teams)
+    let entered = 0
+    fx.teams.startTeamRun = (input) => start({
+      ...input,
+      planner: {
+        async plan() {
+          const plan = input.plan!
+          const gate = plan.tasks[0].assignedBotId === 'developer' ? winnerGate : loserGate
+          if (++entered === 2) plannersEntered.resolve()
+          await gate.promise
+          return plan
+        },
+      },
+    })
+    const dispatched: string[] = []
+    fx.teams.executeTeamRunToCompletion = async (id) => {
+      dispatched.push(id)
+      return fx.teams.getAggregateUsage(id)
+    }
+    const input = {
+      teamId: fx.team.id, objective: 'Deterministic overlap',
+      operationId: '00000000-0000-4000-8000-000000000105',
+    }
+    const winner = fx.privateTasks.delegate({ ...input, assignedBotId: 'developer' })
+    const loser = assert.rejects(fx.privateTasks.delegate({ ...input, assignedBotId: 'chief' }), /different or interrupted task/)
+    await plannersEntered.promise
+    winnerGate.resolve()
+    const record = await winner
+    const metaKey = 'teams.private-task-meta:' + record.teamRunId
+    const readMeta = () => fx.db.sqlite.prepare('SELECT value_json FROM settings WHERE key = ?').get(metaKey)?.value_json
+    const original = readMeta()
+    loserGate.resolve()
+    await loser
+    assert.equal(readMeta(), original)
+    assert.equal(record.assignedBotId, 'developer')
+    assert.equal(fx.sessionRepo.getSession(record.sessionId!).agentId, 'developer')
+    assert.deepEqual(fx.privateTasks.list({ teamId: fx.team.id }).tasks.map((task) => task.taskId), [record.taskId])
+    assert.deepEqual(dispatched, [record.teamRunId])
+    assert.equal(fx.db.sqlite.prepare('SELECT COUNT(*) AS count FROM team_runs').get()?.count, 1)
+    assert.equal(fx.db.sqlite.prepare('SELECT COUNT(*) AS count FROM sessions').get()?.count, 1)
+  } finally {
+    winnerGate.resolve()
+    loserGate.resolve()
     fx.db.close()
     await rm(fx.dataDir, { recursive: true, force: true })
   }
