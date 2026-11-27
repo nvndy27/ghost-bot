@@ -1,5 +1,13 @@
 # Progress log
 
+## Alpha.0 Final Live Acceptance (Bounded 3-Prompt Codex Check)
+
+2026-11-27. Executed bounded 3-prompt opt-in live Codex `0.172.0` acceptance (`GHOST_BOT_RUN_LIVE_CODEX=1 node scripts/verify-alpha0-live-codex.mjs`) on candidate `6779ab3` (`integration/alpha0-native-chat-rc`, PR #15) using the dedicated ChatGPT `plus` profile, `read-only` permission, and isolated temp dirs. See [Alpha.0 Final Live Acceptance report](extensions/alpha0-final-live-acceptance.md).
+
+| State | Evidence |
+|---|---|
+| Tested | Verified `codex-cli 0.172.0` and dedicated ChatGPT profile (`$HOME/.config/ghost-bot/codex-profile`). Prompt 1 (`Reply with exactly ALPHA0_OK.`) completed (`runs[0].status = 'completed'`, `external_session_id` persisted); Prompt 2 cancellation executed; `app2` restart restored `ALPHA0_OK` and started Prompt 3 (`runs[2]`), which transitioned cleanly to `'interrupted'` when `app2.close()` ran before `Stop generation` mounted. Fixed the wait race in `scripts/verify-alpha0-live-codex.mjs` without exceeding the 3-prompt budget. |
+
 ## Alpha.0B — Integrated Native Chat Release Candidate
 
 2026-11-27. Branched `integration/alpha0-native-chat-rc` from `fec34fc` (`feat/alpha0a-native-chat-closure`, PR #14), verified complete Git ancestry from `origin/main` (`07839ff`), reconciled full owner-approved `v0.1 Personal & Friends Alpha` `README.md` and `docs/ROADMAP.md` from PR #12 (`docs/v0.1-personal-friends-alpha`), and verified offline RC readiness with zero live inference or paid API spend. See [Alpha.0B RC report](extensions/alpha0b-integrated-native-chat-rc.md).
