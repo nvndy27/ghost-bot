@@ -1,12 +1,27 @@
 # Progress log
 
+## Accepted release baseline — 2026-11-28
+
+PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
+
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. Alpha.4 UI acceptance requires maintainer scope approval before final candidate freeze and a single final package build and verification cycle.
+
+
+## Alpha.3B documentation checkpoint
+
+**Implemented** — Updated the release capability matrix, nine adapter acceptance plans, audience-specific checklist and Alpha.3A/Alpha.4/freeze/final-packaging handoff. Documentation validation checks local links, the scoped diff and whitespace. Existing test, CI and package evidence is reused. This assignment runs zero inference, builds or runtime tests. Publication and maintainer review remain separate from release approval.
+
+## Historical integration evidence
+
+The dated and provisional checkpoints below retain their original scope. The accepted PR #46 baseline above supersedes their integration and review gates.
+
 ## Unified Alpha.1 and Alpha.2
 
 The integration candidate preserves main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`, Alpha.1 PR #44 at `c9d332d39d1df4a2429d52c7dbba94bb5444db34` (including PR #42 at `bdb6c75d37fcab1d38473cdd77f7f5d55d969acf`) and coordinated Workspace PR #45 successor `871190743d8a35735cfb895c0a4a85629a2fe228`, which contains the pinned icon refinement `c174875bcfa9fded3f08fbec09f9eacdba6ec541`. Branding PR #38 stays separate.
 
 The PR #42 regression fixtures delegate through the authorized boundary and hold dispatch. Concurrent contenders with one operation ID and different assignees preserve the winning task, session, dispatch and stored metadata. The unified candidate closes the personal Workspace panel and draft handoff in Private Task Chat, stops admitting new discussion and task requests during daemon shutdown, and persists appearance changes as ordered, field-specific updates. Existing migrations `0001–0014` and the Alpha.3 executable harness are preserved.
 
-Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Required hosted CI, Agent 2 acceptance and maintainer visual approval are pending. No inference or package acceptance ran on the unified candidate.
+Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Final hosted CI and Agent 2 acceptance passed at `c08c4a7`, followed by PR #46 merge. Final release UI acceptance remains subject to maintainer scope approval. No inference or package acceptance ran on the unified candidate.
 
 All six Workspace scenarios passed in local offline Electron with Git and PDF sandbox enforcement before the coordinated Output delta. The Group Chat Electron run passed native avatar content validation and restart persistence, member routing and two-round discussion, single-action task approval, cancellation, summary navigation and Private Task Workspace isolation. Two Personal Chat launches passed conversation switching during a mock run, provider and grant changes, sidebar and tab restoration, and read-only save denial. The Group composer and five icon-only Workspace tabs were checked together at 900 px in dark and light. Personal Workspace tabs also passed in both themes at 220 px. Synthetic screenshots are stored locally for maintainer review.
 
@@ -24,7 +39,7 @@ After merging the Workspace successor, affected lint, daemon typecheck, desktop 
 
 Hosted PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541` reproduced the Computer Use Chrome SUID helper abort while passing Workspace. CI returns to the known-good Jammy runner with a checksum-pinned Bubblewrap 0.13.1 build and distinct namespace preflights. The runtime launches, containment tests and Chromium sandbox requirements stay in force.
 
-The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The exact hosted check remains required.
+The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The final PR #46 hosted check subsequently passed. Preserve the earlier failure and remediation as historical evidence.
 
 Personal Workspace Output now excludes marked private-task sessions and legacy linked team sessions for listing and cancellation. Focused output module and Electron checks passed. The same targeted scenario passed in a rebuilt Fedora AppImage, including Linux sandbox checks and mock daemon restart. This evidence applies to the Workspace branch. See [cause, validation and unified handoff](extensions/alpha2g-workspace-convergence.md#alpha3-hosted-isolation-remediation).
 
@@ -42,7 +57,7 @@ Stage, unstage and revert remain **Blocked**. The Git lock probe confirmed coope
 
 Lint, all workspace typechecks and build passed. Linux sandbox-required regressions passed 17/17, including real mock-runtime Electron Files, Changes, discovery and Output with stubbed native dialog decisions. The Git scenario refreshed an external index and working-tree edit without modifying the index or unrelated files. Daemon IPC and discovery passed 12/12, including mutation denial before consent, after native read and Files write grants, and after write revocation. Denial preserved the external index, pending lock and working-tree bytes. These checks cover read-only inspection and denial. Mutation execution and recovery from a partially committed Git write remain unverified.
 
-PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. Agent 1 owns follow-up.
+PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. The integrity follow-up and restart regression correction were subsequently incorporated through PR #42 and PR #46.
 
 ## Alpha.2C.2 write hardening (PR #39)
 
@@ -52,7 +67,7 @@ Lint, all workspace typechecks and build, and 14/14 focused tests passed. The da
 
 ## Alpha.2C.1 shared discovery integration
 
-**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance is pending with Agent 2. Reconcile against accepted main before merge. Zero live inference.
+**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance and reconciliation were subsequently completed through PR #46. Zero live inference.
 
 ## Shared baseline convergence
 
