@@ -7,12 +7,12 @@
 <p align="center"><strong>Your AI team, in one local-first workspace.</strong></p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-2878b8" alt="License: Apache 2.0" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/License-MIT-b19a3e" alt="License: MIT" /></a>
-  <a href="docs/ROADMAP.md"><img src="https://img.shields.io/badge/Status-Alpha%20development-c68628" alt="Status: Alpha development" /></a>
-  <img src="https://img.shields.io/badge/Platform-Linux-397eaa" alt="Platform: Linux" />
-  <img src="https://img.shields.io/badge/TypeScript-Strict-2878b8" alt="TypeScript: Strict" />
-  <img src="https://img.shields.io/badge/Architecture-Local--first-367f58" alt="Architecture: Local-first" />
+  <a href="LICENSE"><img src="docs/badges/apache.svg" alt="License: Apache 2.0" /></a>
+  <a href="LICENSE-MIT"><img src="docs/badges/mit.svg" alt="License: MIT" /></a>
+  <a href="docs/ROADMAP.md"><img src="docs/badges/status.svg" alt="Status: Alpha development" /></a>
+  <img src="docs/badges/linux.svg" alt="Platform: Linux" />
+  <img src="docs/badges/typescript.svg" alt="TypeScript: Strict" />
+  <img src="docs/badges/architecture.svg" alt="Architecture: Local-first" />
 </p>
 
 ---
@@ -21,9 +21,9 @@
   <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Build status" /></a>
   <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL status" /></a>
   <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml"><img src="https://github.com/nvndy27/ghost-bot/actions/workflows/scorecard.yml/badge.svg?branch=main" alt="OpenSSF Scorecard workflow status" /></a>
-  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="https://img.shields.io/badge/Best%20Practices-Not%20registered-lightgrey" alt="OpenSSF Best Practices: Not registered" /></a>
-  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="https://img.shields.io/badge/REUSE-Pending-lightgrey" alt="REUSE: Pending" /></a>
-  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/sbom.yml"><img src="https://img.shields.io/badge/SBOM-Export%20configured-397eaa" alt="SBOM export configured" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="docs/badges/best-practices.svg" alt="OpenSSF Best Practices: Not registered" /></a>
+  <a href="docs/OPEN_SOURCE_READINESS.md#outstanding-before-claiming-compliance-or-releasing-binaries"><img src="docs/badges/reuse.svg" alt="REUSE: Pending" /></a>
+  <a href="https://github.com/nvndy27/ghost-bot/actions/workflows/sbom.yml"><img src="docs/badges/sbom.svg" alt="SBOM export configured" /></a>
 </p>
 
 <p align="center">
