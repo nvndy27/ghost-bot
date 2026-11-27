@@ -20,7 +20,8 @@ dual-license; reference screenshots are excluded from the grant.
   install, lint and typecheck passed; root tests reported errors and timed out,
   so remaining steps did not run. CodeQL run
   [45950009112](https://github.com/nvndy27/ghost-bot/actions/runs/45950009112)
-  completed successfully. Revised CI results are pending.
+  completed successfully.
+- Second CI run [45953206448](https://github.com/nvndy27/ghost-bot/actions/runs/45953206448): prerequisites, install, lint, typecheck, build and all 145 root tests passed (0 failed, 0 skipped). Workspace computer-use CU.3 capability probe failed on Ubuntu before the containment assertions; other sandboxed browser E2E tests passed. The probe now includes the same read-only loader/config mounts and /lib symlink as the isolated execution path; failure diagnostics are retained. Workspace recursion uses --no-bail so unrelated suites also report results without suppressing failure. CodeQL run [45953206476](https://github.com/nvndy27/ghost-bot/actions/runs/45953206476) passed. Revised CI results are pending.
 - CodeQL: JavaScript/TypeScript analysis; inspect Security alerts and setup
   prerequisites. Successful execution is not proof of absence of vulnerabilities.
 - Dependabot: weekly npm and Actions updates; review update PRs and enable

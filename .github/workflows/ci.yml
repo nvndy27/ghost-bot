@@ -51,4 +51,4 @@ jobs:
       - name: Workspace offline tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 12
-        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m pnpm -r --workspace-concurrency=2 --if-present test
+        run: xvfb-run -a dbus-run-session -- timeout --kill-after=10s 10m pnpm -r --no-bail --workspace-concurrency=2 --if-present test
