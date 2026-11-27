@@ -16,6 +16,15 @@
   --gb-radius-lg: 14px;
   --gb-font: system-ui, -apple-system, sans-serif;
   --gb-font-size: 14px;
+  --gb-icon-xs: 14px;
+  --gb-icon-sm: 16px;
+  --gb-icon-md: 18px;
+  --gb-icon-lg: 20px;
+  --gb-icon-btn-size: 32px;
+  --gb-icon-btn-size-md: 36px;
+  --gb-icon-btn-radius: 7px;
+  --gb-surface-hover: rgba(255, 255, 255, 0.06);
+  --gb-surface-active: rgba(255, 255, 255, 0.11);
 }
 
 :root[data-theme='light'] {
@@ -30,6 +39,8 @@
   --gb-accent: #487966;
   --gb-success: #168a56;
   --gb-danger: #b84242;
+  --gb-surface-hover: rgba(0, 0, 0, 0.05);
+  --gb-surface-active: rgba(0, 0, 0, 0.09);
 }
 
 * {
@@ -83,6 +94,64 @@ textarea:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--gb-accent);
   outline-offset: 2px;
+}
+
+.gb-icon-btn {
+  width: var(--gb-icon-btn-size);
+  height: var(--gb-icon-btn-size);
+  padding: 0;
+  border-radius: var(--gb-icon-btn-radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--gb-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.gb-icon-btn--md {
+  width: var(--gb-icon-btn-size-md);
+  height: var(--gb-icon-btn-size-md);
+}
+
+.gb-icon-btn--outline {
+  border-color: var(--gb-border);
+}
+
+.gb-icon-btn:hover:not(:disabled) {
+  background: var(--gb-surface-hover);
+  border-color: transparent;
+  color: var(--gb-text);
+}
+
+.gb-icon-btn--outline:hover:not(:disabled) {
+  border-color: var(--gb-border);
+}
+
+.gb-icon-btn.active {
+  background: var(--gb-surface-active);
+  color: var(--gb-text);
+}
+
+.gb-icon-btn:disabled {
+  opacity: 0.42;
+}
+
+.gb-icon-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@keyframes gb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.gb-spin {
+  animation: gb-spin 1.1s linear infinite;
 }
 
 input,
@@ -178,12 +247,21 @@ hr.gb-divider {
   margin-bottom: 8px;
 }
 
+.gb-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gb-muted);
+  pointer-events: none;
+}
+
 .gb-search-input {
   width: 100%;
   background: var(--gb-surface);
   border: 1px solid var(--gb-border);
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 7px 10px 7px 32px;
   font-size: 13px;
 }
 
@@ -436,6 +514,20 @@ hr.gb-divider {
   flex-wrap: wrap;
 }
 
+.gb-composer-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 6px;
+  border-radius: 6px;
+  color: var(--gb-muted);
+}
+
+.gb-composer-select-wrap:hover {
+  background: var(--gb-surface);
+  color: var(--gb-text);
+}
+
 .gb-composer-selectors select {
   background: transparent;
   border: 1px solid transparent;
@@ -453,13 +545,33 @@ hr.gb-divider {
 .gb-send-btn {
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: 8px;
   background: var(--gb-surface);
   border: 1px solid var(--gb-border);
+  color: var(--gb-text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.gb-send-btn.ready {
+  background: var(--gb-accent);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.gb-send-btn.ready:hover:not(:disabled) {
+  background: var(--gb-accent);
+  border-color: transparent;
+  opacity: 0.9;
+}
+
+.gb-send-btn.gb-stop-btn {
+  background: var(--gb-surface);
+  border-color: var(--gb-border);
+  color: var(--gb-text);
 }
 
 /* Right workspace mock screen */
@@ -586,14 +698,24 @@ hr.gb-divider {
 }
 
 .gb-settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   text-align: left;
   width: 100%;
   padding: 8px 10px;
   font-size: 13px;
+  color: var(--gb-muted);
+}
+
+.gb-settings-nav button:hover:not(:disabled) {
+  color: var(--gb-text);
 }
 
 .gb-settings-nav button.active {
   background: var(--gb-surface);
+  color: var(--gb-text);
+  font-weight: 500;
 }
 
 .gb-settings-content {

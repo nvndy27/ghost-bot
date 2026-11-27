@@ -1,6 +1,8 @@
 import type { SessionRecord } from '@ghost-bot/shared-types/ipc'
+import { Ellipsis, PanelLeft, PanelRight, SquarePen } from 'lucide-react'
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 export interface ChatHeaderProps {
   bot: WorkspaceBot | null
@@ -32,14 +34,13 @@ export function ChatHeader({
   return (
     <header className="gb-chat-header">
       {leftCollapsed && (
-        <button
-          type="button"
+        <IconButton
+          label="Expand left sidebar"
           onClick={onToggleLeft}
-          title="Expand left sidebar"
-          aria-label="Expand left sidebar"
+          pressed={!leftCollapsed}
         >
-          ☰
-        </button>
+          <PanelLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        </IconButton>
       )}
       {bot ? (
         <>
@@ -83,19 +84,20 @@ export function ChatHeader({
               onClick={onNewChat}
               title="New conversation"
               aria-label="New conversation"
+              className="gb-btn-outline gb-icon-inline"
               style={{ fontSize: 12, padding: '4px 10px' }}
             >
-              + New chat
+              <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
+              <span>New chat</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={onEditBot}
+          <IconButton
+            label="Edit bot"
             title="Edit bot configuration"
-            aria-label="Edit bot"
+            onClick={onEditBot}
           >
-            ⋯
-          </button>
+            <Ellipsis size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </>
       ) : (
         <>
@@ -103,14 +105,14 @@ export function ChatHeader({
           <div style={{ flex: 1 }} />
         </>
       )}
-      <button
-        type="button"
+      <IconButton
+        label={rightCollapsed ? 'Expand right workspace' : 'Collapse right workspace'}
         onClick={onToggleRight}
-        title={rightCollapsed ? 'Expand right workspace' : 'Collapse right workspace'}
-        aria-label={rightCollapsed ? 'Expand right workspace' : 'Collapse right workspace'}
+        active={!rightCollapsed}
+        pressed={!rightCollapsed}
       >
-        ▥
-      </button>
+        <PanelRight size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </IconButton>
     </header>
   )
 }

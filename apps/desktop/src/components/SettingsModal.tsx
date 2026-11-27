@@ -1,5 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { avatarPresets } from '@ghost-bot/avatar/presets'
+import {
+  BookOpen,
+  Brain,
+  CalendarClock,
+  ChartNoAxesColumn,
+  CircleUserRound,
+  Database,
+  Layers,
+  Monitor,
+  Palette,
+  Plug,
+  Settings,
+  Settings2,
+  Shield,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type {
   AppSettings,
   AppSettingsPatch,
@@ -11,6 +29,7 @@ import type {
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, ThemePreference, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 import { KnowledgeSettingsSection } from './KnowledgeSettingsSection.tsx'
 import { McpSettingsSection } from './McpSettingsSection.tsx'
 import { LocalSkillsSettingsSection } from './LocalSkillsSettingsSection.tsx'
@@ -18,22 +37,40 @@ import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
 import { ComputerUseSettingsSection } from './ComputerUseSettingsSection.tsx'
 
-const SETTINGS_SECTIONS = [
-  { id: 'general', label: 'General' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'accounts', label: 'Accounts & Providers' },
-  { id: 'models', label: 'Models' },
-  { id: 'usage', label: 'Usage' },
-  { id: 'personalization', label: 'Personalization' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'knowledge', label: 'Knowledge' },
-  { id: 'tools', label: 'Tools & MCP' },
-  { id: 'permissions', label: 'Permissions' },
-  { id: 'computer-use', label: 'Computer Use' },
-  { id: 'routines', label: 'Routines' },
-  { id: 'privacy', label: 'Data & Privacy' },
-  { id: 'advanced', label: 'Advanced' },
-] as const
+const SETTINGS_SECTIONS: ReadonlyArray<{
+  id:
+    | 'general'
+    | 'appearance'
+    | 'accounts'
+    | 'models'
+    | 'usage'
+    | 'personalization'
+    | 'memory'
+    | 'knowledge'
+    | 'tools'
+    | 'permissions'
+    | 'computer-use'
+    | 'routines'
+    | 'privacy'
+    | 'advanced'
+  label: string
+  Icon: LucideIcon
+}> = [
+  { id: 'general', label: 'General', Icon: Settings2 },
+  { id: 'appearance', label: 'Appearance', Icon: Palette },
+  { id: 'accounts', label: 'Accounts & Providers', Icon: CircleUserRound },
+  { id: 'models', label: 'Models', Icon: Layers },
+  { id: 'usage', label: 'Usage', Icon: ChartNoAxesColumn },
+  { id: 'personalization', label: 'Personalization', Icon: SlidersHorizontal },
+  { id: 'memory', label: 'Memory', Icon: Brain },
+  { id: 'knowledge', label: 'Knowledge', Icon: BookOpen },
+  { id: 'tools', label: 'Tools & MCP', Icon: Plug },
+  { id: 'permissions', label: 'Permissions', Icon: Shield },
+  { id: 'computer-use', label: 'Computer Use', Icon: Monitor },
+  { id: 'routines', label: 'Routines', Icon: CalendarClock },
+  { id: 'privacy', label: 'Data & Privacy', Icon: Database },
+  { id: 'advanced', label: 'Advanced', Icon: Settings },
+]
 
 type SectionId = (typeof SETTINGS_SECTIONS)[number]['id']
 
@@ -230,23 +267,32 @@ export function SettingsModal({
             <strong>Settings</strong>
             <span className="gb-badge">{isMock ? 'Mock mode' : 'Codex bridge'}</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close settings">
-            ×
-          </button>
+          <IconButton label="Close settings" onClick={onClose}>
+            <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
 
         <div className="gb-settings-body">
           <nav className="gb-settings-nav" aria-label="Settings sections">
-            {SETTINGS_SECTIONS.map((sec) => (
-              <button
-                key={sec.id}
-                type="button"
-                className={activeSection === sec.id ? 'active' : undefined}
-                onClick={() => setActiveSection(sec.id)}
-              >
-                {sec.label}
-              </button>
-            ))}
+            {SETTINGS_SECTIONS.map((sec) => {
+              const SectionIcon = sec.Icon
+              return (
+                <button
+                  key={sec.id}
+                  type="button"
+                  className={activeSection === sec.id ? 'active' : undefined}
+                  onClick={() => setActiveSection(sec.id)}
+                >
+                  <SectionIcon
+                    size={ICON_SIZE.sm}
+                    strokeWidth={ICON_STROKE}
+                    aria-hidden="true"
+                    style={{ flexShrink: 0 }}
+                  />
+                  <span>{sec.label}</span>
+                </button>
+              )
+            })}
           </nav>
 
           <section className="gb-settings-content">

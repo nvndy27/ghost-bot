@@ -3,10 +3,12 @@ import type { ChangeEvent, FormEvent } from 'react'
 import { AVATAR_COLOR_PALETTE, avatarPresets } from '@ghost-bot/avatar/presets'
 import type { AvatarConfig, AvatarEyeStyle, PresetAvatarConfig } from '@ghost-bot/avatar/presets'
 import type { CreateBotInput, UpdateBotInput } from '@ghost-bot/shared-types/ipc'
+import { X } from 'lucide-react'
 import { MOCK_MODELS } from '../data/mockWorkspace.ts'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
+import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
 
 const AVATAR_STATES: AvatarStatus[] = [
   'idle',
@@ -282,9 +284,9 @@ export function BotEditorModal({
       >
         <div className="gb-modal-head">
           <strong>{mode === 'create' ? 'Create bot' : `Edit ${initialBot?.name ?? 'bot'}`}</strong>
-          <button type="button" onClick={attemptClose} aria-label="Close bot editor">
-            ×
-          </button>
+          <IconButton label="Close bot editor" onClick={attemptClose}>
+            <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+          </IconButton>
         </div>
 
         <form
