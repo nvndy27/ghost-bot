@@ -68,15 +68,18 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     })
     page.on('pageerror', (err) => consoleErrors.push(err.message))
 
-    // 1. Default Overview rendering preserves existing right-panel sections
+    // 1. Approved Overview retains production actions and collapsed runtime details
     const shell = page.getByTestId('workspace-panel-shell')
     assert.equal(await shell.getAttribute('data-active-tab'), 'overview')
     assert.equal(await shell.getAttribute('data-maximized'), 'false')
-    await page.waitForSelector('text=Live computer')
-    await page.waitForSelector('text=Active tasks')
+    await page.getByRole('button', { name: 'Open Live Viewer', exact: true }).waitFor()
+    await page.waitForSelector('text=Current activity')
     await page.waitForSelector('text=Routines')
     await page.waitForSelector('text=Connected tools')
-    await page.waitForSelector('text=Account usage')
+    const runtimeDetails = page.locator('.gb-overview-runtime')
+    await runtimeDetails.locator('summary').click()
+    await runtimeDetails.getByText('Account usage', { exact: true }).waitFor()
+    await runtimeDetails.locator('summary').click()
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-overview-dark-1440x900.png') })
 
     // 2. Sidebar Bot Identity UI contract: avatar + bot name + provider label only (no model/effort)

@@ -124,3 +124,7 @@ Gate: restart/idempotency/approval handling and isolated browser tested.
 ## Phase 6 — Expansion
 - [ ] Consented meeting assistant, mobile companion, remote gateway, marketplace, Windows/macOS.
 Gate: threat model, consent, privacy and platform-specific tests reviewed.
+
+## Alpha.4 — Approved V03.2 UI implementation
+
+- **Tested** — Alpha.4B Workspace presentation and responsive Explorer, with actual Electron screenshots and seven affected scenarios passing. Shared token checkpoint and Alpha.3C ancestry are preserved. Global App width settings, Usage Center and Tools settings wiring require Agent 1 convergence. Maintainer visual approval and final integrated acceptance remain pending. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
