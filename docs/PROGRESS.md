@@ -389,3 +389,15 @@ Phase 2D is **Verified** (**PASS** with authorized RPM packaging deferral to Pha
 | Verified | Initialized `main` and pushed starter commit `4af838c` to the authorized private repository. |
 | Verified | Node 24.22.3, Codex 0.172.0 and OpenClaw CLI 2026.11.8 (2d4ab29). |
 | Tested | `npm test` passed four offline tests. Strict TypeScript check and JavaScript syntax checks passed. |
+
+## Alpha.3A packaging readiness — 2026-11-28
+
+**In Progress** on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. Added the packaged harness CSP attachment wait while retaining all assertions. Inspected the two Linux packaging paths, embedded daemon startup and external prerequisite handling. Reused accepted integration/package evidence. Main CI and CodeQL were in progress at the one permitted check. No package rebuild, installation or live inference. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md) for executable final-build and host acceptance steps.
+
+Alpha.3A validation **Tested** — lint, recursive typechecks and the focused Browser Electron CSP scenario passed (1/1, existing `1071688` AppImage). Four prepared Bash blocks passed syntax validation. No package rebuild or host installation. Final platform acceptance remains **Blocked** on final artifacts and target hosts.
+
+## Alpha.3A targeted file-save regression — 2026-11-28
+
+**Tested** — Reproduced the main CI empty-content assertion by pausing the daemon at save admission in the affected Electron scenario. Disabled Save was an in-flight state. Updated the test to await the acknowledged clean state before its unchanged exact disk-content assertion. The gated reproduction and corrected ordinary scenario passed against the existing `1071688` AppImage. Persistence, external conflicts, dirty buffers and revocation assertions remain intact. No production or package changes. Complete-suite verification belongs to hosted CI on the updated PR #47.
+
+Targeted save correction checks passed lint, recursive typechecks and `git diff --check`. The unmodified local scenario passed before fault injection, confirming timing sensitivity. The daemon-paused old predicate reproduced the exact CI failure. Both the corrected gated experiment and normal focused scenario passed 1/1.

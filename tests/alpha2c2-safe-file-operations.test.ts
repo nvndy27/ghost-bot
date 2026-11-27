@@ -251,9 +251,11 @@ test('Alpha.2C.2 Electron E2E: native consent, create, save, watch, dirty draft 
     const textarea = page.getByTestId('workspace-editor-textarea')
     await textarea.fill('updated-content\n')
     await page.getByTestId('editor-save-btn').click()
-    await page.waitForFunction(
-      () => document.querySelector('[data-testid="editor-save-btn"]')?.hasAttribute('disabled'),
-    )
+    // Disabled also means an in-flight save. Require the acknowledged clean state.
+    await page.waitForFunction(() => {
+      const save = document.querySelector<HTMLButtonElement>('[data-testid="editor-save-btn"]')
+      return save?.disabled && save.textContent?.trim() === 'Save'
+    })
     assert.equal(await readFile(join(ws, 'created.txt'), 'utf8'), 'updated-content\n')
 
     // WRITE-03: Rename button is gated/removed from editor toolbar
