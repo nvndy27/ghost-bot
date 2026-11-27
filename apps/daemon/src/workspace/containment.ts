@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import {
   constants as fsConstants,
+  link,
   lstat,
+  mkdir,
   open,
   opendir,
   rename,
@@ -30,7 +32,7 @@ const SENSITIVE_EXACT_NAMES = new Set([
   'service-account.json',
 ])
 
-const SENSITIVE_DIR_NAMES = new Set(['.git', '.ssh', '.gnupg', '.aws'])
+const SENSITIVE_DIR_NAMES = new Set(['.git', '.ssh', '.gnupg', '.aws', '.ghost-bot-trash'])
 
 const SENSITIVE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.kdbx'])
 
@@ -821,5 +823,357 @@ export async function saveContainedTextFile(
       await tmpHandle.close().catch(() => {})
     }
     await dirHandle.close().catch(() => {})
+  }
+}
+
+export async function createContainedEntry(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  relativePath: string,
+  kind: 'file' | 'directory',
+  content = '',
+  hooks?: SaveHookOptions,
+): Promise<{
+  normalizedRelativePath: string
+  kind: 'file' | 'directory'
+  revision: string | null
+  sizeBytes: number | null
+}> {
+  const segments = normalizeWorkspaceRelativePath(relativePath, false)
+  const entryName = segments[segments.length - 1]
+  if (kind === 'file' && isBlockedBinaryExtension(entryName)) {
+    throw new DaemonError('UNSUPPORTED_BINARY_FILE', `File '${entryName}' is a binary type`, {
+      statusCode: 415,
+    })
+  }
+
+  const parentSegments = segments.slice(0, -1)
+  const dirHandle = await walkContainedDirectoryFd(canonicalRoot, rootDev, rootIno, parentSegments)
+  const targetChildPath = procFdChildPath(dirHandle.fd, entryName)
+  const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
+  const oNonBlock = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0
+
+  if (kind === 'directory') {
+    try {
+      if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+      await mkdir(targetChildPath, 0o755)
+      await dirHandle.sync().catch(() => {})
+      return {
+        normalizedRelativePath: segments.join('/'),
+        kind: 'directory',
+        revision: null,
+        sizeBytes: null,
+      }
+    } catch (err) {
+      if (err instanceof DaemonError) throw err
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'EEXIST') {
+        throw new DaemonError('FILE_EXISTS', `Directory '${entryName}' already exists`, {
+          statusCode: 409,
+        })
+      }
+      throw new DaemonError('CREATE_FAILED', `Failed to create directory: ${code ?? 'unknown'}`, {
+        statusCode: 500,
+      })
+    } finally {
+      await dirHandle.close().catch(() => {})
+    }
+  }
+
+  const nextBytes = Buffer.from(content, 'utf8')
+  if (nextBytes.length > WORKSPACE_LIMITS.maxFileBytes) {
+    await dirHandle.close().catch(() => {})
+    throw new DaemonError('FILE_TOO_LARGE', 'File content exceeds maximum size', { statusCode: 413 })
+  }
+  assertValidUtf8Text(nextBytes, segments.join('/'))
+
+  let tmpHandle: FileHandle | null = null
+  let tmpName: string | null = `.ghost-tmp-${randomUUID()}`
+  const tmpChildPath = procFdChildPath(dirHandle.fd, tmpName)
+
+  try {
+    tmpHandle = await open(
+      tmpChildPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | oNoFollow,
+      0o644,
+    )
+    let written = 0
+    while (written < nextBytes.length) {
+      if (hooks?.injectWriteError) hooks.injectWriteError()
+      const res = await tmpHandle.write(nextBytes, written, nextBytes.length - written, written)
+      if (res.bytesWritten === 0) {
+        throw new DaemonError('FILE_WRITE_INCOMPLETE', 'Incomplete write while staging file', {
+          statusCode: 500,
+        })
+      }
+      written += res.bytesWritten
+    }
+    const stagedStat = await tmpHandle.stat()
+    assertRegularFileStats(stagedStat, tmpName)
+    if (stagedStat.dev !== rootDev || stagedStat.size !== nextBytes.length) {
+      throw new DaemonError('STAGED_FILE_INVALID', 'Staged temporary file failed integrity check', {
+        statusCode: 500,
+      })
+    }
+    const stagedIno = stagedStat.ino
+    await tmpHandle.sync()
+    await tmpHandle.close()
+    tmpHandle = null
+
+    if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+
+    // Atomic no-clobber link fails with EEXIST if destination appeared concurrently.
+    await link(tmpChildPath, targetChildPath).catch((err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'EEXIST') {
+        throw new DaemonError('FILE_EXISTS', `File '${entryName}' already exists`, {
+          statusCode: 409,
+        })
+      }
+      throw new DaemonError('CREATE_FAILED', `Failed to publish file: ${code ?? 'unknown'}`, {
+        statusCode: 500,
+      })
+    })
+    await unlink(tmpChildPath).catch(() => {})
+    tmpName = null
+    await dirHandle.sync().catch(() => {})
+
+    const verifyHandle = await open(targetChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
+    try {
+      const updatedStat = await verifyHandle.stat()
+      const verifyBytes = await readExactFromHandle(verifyHandle, updatedStat.size)
+      if (updatedStat.ino !== stagedIno || Buffer.compare(verifyBytes, nextBytes) !== 0) {
+        throw new DaemonError(
+          'SAVE_OUTCOME_UNCERTAIN',
+          'Created file verification mismatched staged content',
+          { statusCode: 500 },
+        )
+      }
+      return {
+        normalizedRelativePath: segments.join('/'),
+        kind: 'file',
+        revision: computeRevisionToken(updatedStat, verifyBytes),
+        sizeBytes: verifyBytes.length,
+      }
+    } finally {
+      await verifyHandle.close().catch(() => {})
+    }
+  } finally {
+    if (tmpHandle) await tmpHandle.close().catch(() => {})
+    if (tmpName) await unlink(tmpChildPath).catch(() => {})
+    await dirHandle.close().catch(() => {})
+  }
+}
+
+export async function renameContainedFile(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  fromPath: string,
+  toPath: string,
+  expectedRevision: string,
+  hooks?: SaveHookOptions,
+): Promise<{ normalizedFromPath: string; normalizedToPath: string; revision: string }> {
+  const fromSegments = normalizeWorkspaceRelativePath(fromPath, false)
+  const toSegments = normalizeWorkspaceRelativePath(toPath, false)
+  const normalizedFromPath = fromSegments.join('/')
+  const normalizedToPath = toSegments.join('/')
+  if (normalizedFromPath === normalizedToPath) {
+    throw new DaemonError('INVALID_PATH', 'Source and destination paths must differ', {
+      statusCode: 400,
+    })
+  }
+
+  const fromName = fromSegments[fromSegments.length - 1]
+  const toName = toSegments[toSegments.length - 1]
+  if (isBlockedBinaryExtension(fromName) || isBlockedBinaryExtension(toName)) {
+    throw new DaemonError('UNSUPPORTED_BINARY_FILE', 'Binary file rename is blocked', {
+      statusCode: 415,
+    })
+  }
+
+  const fromDir = await walkContainedDirectoryFd(
+    canonicalRoot,
+    rootDev,
+    rootIno,
+    fromSegments.slice(0, -1),
+  )
+  const toDir = await walkContainedDirectoryFd(
+    canonicalRoot,
+    rootDev,
+    rootIno,
+    toSegments.slice(0, -1),
+  )
+
+  const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
+  const oNonBlock = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0
+  const srcChildPath = procFdChildPath(fromDir.fd, fromName)
+  const dstChildPath = procFdChildPath(toDir.fd, toName)
+
+  try {
+    const checkSource = async () => {
+      const h = await open(srcChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock).catch((err) => {
+        const code = (err as NodeJS.ErrnoException)?.code
+        throw new DaemonError(
+          code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'FILE_NOT_FOUND',
+          'Source file could not be opened safely',
+          { statusCode: code === 'ELOOP' ? 403 : 404 },
+        )
+      })
+      try {
+        const st = await h.stat()
+        assertRegularFileStats(st, fromName)
+        if (st.dev !== rootDev) {
+          throw new DaemonError('MOUNT_BOUNDARY_REJECTED', 'Source crosses mount boundary', {
+            statusCode: 403,
+          })
+        }
+        if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
+          throw new DaemonError('FILE_TOO_LARGE', 'Source file exceeds size limit', { statusCode: 413 })
+        }
+        const bytes = await readExactFromHandle(h, st.size)
+        const rev = computeRevisionToken(st, bytes)
+        if (rev !== expectedRevision) {
+          throw new DaemonError('FILE_CONFLICT', 'Source file changed on disk before rename', {
+            statusCode: 409,
+          })
+        }
+        return { dev: st.dev, ino: st.ino, bytes }
+      } finally {
+        await h.close().catch(() => {})
+      }
+    }
+
+    const initial = await checkSource()
+    if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+    const rechecked = await checkSource()
+    if (rechecked.dev !== initial.dev || rechecked.ino !== initial.ino) {
+      throw new DaemonError('FILE_CONFLICT', 'Source identity changed before rename', {
+        statusCode: 409,
+      })
+    }
+
+    // No-clobber POSIX link ensures absent destination and same-filesystem containment.
+    await link(srcChildPath, dstChildPath).catch((err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'EEXIST') {
+        throw new DaemonError('FILE_EXISTS', `Destination '${toName}' already exists`, {
+          statusCode: 409,
+        })
+      }
+      if (code === 'EXDEV') {
+        throw new DaemonError('MOUNT_BOUNDARY_REJECTED', 'Cross-device rename is not allowed', {
+          statusCode: 403,
+        })
+      }
+      throw new DaemonError('RENAME_FAILED', `Failed to rename file: ${code ?? 'unknown'}`, {
+        statusCode: 500,
+      })
+    })
+    await unlink(srcChildPath)
+    await fromDir.sync().catch(() => {})
+    await toDir.sync().catch(() => {})
+
+    const verify = await open(dstChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock)
+    try {
+      const st = await verify.stat()
+      return {
+        normalizedFromPath,
+        normalizedToPath,
+        revision: computeRevisionToken(st, rechecked.bytes),
+      }
+    } finally {
+      await verify.close().catch(() => {})
+    }
+  } finally {
+    await fromDir.close().catch(() => {})
+    await toDir.close().catch(() => {})
+  }
+}
+
+export async function deleteContainedFile(
+  canonicalRoot: string,
+  rootDev: number,
+  rootIno: number,
+  relativePath: string,
+  expectedRevision: string,
+  hooks?: SaveHookOptions,
+): Promise<{ normalizedRelativePath: string; quarantined: boolean }> {
+  const segments = normalizeWorkspaceRelativePath(relativePath, false)
+  const fileName = segments[segments.length - 1]
+  const normalizedRelativePath = segments.join('/')
+  const rootHandle = await openRootDirectoryFd(canonicalRoot, rootDev, rootIno)
+  const dirHandle = await walkContainedDirectoryFd(
+    canonicalRoot,
+    rootDev,
+    rootIno,
+    segments.slice(0, -1),
+  )
+
+  const oNoFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
+  const oNonBlock = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0
+  const srcChildPath = procFdChildPath(dirHandle.fd, fileName)
+
+  let trashHandle: FileHandle | null = null
+  try {
+    const trashRootPath = procFdChildPath(rootHandle.fd, '.ghost-bot-trash')
+    await mkdir(trashRootPath, 0o700).catch((err) => {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code !== 'EEXIST') throw err
+    })
+    trashHandle = await openChildDirectoryFd(rootHandle, '.ghost-bot-trash', rootDev)
+
+    const verifyTarget = async () => {
+      const h = await open(srcChildPath, fsConstants.O_RDONLY | oNoFollow | oNonBlock).catch((err) => {
+        const code = (err as NodeJS.ErrnoException)?.code
+        throw new DaemonError(
+          code === 'ELOOP' ? 'SYMLINK_REJECTED' : 'FILE_NOT_FOUND',
+          'Target file could not be opened safely',
+          { statusCode: code === 'ELOOP' ? 403 : 404 },
+        )
+      })
+      try {
+        const st = await h.stat()
+        assertRegularFileStats(st, fileName)
+        if (st.dev !== rootDev) {
+          throw new DaemonError('MOUNT_BOUNDARY_REJECTED', 'File crosses mount boundary', {
+            statusCode: 403,
+          })
+        }
+        if (st.size > WORKSPACE_LIMITS.maxFileBytes) {
+          throw new DaemonError('FILE_TOO_LARGE', 'File exceeds size limit', { statusCode: 413 })
+        }
+        const bytes = await readExactFromHandle(h, st.size)
+        const rev = computeRevisionToken(st, bytes)
+        if (rev !== expectedRevision) {
+          throw new DaemonError('FILE_CONFLICT', 'File changed on disk before deletion', {
+            statusCode: 409,
+          })
+        }
+        return { dev: st.dev, ino: st.ino }
+      } finally {
+        await h.close().catch(() => {})
+      }
+    }
+
+    const initial = await verifyTarget()
+    if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+    const rechecked = await verifyTarget()
+    if (rechecked.dev !== initial.dev || rechecked.ino !== initial.ino) {
+      throw new DaemonError('FILE_CONFLICT', 'Target identity changed before deletion', {
+        statusCode: 409,
+      })
+    }
+
+    const safeTrashName = `${randomUUID()}-${fileName.replace(/[^A-Za-z0-9._-]/g, '_')}`
+    await rename(srcChildPath, procFdChildPath(trashHandle.fd, safeTrashName))
+    await dirHandle.sync().catch(() => {})
+    await trashHandle.sync().catch(() => {})
+    return { normalizedRelativePath, quarantined: true }
+  } finally {
+    if (trashHandle) await trashHandle.close().catch(() => {})
+    await dirHandle.close().catch(() => {})
+    await rootHandle.close().catch(() => {})
   }
 }

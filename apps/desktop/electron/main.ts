@@ -110,6 +110,10 @@ import {
   WorkspaceContextIpcResponseSchema,
   WorkspaceBrowserBoundsSchema,
   WorkspaceBrowserCommandSchema,
+  WorkspaceCreateEntryIpcInputSchema,
+  WorkspaceCreateEntryIpcResponseSchema,
+  WorkspaceDeleteFileIpcInputSchema,
+  WorkspaceDeleteFileIpcResponseSchema,
   WorkspaceGitInspectSchema,
   WorkspaceGitOperationSchema,
   WorkspaceGitResponseSchema,
@@ -117,6 +121,8 @@ import {
   WorkspaceOutputCancelResponseSchema,
   WorkspaceOutputQuerySchema,
   WorkspaceOutputResponseSchema,
+  WorkspaceRenameEntryIpcInputSchema,
+  WorkspaceRenameEntryIpcResponseSchema,
   WorkspaceListDirectoryIpcInputSchema,
   WorkspaceListDirectoryIpcResponseSchema,
   WorkspaceReadFileIpcInputSchema,
@@ -671,6 +677,74 @@ function registerIpcHandlers(): void {
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     const parsed = WorkspaceSaveFileIpcInputSchema.parse(params)
     return queryDaemon('/workspace/save', WorkspaceSaveFileIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:authorize-write', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { botId } = z.object({ botId: BotIdSchema }).parse(params)
+    const context = await queryDaemon('/workspace/context', WorkspaceContextIpcResponseSchema, {
+      method: 'POST',
+      body: { botId },
+    })
+    if (!context.authorized || !context.workspaceId || !context.authGeneration || !context.canonicalRoot) {
+      return false
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+    if (!win) return false
+    const promptRes = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Authorize workspace write access',
+      message: `Allow ${context.ownerName || botId} to modify files in ${context.canonicalRoot}?`,
+      detail: 'Allows Save, Create, Rename, and Quarantined Delete for 30 minutes.',
+      buttons: ['Allow write access', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (promptRes.response !== 0) return false
+    return queryDaemon('/workspace/authorize-write', z.literal(true), {
+      method: 'POST',
+      body: {
+        botId,
+        workspaceId: context.workspaceId,
+        authGeneration: context.authGeneration,
+      },
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:revoke-write', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const { botId } = z.object({ botId: BotIdSchema }).parse(params)
+    return queryDaemon('/workspace/revoke-write', z.literal(true), {
+      method: 'POST',
+      body: { botId },
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:create-entry', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceCreateEntryIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/create', WorkspaceCreateEntryIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:rename-entry', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceRenameEntryIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/rename', WorkspaceRenameEntryIpcResponseSchema, {
+      method: 'POST',
+      body: parsed,
+    })
+  })
+
+  ipcMain.handle('ghost:workspace:delete-file', async (event, params) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = WorkspaceDeleteFileIpcInputSchema.parse(params)
+    return queryDaemon('/workspace/delete', WorkspaceDeleteFileIpcResponseSchema, {
       method: 'POST',
       body: parsed,
     })

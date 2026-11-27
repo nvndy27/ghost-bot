@@ -63,6 +63,7 @@ export const WorkspaceOutputCancelInputSchema = z
   .object({
     botId: z.string().min(1).max(128).optional(),
     teamId: z.string().min(1).max(128).optional(),
+    sessionId: z.string().min(1).max(128).optional(),
     runId: z.string().min(1).max(128),
     terminalCommandId: z.string().min(1).max(128).optional(),
   })

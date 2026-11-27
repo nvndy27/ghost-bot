@@ -117,20 +117,30 @@ function formatEventPayload(type: string, payload: Record<string, unknown>): {
   const severity: WorkspaceOutputEntry['severity'] = isError ? 'error' : isWarn ? 'warn' : 'info'
 
   const detailParts: string[] = []
-  for (const key of ['toolName', 'label', 'message', 'reason', 'delta', 'text', 'summary']) {
+  for (const key of [
+    'toolName',
+    'label',
+    'message',
+    'reason',
+    'delta',
+    'text',
+    'summary',
+    'status',
+    'phase',
+  ]) {
     const val = payload[key]
     if (typeof val === 'string' && val.trim().length > 0) {
       detailParts.push(val.trim())
     }
   }
   const message =
-    detailParts.length > 0 ? clipText(detailParts.join(' · ')) : clipText(JSON.stringify(payload))
+    detailParts.length > 0 ? clipText(detailParts.join(' · ')) : `Event: ${clipText(type, 120)}`
   return { source, severity, title: clipText(type, 200), message }
 }
 
 export interface WorkspaceOutputCancelHandlers {
-  cancelRun: (runId: string) => Promise<{ status: string } | void>
-  cancelTerminalCommand?: (commandId: string, ownerId: string) => Promise<void>
+  cancelRun: (runId: string) => Promise<{ status: string }>
+  cancelTerminalCommand?: (commandId: string) => Promise<{ status: string } | void>
 }
 
 export class WorkspaceOutputService {
@@ -389,19 +399,26 @@ export class WorkspaceOutputService {
 
     const botId = input.botId!
     const run = this.db.sqlite
-      .prepare('SELECT id, agent_id, status FROM runs WHERE id = ?')
-      .get(input.runId) as { id: string; agent_id: string; status: string } | undefined
+      .prepare('SELECT id, session_id, agent_id, status FROM runs WHERE id = ?')
+      .get(input.runId) as { id: string; session_id: string; agent_id: string; status: string } | undefined
     if (!run || run.agent_id !== botId) {
       throw new DaemonError('OUTPUT_RUN_NOT_FOUND', 'Run not found for authorized bot', {
         statusCode: 404,
       })
     }
+    if (input.sessionId && run.session_id !== input.sessionId) {
+      throw new DaemonError(
+        'OUTPUT_SESSION_UNAUTHORIZED',
+        'Run does not belong to the specified session',
+        { statusCode: 403 },
+      )
+    }
 
     if (input.terminalCommandId) {
       const cmd = this.db.sqlite
-        .prepare('SELECT id, owner_id, bot_id, run_id FROM terminal_commands WHERE id = ?')
+        .prepare('SELECT id, owner_id, bot_id, run_id, status FROM terminal_commands WHERE id = ?')
         .get(input.terminalCommandId) as
-        | { id: string; owner_id: string; bot_id: string; run_id: string }
+        | { id: string; owner_id: string; bot_id: string; run_id: string; status: string }
         | undefined
       if (!cmd || cmd.bot_id !== botId || cmd.run_id !== input.runId) {
         throw new DaemonError(
@@ -415,11 +432,25 @@ export class WorkspaceOutputService {
           statusCode: 503,
         })
       }
-      await handlers.cancelTerminalCommand(cmd.id, cmd.owner_id)
-      return { cancelled: true, runId: input.runId, status: 'cancelled' }
+      const res = await handlers.cancelTerminalCommand(cmd.id)
+      const latest = this.db.sqlite
+        .prepare('SELECT status FROM terminal_commands WHERE id = ?')
+        .get(cmd.id) as { status: string } | undefined
+      const effectiveStatus = (res && typeof res.status === 'string' ? res.status : latest?.status) ?? 'unknown'
+      const mapped = mapTerminalStatus(effectiveStatus)
+      return {
+        cancelled: mapped.status === 'cancelled',
+        runId: input.runId,
+        status: mapped.status,
+      }
     }
 
-    await handlers.cancelRun(input.runId)
-    return { cancelled: true, runId: input.runId, status: 'cancelled' }
+    const runRes = await handlers.cancelRun(input.runId)
+    const mapped = mapRunStatus(runRes.status)
+    return {
+      cancelled: mapped.status === 'cancelled',
+      runId: input.runId,
+      status: mapped.status,
+    }
   }
 }

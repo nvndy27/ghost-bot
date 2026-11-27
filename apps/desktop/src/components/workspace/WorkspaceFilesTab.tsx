@@ -399,6 +399,49 @@ export function WorkspaceFilesTab({
         <span className="gb-badge" data-testid="workspace-files-permission-badge">
           {currentState.contextInfo.canWrite ? 'Writable' : 'Read-only'}
         </span>
+        {contextKind === 'bot' &&
+          ownerId &&
+          currentState.contextInfo.permissionMode !== 'read-only' &&
+          transport.authorizeWrite &&
+          !currentState.contextInfo.canWrite && (
+            <button
+              type="button"
+              className="gb-workspace-icon-btn"
+              disabled={authorizing}
+              data-testid="workspace-authorize-write-btn"
+              onClick={async () => {
+                setAuthorizing(true)
+                setLoadFileError(null)
+                try {
+                  if (await transport.authorizeWrite!(ownerId)) {
+                    await refreshContextAndRoot()
+                  }
+                } catch (err) {
+                  setLoadFileError(err instanceof Error ? err.message : 'Write authorization failed')
+                } finally {
+                  setAuthorizing(false)
+                }
+              }}
+            >
+              Allow write
+            </button>
+          )}
+        {contextKind === 'bot' &&
+          ownerId &&
+          currentState.contextInfo.canWrite &&
+          transport.revokeWrite && (
+            <button
+              type="button"
+              className="gb-workspace-icon-btn"
+              data-testid="workspace-revoke-write-btn"
+              onClick={async () => {
+                await transport.revokeWrite!(ownerId)
+                await refreshContextAndRoot()
+              }}
+            >
+              Revoke write
+            </button>
+          )}
       </div>
 
       {visible && access && (discovery ? (
@@ -427,9 +470,35 @@ export function WorkspaceFilesTab({
           directories={currentState.directories}
           expandedDirs={expandedSet}
           selectedFilePath={currentState.activePath}
+          canWrite={currentState.contextInfo.canWrite}
           onToggleDir={handleToggleDir}
           onSelectFile={selectFile}
           onRefresh={() => void refreshContextAndRoot()}
+          onCreateEntry={
+            selector && transport.createEntry && currentState.contextInfo.authGeneration
+              ? (kind, relativePath) => {
+                  void (async () => {
+                    setLoadFileError(null)
+                    try {
+                      await transport.createEntry!({
+                        ...selector,
+                        workspaceId: currentState.workspaceId,
+                        authGeneration: currentState.contextInfo.authGeneration!,
+                        relativePath,
+                        kind,
+                        content: kind === 'file' ? '' : undefined,
+                      })
+                      await refreshContextAndRoot()
+                      if (kind === 'file') {
+                        await openOrReloadFile(relativePath, true)
+                      }
+                    } catch (err) {
+                      setLoadFileError(err instanceof Error ? err.message : 'Create failed')
+                    }
+                  })()
+                }
+              : undefined
+          }
         />
 
         <WorkspaceCodeEditor
@@ -470,6 +539,78 @@ export function WorkspaceFilesTab({
                 t.relativePath === path ? { ...t, conflictMessage: null } : t,
               ),
             }))
+          }
+          onRenameFile={
+            selector && transport.renameEntry && currentState.contextInfo.authGeneration
+              ? (fromPath, toPath) => {
+                  const tab = currentState.tabs.find((t) => t.relativePath === fromPath)
+                  if (!tab) return
+                  void (async () => {
+                    setLoadFileError(null)
+                    try {
+                      const res = await transport.renameEntry!({
+                        ...selector,
+                        workspaceId: currentState.workspaceId,
+                        authGeneration: currentState.contextInfo.authGeneration!,
+                        fromPath,
+                        toPath,
+                        expectedRevision: tab.revision,
+                      })
+                      store.updateWorkspace(currentState.storageKey, (prev) => ({
+                        ...prev,
+                        activePath: prev.activePath === fromPath ? res.toPath : prev.activePath,
+                        tabs: prev.tabs.map((t) =>
+                          t.relativePath === fromPath
+                            ? {
+                                ...t,
+                                relativePath: res.toPath,
+                                name: res.toPath.split('/').pop() ?? res.toPath,
+                                revision: res.revision,
+                              }
+                            : t,
+                        ),
+                      }))
+                      await refreshContextAndRoot()
+                    } catch (err) {
+                      setLoadFileError(err instanceof Error ? err.message : 'Rename failed')
+                    }
+                  })()
+                }
+              : undefined
+          }
+          onDeleteFile={
+            selector && transport.deleteFile && currentState.contextInfo.authGeneration
+              ? (relativePath) => {
+                  const tab = currentState.tabs.find((t) => t.relativePath === relativePath)
+                  if (!tab) return
+                  void (async () => {
+                    setLoadFileError(null)
+                    try {
+                      await transport.deleteFile!({
+                        ...selector,
+                        workspaceId: currentState.workspaceId,
+                        authGeneration: currentState.contextInfo.authGeneration!,
+                        relativePath,
+                        expectedRevision: tab.revision,
+                      })
+                      store.updateWorkspace(currentState.storageKey, (prev) => {
+                        const remaining = prev.tabs.filter((t) => t.relativePath !== relativePath)
+                        return {
+                          ...prev,
+                          tabs: remaining,
+                          activePath:
+                            prev.activePath === relativePath
+                              ? remaining[remaining.length - 1]?.relativePath ?? null
+                              : prev.activePath,
+                        }
+                      })
+                      await refreshContextAndRoot()
+                    } catch (err) {
+                      setLoadFileError(err instanceof Error ? err.message : 'Delete failed')
+                    }
+                  })()
+                }
+              : undefined
           }
           onCloseTab={(path) =>
             store.updateWorkspace(currentState.storageKey, (prev) => {

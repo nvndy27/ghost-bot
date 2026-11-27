@@ -40,6 +40,16 @@ const bridge: GhostBotBridge = {
   cancelWorkspaceOutput: (input) => ipcRenderer.invoke('ghost:workspace:output-cancel', input),
   saveWorkspaceFile: (params) =>
     ipcRenderer.invoke('ghost:workspace:save-file', params),
+  authorizeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:authorize-write', { botId }),
+  revokeWorkspaceWrite: (botId) =>
+    ipcRenderer.invoke('ghost:workspace:revoke-write', { botId }),
+  createWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:create-entry', params),
+  renameWorkspaceEntry: (params) =>
+    ipcRenderer.invoke('ghost:workspace:rename-entry', params),
+  deleteWorkspaceFile: (params) =>
+    ipcRenderer.invoke('ghost:workspace:delete-file', params),
   getSettings: () => ipcRenderer.invoke('ghost:settings:get', {}),
   updateSettings: (patch) => ipcRenderer.invoke('ghost:settings:update', patch),
   resetSettings: () => ipcRenderer.invoke('ghost:settings:reset', {}),

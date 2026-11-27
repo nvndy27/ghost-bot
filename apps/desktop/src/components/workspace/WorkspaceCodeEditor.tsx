@@ -27,6 +27,8 @@ export interface WorkspaceCodeEditorProps {
   onReloadFile: (relativePath: string) => void
   onDismissConflict: (relativePath: string) => void
   onCloseTab: (relativePath: string) => void
+  onRenameFile?: (fromPath: string, toPath: string) => void
+  onDeleteFile?: (relativePath: string) => void
 }
 
 export function WorkspaceCodeEditor({
@@ -42,9 +44,14 @@ export function WorkspaceCodeEditor({
   onReloadFile,
   onDismissConflict,
   onCloseTab,
+  onRenameFile,
+  onDeleteFile,
 }: WorkspaceCodeEditorProps) {
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null)
   const [confirmReloadPath, setConfirmReloadPath] = useState<string | null>(null)
+  const [confirmDeletePath, setConfirmDeletePath] = useState<string | null>(null)
+  const [renamingPath, setRenamingPath] = useState<string | null>(null)
+  const [renameTarget, setRenameTarget] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [selectionLength, setSelectionLength] = useState(0)
   const [sendStatus, setSendStatus] = useState('')
@@ -242,8 +249,94 @@ export function WorkspaceCodeEditor({
               >
                 {activeTab.saving ? 'Saving...' : 'Save'}
               </button>
+              {!activeTab.readOnly && onRenameFile && (
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  onClick={() => {
+                    setRenamingPath(activeTab.relativePath)
+                    setRenameTarget(activeTab.relativePath)
+                  }}
+                  data-testid="editor-rename-btn"
+                >
+                  Rename
+                </button>
+              )}
+              {!activeTab.readOnly && onDeleteFile && (
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  onClick={() => setConfirmDeletePath(activeTab.relativePath)}
+                  data-testid="editor-delete-btn"
+                >
+                  Delete
+                </button>
+              )}
             </div>
           </div>
+
+          {renamingPath === activeTab.relativePath && onRenameFile && (
+            <div className="gb-editor-banner" data-testid="editor-rename-form">
+              <input
+                type="text"
+                aria-label="New relative file path"
+                data-testid="editor-rename-input"
+                value={renameTarget}
+                onChange={(e) => setRenameTarget(e.target.value)}
+                style={{ flex: 1, minWidth: 120, fontSize: 11.5, padding: '2px 6px' }}
+              />
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  data-testid="editor-rename-confirm-btn"
+                  onClick={() => {
+                    const next = renameTarget.trim()
+                    if (next && next !== activeTab.relativePath) {
+                      onRenameFile(activeTab.relativePath, next)
+                    }
+                    setRenamingPath(null)
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  onClick={() => setRenamingPath(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {confirmDeletePath === activeTab.relativePath && onDeleteFile && (
+            <div className="gb-editor-banner" data-testid="editor-delete-confirm">
+              <span>Move {activeTab.relativePath} to workspace quarantine?</span>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  data-testid="editor-delete-confirm-btn"
+                  onClick={() => {
+                    const target = confirmDeletePath
+                    setConfirmDeletePath(null)
+                    onDeleteFile(target)
+                  }}
+                >
+                  Confirm delete
+                </button>
+                <button
+                  type="button"
+                  className="gb-workspace-icon-btn"
+                  onClick={() => setConfirmDeletePath(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {onSendSelection && <div className="gb-workspace-discovery-controls">
             <button type="button" className="gb-workspace-icon-btn"

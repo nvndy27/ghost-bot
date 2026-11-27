@@ -6,21 +6,30 @@ import { DaemonError } from '../errors.ts'
 import {
   assertDescriptorContainmentSupported,
   computeWorkspaceId,
+  createContainedEntry,
+  deleteContainedFile,
   detectLanguageFromPath,
   listContainedDirectory,
   normalizeWorkspaceRelativePath,
   readContainedTextFile,
+  renameContainedFile,
   saveContainedTextFile,
   type SaveHookOptions,
 } from './containment.ts'
 import {
+  WorkspaceCreateEntryInputSchema,
+  WorkspaceDeleteFileInputSchema,
   WorkspaceListDirectoryInputSchema,
   WorkspaceReadFileInputSchema,
+  WorkspaceRenameEntryInputSchema,
   WorkspaceSaveFileInputSchema,
   WorkspaceSelectorSchema,
   type WorkspaceContextResponse,
+  type WorkspaceCreateEntryResponse,
+  type WorkspaceDeleteFileResponse,
   type WorkspaceListDirectoryResponse,
   type WorkspaceReadFileResponse,
+  type WorkspaceRenameEntryResponse,
   type WorkspaceSaveFileResponse,
 } from './contracts.ts'
 
@@ -308,6 +317,176 @@ export class WorkspaceFilesService {
         savedAt: res.savedAt,
       }
     })
+  }
+
+  async createEntry(
+    rawInput: unknown,
+    hooks?: SaveHookOptions,
+  ): Promise<WorkspaceCreateEntryResponse> {
+    const input = WorkspaceCreateEntryInputSchema.parse(rawInput)
+    const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
+    const preAuth = await this.authorizeMutationTarget(input)
+    const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
+
+    return this.withFileLock(lockKey, async () => {
+      const auth = await this.authorizeMutationTarget(input)
+      const res = await createContainedEntry(
+        auth.canonicalRoot,
+        auth.rootDev,
+        auth.rootIno,
+        normalizedPath,
+        input.kind,
+        input.content ?? '',
+        {
+          injectWriteError: hooks?.injectWriteError,
+          onBeforeCommit: async () => {
+            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+            await this.assertMutationStillAuthorized(input, auth)
+          },
+        },
+      )
+      return {
+        workspaceId: auth.workspaceId,
+        relativePath: res.normalizedRelativePath,
+        kind: res.kind,
+        revision: res.revision,
+        sizeBytes: res.sizeBytes,
+      }
+    })
+  }
+
+  async renameEntry(
+    rawInput: unknown,
+    hooks?: SaveHookOptions,
+  ): Promise<WorkspaceRenameEntryResponse> {
+    const input = WorkspaceRenameEntryInputSchema.parse(rawInput)
+    const fromNorm = normalizeWorkspaceRelativePath(input.fromPath, false).join('/')
+    const toNorm = normalizeWorkspaceRelativePath(input.toPath, false).join('/')
+    const preAuth = await this.authorizeMutationTarget(input)
+    const lockKeys = [
+      `${preAuth.canonicalRoot}/${fromNorm}`,
+      `${preAuth.canonicalRoot}/${toNorm}`,
+    ].sort()
+
+    return this.withMultiFileLock(lockKeys, async () => {
+      const auth = await this.authorizeMutationTarget(input)
+      const res = await renameContainedFile(
+        auth.canonicalRoot,
+        auth.rootDev,
+        auth.rootIno,
+        fromNorm,
+        toNorm,
+        input.expectedRevision,
+        {
+          onBeforeCommit: async () => {
+            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+            await this.assertMutationStillAuthorized(input, auth)
+          },
+        },
+      )
+      return {
+        workspaceId: auth.workspaceId,
+        fromPath: res.normalizedFromPath,
+        toPath: res.normalizedToPath,
+        revision: res.revision,
+      }
+    })
+  }
+
+  async deleteFile(
+    rawInput: unknown,
+    hooks?: SaveHookOptions,
+  ): Promise<WorkspaceDeleteFileResponse> {
+    const input = WorkspaceDeleteFileInputSchema.parse(rawInput)
+    const normalizedPath = normalizeWorkspaceRelativePath(input.relativePath, false).join('/')
+    const preAuth = await this.authorizeMutationTarget(input)
+    const lockKey = `${preAuth.canonicalRoot}/${normalizedPath}`
+
+    return this.withFileLock(lockKey, async () => {
+      const auth = await this.authorizeMutationTarget(input)
+      const res = await deleteContainedFile(
+        auth.canonicalRoot,
+        auth.rootDev,
+        auth.rootIno,
+        normalizedPath,
+        input.expectedRevision,
+        {
+          onBeforeCommit: async () => {
+            if (hooks?.onBeforeCommit) await hooks.onBeforeCommit()
+            await this.assertMutationStillAuthorized(input, auth)
+          },
+        },
+      )
+      return {
+        workspaceId: auth.workspaceId,
+        relativePath: res.normalizedRelativePath,
+        quarantined: res.quarantined,
+      }
+    })
+  }
+
+  private async authorizeMutationTarget(input: {
+    botId?: string
+    teamId?: string
+    workspaceId: string
+    authGeneration: string
+  }): Promise<AuthorizedWorkspace> {
+    const auth = await this.authorizeWorkspace(input)
+    if (input.workspaceId !== auth.workspaceId) {
+      throw new DaemonError(
+        'WORKSPACE_CONTEXT_MISMATCH',
+        'Workspace authorization changed; refresh workspace context',
+        { statusCode: 409 },
+      )
+    }
+    if (input.authGeneration !== auth.authGeneration) {
+      throw new DaemonError(
+        'STALE_AUTHORIZATION_TOKEN',
+        'Workspace authorization generation is stale; refresh workspace context',
+        { statusCode: 409 },
+      )
+    }
+    if (!auth.canWrite) {
+      throw new DaemonError(
+        'WORKSPACE_READ_ONLY',
+        `Mutation blocked because workspace permission mode is '${auth.permissionMode}'`,
+        { statusCode: 403 },
+      )
+    }
+    return auth
+  }
+
+  private async assertMutationStillAuthorized(
+    input: { botId?: string; teamId?: string },
+    original: AuthorizedWorkspace,
+  ): Promise<void> {
+    const rechecked = await this.authorizeWorkspace(input)
+    if (!rechecked.canWrite) {
+      throw new DaemonError(
+        'WORKSPACE_READ_ONLY',
+        `Workspace became read-only ('${rechecked.permissionMode}') during mutation`,
+        { statusCode: 403 },
+      )
+    }
+    if (
+      rechecked.workspaceId !== original.workspaceId ||
+      rechecked.authGeneration !== original.authGeneration
+    ) {
+      throw new DaemonError(
+        'WORKSPACE_CONTEXT_MISMATCH',
+        'Workspace authorization changed during mutation; aborting commit',
+        { statusCode: 409 },
+      )
+    }
+  }
+
+  private async withMultiFileLock<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
+    const unique = [...new Set(keys)].sort()
+    const run = (idx: number): Promise<T> => {
+      if (idx >= unique.length) return fn()
+      return this.withFileLock(unique[idx], () => run(idx + 1))
+    }
+    return run(0)
   }
 
   private async withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {

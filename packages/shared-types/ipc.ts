@@ -2178,10 +2178,86 @@ export const WorkspaceContextIpcResponseSchema = z.object({
   ownerId: z.string().min(1),
   ownerName: z.string(),
   canWrite: z.boolean(),
+  writeAuthorized: z.boolean().optional(),
   permissionMode: z.string(),
   authGeneration: z.string().nullable(),
   reason: z.string().nullable(),
 })
+
+export const WorkspaceWriteGrantSchema = z.object({
+  botId: BotIdSchema,
+  workspaceId: z.string().min(1).max(128),
+  authGeneration: z.string().min(1).max(64),
+})
+
+export const WorkspaceCreateEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    kind: z.enum(['file', 'directory']),
+    content: z.string().max(1024 * 1024).optional(),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceCreateEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  kind: z.enum(['file', 'directory']),
+  revision: z.string().nullable(),
+  sizeBytes: z.number().int().nonnegative().nullable(),
+})
+
+export const WorkspaceRenameEntryIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    fromPath: z.string().min(1).max(512),
+    toPath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceRenameEntryIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  fromPath: z.string(),
+  toPath: z.string(),
+  revision: z.string(),
+})
+
+export const WorkspaceDeleteFileIpcInputSchema = z
+  .object({
+    botId: BotIdSchema.optional(),
+    teamId: TeamIpcIdSchema.optional(),
+    workspaceId: z.string().min(1).max(128),
+    authGeneration: z.string().min(1).max(64),
+    relativePath: z.string().min(1).max(512),
+    expectedRevision: z.string().min(1).max(256),
+  })
+  .refine((v) => Boolean(v.botId) !== Boolean(v.teamId), {
+    message: 'Exactly one of botId or teamId is required',
+  })
+
+export const WorkspaceDeleteFileIpcResponseSchema = z.object({
+  workspaceId: z.string(),
+  relativePath: z.string(),
+  quarantined: z.boolean(),
+})
+
+export type WorkspaceCreateEntryIpcInput = z.infer<typeof WorkspaceCreateEntryIpcInputSchema>
+export type WorkspaceCreateEntryIpcResponse = z.infer<typeof WorkspaceCreateEntryIpcResponseSchema>
+export type WorkspaceRenameEntryIpcInput = z.infer<typeof WorkspaceRenameEntryIpcInputSchema>
+export type WorkspaceRenameEntryIpcResponse = z.infer<typeof WorkspaceRenameEntryIpcResponseSchema>
+export type WorkspaceDeleteFileIpcInput = z.infer<typeof WorkspaceDeleteFileIpcInputSchema>
+export type WorkspaceDeleteFileIpcResponse = z.infer<typeof WorkspaceDeleteFileIpcResponseSchema>
 
 export type WorkspaceContextIpcResponse = z.infer<typeof WorkspaceContextIpcResponseSchema>
 
@@ -2296,6 +2372,11 @@ export interface GhostBotBridge {
   ): Promise<WorkspaceListDirectoryIpcResponse>
   readWorkspaceFile(params: WorkspaceReadFileIpcInput): Promise<WorkspaceReadFileIpcResponse>
   saveWorkspaceFile(params: WorkspaceSaveFileIpcInput): Promise<WorkspaceSaveFileIpcResponse>
+  authorizeWorkspaceWrite(botId: string): Promise<boolean>
+  revokeWorkspaceWrite(botId: string): Promise<boolean>
+  createWorkspaceEntry(params: WorkspaceCreateEntryIpcInput): Promise<WorkspaceCreateEntryIpcResponse>
+  renameWorkspaceEntry(params: WorkspaceRenameEntryIpcInput): Promise<WorkspaceRenameEntryIpcResponse>
+  deleteWorkspaceFile(params: WorkspaceDeleteFileIpcInput): Promise<WorkspaceDeleteFileIpcResponse>
   workspaceBrowserCommand(input: WorkspaceBrowserCommand): Promise<WorkspaceBrowserState>
   setWorkspaceBrowserBounds(bounds: WorkspaceBrowserBounds): Promise<void>
   captureWorkspaceBrowser(tabId: string): Promise<string>
