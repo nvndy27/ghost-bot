@@ -51,18 +51,32 @@ async function runWithConcurrencyLimit<T, R>(
   items: readonly T[],
   limit: number,
   worker: (item: T, index: number) => Promise<R>,
+  onFailure?: () => void,
 ): Promise<R[]> {
   const results = new Array<R>(items.length)
   let nextIndex = 0
+  let firstError: unknown = null
+  let hasError = false
   const workerCount = Math.max(1, Math.min(limit, items.length))
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const idx = nextIndex++
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length && !hasError) {
+      const idx = nextIndex++
+      try {
         results[idx] = await worker(items[idx], idx)
+      } catch (err) {
+        if (!hasError) {
+          hasError = true
+          firstError = err
+          onFailure?.()
+        }
+        return
       }
-    }),
-  )
+    }
+  })
+  await Promise.allSettled(workers)
+  if (hasError) {
+    throw firstError
+  }
   return results
 }
 
@@ -120,20 +134,6 @@ export class TeamDiscussion {
     if (!runtime || team.archivedAt) {
       throw new DaemonError('TEAM_DISCUSSION_GATED', 'Group discussion is available only in offline mock mode for active teams', { statusCode: 403 })
     }
-    const existing = this.db.sqlite.prepare(`
-      SELECT id, seq, prompt, replies_json, created_at
-      FROM team_discussion_turns WHERE team_id = ? AND operation_id = ?
-    `).get(team.id, input.operationId) as unknown as DiscussionRow | undefined
-    if (existing) {
-      if (existing.prompt !== input.text) {
-        throw new DaemonError('IDEMPOTENCY_CONFLICT', 'The discussion operation already has different text', { statusCode: 409 })
-      }
-      return toTurn(existing)
-    }
-    if (this.activeTurns.has(team.id) || this.activeTurns.size >= MAX_ACTIVE_DISCUSSIONS) {
-      throw new DaemonError('TEAM_DISCUSSION_BUSY', 'Wait for the current discussion turn to finish', { statusCode: 409 })
-    }
-
     const mentions = new Set([...input.text.matchAll(/(?:^|\s)@([a-zA-Z0-9_-]+)(?![a-zA-Z0-9_-])/g)].map((match) => match[1]))
     if ([...mentions].some((id) => id !== 'all' && !team.memberBotIds.includes(id))) {
       throw new DaemonError('TEAM_MEMBER_UNAVAILABLE', 'Mention only members of this group', { statusCode: 400 })
@@ -141,8 +141,30 @@ export class TeamDiscussion {
     const targets = mentions.size === 0 || mentions.has('all')
       ? team.memberBotIds : team.memberBotIds.filter((id) => mentions.has(id))
     const rounds = input.rounds === 2 && targets.length > 1 ? 2 : 1
+
+    const existing = this.db.sqlite.prepare(`
+      SELECT id, seq, prompt, replies_json, created_at
+      FROM team_discussion_turns WHERE team_id = ? AND operation_id = ?
+    `).get(team.id, input.operationId) as unknown as DiscussionRow | undefined
+    if (existing) {
+      const parsedExisting = toTurn(existing)
+      const existingRounds = parsedExisting.replies.some((r) => r.round === 2) ? 2 : 1
+      if (existing.prompt !== input.text || existingRounds !== rounds) {
+        throw new DaemonError(
+          'IDEMPOTENCY_CONFLICT',
+          'The discussion operation already has different text or round count',
+          { statusCode: 409 },
+        )
+      }
+      return parsedExisting
+    }
+    if (this.activeTurns.has(team.id) || this.activeTurns.size >= MAX_ACTIVE_DISCUSSIONS) {
+      throw new DaemonError('TEAM_DISCUSSION_BUSY', 'Wait for the current discussion turn to finish', { statusCode: 409 })
+    }
+
     const concurrency = Math.max(1, Math.min(MAX_DISCUSSION_CONCURRENCY, team.bounds.maxConcurrentTasks || MAX_DISCUSSION_CONCURRENCY))
     const durationLimitMs = Math.max(1_000, Math.min(MAX_DURATION_MS, team.bounds.maxDurationMs || DEFAULT_DURATION_MS))
+    // Bounded character output cap across all member replies in this turn (not exact provider token accounting).
     const totalCharBudget = Math.max(MAX_REPLY_CHARS, Math.min(MAX_TURN_TOTAL_CHARS, (team.bounds.maxTokens || 6000) * 4))
 
     const generation = this.runtime.getGeneration()
@@ -175,12 +197,8 @@ export class TeamDiscussion {
         return { key, choice, accountId: choice.effective.accountId }
       }))
 
-      let totalChars = 0
-      const runMemberRound = async (
-        target: (typeof resolved)[number],
-        promptText: string,
-        round: 1 | 2,
-      ): Promise<TeamDiscussionTurn['replies'][number]> => {
+      let reservedChars = 0
+      const assertNotAborted = () => {
         if (controller.signal.aborted) {
           throw new DaemonError(
             timedOut ? 'TEAM_DISCUSSION_TIMEOUT' : 'TEAM_DISCUSSION_CANCELLED',
@@ -188,6 +206,22 @@ export class TeamDiscussion {
             { statusCode: timedOut ? 504 : 499 },
           )
         }
+      }
+      const abortActiveTurn = () => {
+        if (!controller.signal.aborted) {
+          controller.abort(new Error('sibling_failed'))
+        }
+        for (const runId of state.activeRunIds) {
+          void runtime.cancel(runId).catch(() => {})
+        }
+      }
+
+      const runMemberRound = async (
+        target: (typeof resolved)[number],
+        promptText: string,
+        round: 1 | 2,
+      ): Promise<TeamDiscussionTurn['replies'][number]> => {
+        assertNotAborted()
         if (generation !== this.runtime.getGeneration() || !this.runtime.getOfflineDiscussionRuntime()) {
           throw new DaemonError('TEAM_ROUTING_CHANGED', 'Offline runtime changed during discussion', { statusCode: 409 })
         }
@@ -201,24 +235,21 @@ export class TeamDiscussion {
           workspace: '',
           instructions: '',
         })
+        assertNotAborted()
         let text = ''
         let completed = false
         const runId = randomUUID()
         state.activeRunIds.add(runId)
         try {
           for await (const event of runtime.run({ runId, session, text: promptText })) {
-            if (controller.signal.aborted) {
-              throw new DaemonError(
-                timedOut ? 'TEAM_DISCUSSION_TIMEOUT' : 'TEAM_DISCUSSION_CANCELLED',
-                timedOut ? 'Group discussion exceeded time budget' : 'Group discussion stopped',
-                { statusCode: timedOut ? 504 : 499 },
-              )
-            }
+            assertNotAborted()
             if (event.type === 'message.delta') {
-              const remainingTurnBudget = Math.max(0, totalCharBudget - totalChars - text.length)
+              const remainingTurnBudget = Math.max(0, totalCharBudget - reservedChars)
               const maxAllowed = Math.min(MAX_REPLY_CHARS - text.length, remainingTurnBudget)
               if (maxAllowed > 0) {
-                text += event.text.slice(0, maxAllowed)
+                const chunk = event.text.slice(0, maxAllowed)
+                text += chunk
+                reservedChars += chunk.length
               }
             } else if (event.type === 'run.completed') {
               completed = true
@@ -238,7 +269,6 @@ export class TeamDiscussion {
         if (!completed || !text.trim()) {
           throw new DaemonError('TEAM_DISCUSSION_INCOMPLETE', 'Offline discussion did not complete', { statusCode: 502 })
         }
-        totalChars += text.length
         return {
           botId: target.key.botId,
           routing: target.choice.effective,
@@ -252,11 +282,12 @@ export class TeamDiscussion {
         resolved,
         concurrency,
         (target) => runMemberRound(target, input.text, 1),
+        abortActiveTurn,
       )
 
       const replies: TeamDiscussionTurn['replies'] = [...round1Replies]
 
-      if (rounds === 2 && totalChars < totalCharBudget) {
+      if (rounds === 2 && reservedChars < totalCharBudget) {
         const round2Replies = await runWithConcurrencyLimit(
           resolved,
           concurrency,
@@ -268,11 +299,13 @@ export class TeamDiscussion {
             const rebuttalPrompt = `Rebuttal round for: ${input.text.slice(0, 600)} [Peers: ${peerNotes.slice(0, 1200)}]`
             return runMemberRound(target, rebuttalPrompt, 2)
           },
+          abortActiveTurn,
         )
         replies.push(...round2Replies)
       }
 
       return this.db.transaction(() => {
+        assertNotAborted()
         for (const { key, choice } of resolved) this.routing.revalidate(key, choice)
         if (generation !== this.runtime.getGeneration() || !this.runtime.getOfflineDiscussionRuntime()) {
           throw new DaemonError('TEAM_ROUTING_CHANGED', 'Offline runtime changed before saving discussion', { statusCode: 409 })
