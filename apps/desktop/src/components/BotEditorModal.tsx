@@ -282,7 +282,7 @@ export function BotEditorModal({
         ref={modalRef}
         tabIndex={-1}
         className="gb-modal"
-        style={{ maxWidth: '640px' }}
+        style={{ maxWidth: '510px' }}
       >
         <div className="gb-modal-head">
           <strong>{mode === 'create' ? 'Create bot' : `Edit ${initialBot?.name ?? 'bot'}`}</strong>

@@ -1,3 +1,5 @@
+import brandLogo from '../../build/icon.svg'
+import type { ReactNode } from 'react'
 import { TeamAvatar } from './TeamAvatar.tsx'
 import type { PrivateTaskChatRecord, SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { formatProviderLabel } from '@ghost-bot/shared-types/runtime'
@@ -19,6 +21,8 @@ export { orderSidebarItems }
 
 export interface LeftSidebarProps {
   width: number
+  compact?: boolean
+  providerUsage?: ReactNode
   bots: WorkspaceBot[]
   activeBotId: string | null
   teams: TeamRecordDto[]
@@ -47,6 +51,8 @@ export interface LeftSidebarProps {
 
 export function LeftSidebar({
   width,
+  compact = false,
+  providerUsage,
   bots,
   activeBotId,
   teams,
@@ -100,22 +106,25 @@ export function LeftSidebar({
 
   return (
     <aside
-      className="gb-left-sidebar"
-      style={{ width: `${width}px` }}
+      className={`gb-left-sidebar${compact ? ' gb-left-sidebar--compact' : ''}`}
+      style={{ width: compact ? '56px' : `${Math.min(width, 380)}px` }}
       aria-label="My Bots sidebar"
     >
       <div className="gb-sidebar-head">
-        <h1>My bots</h1>
+        <img className="gb-sidebar-logo" src={brandLogo} alt="Ghost Bot" /><h1>My bots</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           <IconButton label="Create bot" onClick={onCreateBot}>
             <Plus size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
-          <IconButton label="Collapse sidebar" onClick={onCollapse} pressed={false}>
+          <IconButton label={compact ? 'Expand sidebar' : 'Collapse sidebar'} onClick={onCollapse} pressed={compact}>
             <PanelLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
           </IconButton>
         </div>
       </div>
 
+      {compact && <IconButton label="Search bots and groups" onClick={onCollapse}>
+        <Search size={ICON_SIZE.md} strokeWidth={ICON_STROKE} aria-hidden="true" />
+      </IconButton>}
       <div className="gb-search-wrap">
         <Search
           size={ICON_SIZE.sm}
@@ -133,6 +142,8 @@ export function LeftSidebar({
         />
       </div>
 
+      <div className="gb-sidebar-scroll">
+      <div className="gb-section-label">Personal</div>
       <div className="gb-bot-list" role="listbox" aria-label="Bots">
         {filteredBots.length === 0 ? (
           <p className="gb-muted" style={{ fontSize: '12.5px', padding: '8px 6px', margin: 0 }}>
@@ -158,11 +169,13 @@ export function LeftSidebar({
                 <button
                   type="button"
                   role="option"
+                  title={`${bot.name} — ${providerLabel}`}
+                  aria-label={compact ? `${bot.name} — ${providerLabel}` : undefined}
                   aria-selected={active}
                   className={`gb-bot-item${active ? ' active' : ''}`}
                   onClick={() => onSelectBot(bot.id)}
                 >
-                  <BotAvatar config={bot.avatar} status={bot.avatarStatus} size={32} />
+                  <BotAvatar config={bot.avatar} status={bot.avatarStatus} size={compact ? 32 : 34} />
                   <span className="gb-bot-meta">
                     <span className="gb-bot-name">{bot.name}</span>
                     <span className="gb-bot-status">{providerLabel}</span>
@@ -225,12 +238,12 @@ export function LeftSidebar({
 
       <hr className="gb-divider" />
 
-      <div>
+      <div className="gb-sidebar-groups">
         <div
           className="gb-section-label"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span>Teams</span>
+          <span>Groups</span>
           <button
             type="button"
             className="gb-btn-outline gb-icon-inline"
@@ -281,6 +294,8 @@ export function LeftSidebar({
                     font: 'inherit',
                     color: 'inherit',
                   }}
+                  title={`${team.name} · ${team.memberBotIds.length} members`}
+                  aria-label={compact ? team.name : undefined}
                   onClick={() => onSelectTeam(team.id)}
                 >
                   <span
@@ -365,6 +380,8 @@ export function LeftSidebar({
                     font: 'inherit',
                     color: 'inherit',
                   }}
+                  title={`${bot?.name ?? task.assignedBotId}: ${task.objective} · ${task.status}`}
+                  aria-label={compact ? `${task.objective} · ${task.status}` : undefined}
                   onClick={() => onSelectPrivateTask(task)}
                 >
                   <span className="gb-icon-inline" style={{ minWidth: 0, overflow: 'hidden', gap: '6px' }}>
@@ -381,7 +398,9 @@ export function LeftSidebar({
         </>
       )}
 
-      <div style={{ flex: 1 }} />
+      </div>
+      <div className="gb-sidebar-footer">
+      {providerUsage}
 
       <button
         type="button"
@@ -397,6 +416,7 @@ export function LeftSidebar({
         />
         <span>Settings</span>
       </button>
+      </div>
     </aside>
   )
 }

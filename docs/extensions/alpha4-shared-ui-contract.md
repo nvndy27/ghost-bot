@@ -77,3 +77,12 @@ All functional actions use native buttons or appropriate keyboard semantics with
 ## Validation and remaining work
 
 Archive checksums and production component APIs were inspected. This early checkpoint publishes token values and reusable contracts before broad UI integration. Full visual acceptance remains pending actual Electron captures in both themes, compact/narrow layouts, Settings/Accounts/Usage and approval/error states. No backend, IPC, migration, package or permission change is part of this checkpoint.
+
+
+## Alpha.4A production handoff
+
+The shared contract checkpoint is `85f4b7f2c486ece800a82e8dd7f9c450d7389647`. Subsequent Alpha.4A work in Draft PR #50 adds optional LeftSidebar compact/providerUsage props and preserves IconButton and Workspace APIs. Agent 2 retains Workspace layout ownership. Existing persisted widths remain authoritative, including legacy 240 px sidebars. Native conversation selection remains available alongside history on wide headers and history preserves access on narrow headers.
+
+ProviderUsage consumes the existing RuntimeSnapshot only. It cannot enumerate account identities, so other-provider account windows are explicitly unavailable. No additional provider/account authority or backend is introduced. Errors have a readable failure message with opt-in technical details. Existing Workspace Overview usage remains for Agent 2 to remove during Alpha.4B convergence.
+
+Real synthetic-data screenshots are retained locally in ghost-bot-coordination/alpha4a-screenshots. They cover Personal Chat at 1440×900, 1280×720, 1920×1080 and 900×700 in both themes, compact rail and 740 px responsive behavior, Settings/Accounts/Usage and Group Chat. These captures retain the prior Workspace surface until Alpha.4B integration. Final integrated visual acceptance remains with the maintainer. Packages and live inference are outside this implementation.

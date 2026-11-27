@@ -1,5 +1,14 @@
 # Progress log
 
+## Alpha.4A V03.2 shared UI and Chat
+
+**Implemented** — Provisional baseline Alpha.3C `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`, Draft PR #49, independently accepted with passing required CI. The actual approved archive SHA-256 is `85f495035c61f2387b215de983c09249baa6f69b3c3e9920c82d215410b6bd67`; all six internal checksums passed. Shared contract checkpoint `85f4b7f2c486ece800a82e8dd7f9c450d7389647` publishes semantic tokens and compatible component/Workspace boundaries in PR #50.
+
+The shell adds a persistent compact rail, independent sidebar scrolling and footer Usage. Chat uses approved tokens, 750 px content, 48–160 px textarea, 34 px composer actions and compact header behavior. Settings/Accounts and the Bot editor preserve their production callbacks and configuration while adopting the approved geometry. Usage displays only daemon snapshot windows, statuses, observation time and errors. The snapshot cannot enumerate per-provider account identities, so other-account quota is explicitly unavailable. Agent 2 owns Workspace UI and removal of the old Overview usage duplicate.
+
+Focused Group/organization/routing/private-task modules passed 13/13. The existing Group workflow passed avatar modes/crop/restart, member routing, discussion, approval, cancellation, summaries and narrow layout. Lint, desktop typecheck and source build passed. The affected Workspace shell suite passed 3/3, including actual Electron theme/resize/collapse/restart and native-grant checks. The Alpha.4A offline Electron fixture covers compact persistence, responsive search, personal drafts and auto-grow, Accounts, real mock discussion, all 12 avatars, usage unavailable/error handling and light/dark capture. Captures include the usage refresh error with an offline IPC failure fixture. The final Alpha.4A Electron run passed after the assistant-identity, compact-empty-state, footer alignment and popover-focus corrections. Final visual evidence is retained locally under ghost-bot-coordination/alpha4a-screenshots. Publication is through Draft PR #50. No package or inference ran. Production IPC, migrations and runtime gates are preserved.
+
+
 ## Alpha.3C unified checkpoint
 
 **Implemented** — Provisional convergence of Alpha.3A PR #47 at `f6716739e5ba9897c9a77e4fd3d0a2096a436202` and Alpha.3B PR #48 at `140b591dfe79dec3760365ea36c965e608f2cc24` on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. Both histories, the CSP attachment and acknowledged-save timing corrections, and all nine provider plans are preserved. Reconciliation changes documentation only. Existing tests are reused. Required CI and Agent 2 focused acceptance gate merging.
