@@ -31,9 +31,9 @@ export const WORKSPACE_TABS: readonly WorkspaceTabDefinition[] = [
     id: 'changes',
     label: 'Changes',
     shortLabel: 'Changes',
-    implemented: false,
-    milestone: 'Alpha.2D',
-    summary: 'Read-only Git status and diff inspection are not yet enabled in Alpha.2A.',
+    implemented: true,
+    milestone: 'Alpha.2D.1',
+    summary: 'Read-only Git status, comparison and commit history.',
   },
   {
     id: 'browser',

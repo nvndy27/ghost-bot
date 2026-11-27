@@ -136,7 +136,7 @@ export class WorkspaceFilesService {
     }
   }
 
-  private async validateDiscoveryWorkspace(input: {
+  async validateDiscoveryWorkspace(input: {
     botId: string
     workspaceId: string
     authGeneration: string
