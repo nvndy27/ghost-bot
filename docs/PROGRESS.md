@@ -1,5 +1,17 @@
 # Progress log
 
+## RC2.0 real-world diagnosis — 2026-11-28
+
+**Verified** — Isolated branch fix/rc2-real-world-usability at the exact frozen RC1 SHA 3af223e2f680df8facee143d6210aefd190ce0ef (tree e69e0e34ace901bf511612d0f83a115610dede5d). No production source, dependency manifest, lockfile or migration changed. The dedicated diagnosis and RC2.1–2.4 plan is in [rc2-real-world-usability-diagnosis.md](extensions/rc2-real-world-usability-diagnosis.md).
+
+Installed dependencies with the frozen lockfile, verified Electron 36.9.5, and completed the source build in this worktree. This was not a package build. Actual source Electron launched in mock mode and in a fresh no-credential Codex profile with Chromium sandbox enabled. Mock-mode UI showed the seeded Chief bot with a mock model. In Codex mode, the fresh profile correctly reported auth-required/disconnected, but the header still said “Codex Ready”; the seeded bot still exposed gpt-6.2-mock and Send was disabled. No account values were read, no login occurred and no inference ran.
+
+A synthetic Workspace reproduction confirmed fresh seed paths contain literal tilde values while WorkspaceFilesService requires an absolute path. The Files tab reported “No authorized workspace root configured.” Setting an absolute synthetic path through existing validated updateBot IPC changed the UI to the explicit native read-consent state. Consent was not granted, so tree/open/save/disk verification was not performed. Actual screenshots remain local at /tmp/ghost-rc2-workspace-ungranted.png and /tmp/ghost-rc2-workspace-synthetic-consent.png. No automated suite was run; accepted evidence for unchanged behavior was reused.
+
+## RC2 handoff
+
+RC2.1–2.4 remain **Not Started** pending CA1 implementation authorization. CA2/A2 owns independent acceptance after a candidate is available. A bounded live Codex request needs separate explicit maintainer authorization.
+
 ## Alpha.4A V03.2 shared UI and Chat
 
 **Implemented** — Provisional baseline Alpha.3C `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`, Draft PR #49, independently accepted with passing required CI. The actual approved archive SHA-256 is `85f495035c61f2387b215de983c09249baa6f69b3c3e9920c82d215410b6bd67`; all six internal checksums passed. Shared contract checkpoint `85f4b7f2c486ece800a82e8dd7f9c450d7389647` publishes semantic tokens and compatible component/Workspace boundaries in PR #50.

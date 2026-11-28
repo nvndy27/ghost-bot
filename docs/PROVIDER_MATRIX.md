@@ -1,5 +1,10 @@
 # Provider integration matrix
 
+## RC2.0 UI/runtime diagnosis — 2026-11-28
+
+The adapter-level discovery, effort and execution boundaries were inspected without new inference or paid provider requests. The actual Electron Codex metadata check used a fresh temporary profile with no credentials and returned auth-required. The key issue is selection/readiness wiring: runtime statuses and model catalogs are not consistently consumed by BotEditor, ChatComposer or ChatHeader. See the [RC2.0 diagnosis and architecture plan](extensions/rc2-real-world-usability-diagnosis.md#provider-runtime-capability-and-readiness-matrix) for the per-adapter breakdown. This note does not change or replace historical provider acceptance evidence below.
+
+
 Release evidence reconciled 2026-11-28 against accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. PR #46 final CI and independent acceptance passed. Alpha.4 UI and Alpha.3 release tooling are being converged in Draft PR #53; no new live provider request or credential use occurred. Provider acceptance plans remain proposals until separately authorized and evidenced. v0.1 is not released. Historical adapter observations below retain their original versions and scope. A catalog, authenticated handshake and actual model execution are separate checks.
 
 [Alpha.3B capability matrix and nine-provider acceptance plan](extensions/alpha3b-release-readiness.md) define proposed budgets, authentication, failure conditions and remaining gates. No provider was contacted or reverified by this documentation assignment. Official reference pages were checked on 2026-11-28, independently of the earlier runtime evidence.

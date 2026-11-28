@@ -1,5 +1,11 @@
 # Next steps
 
+## RC2 real-world usability — current handoff
+
+**Verified** — RC2.0 diagnosis is complete at the exact frozen RC1 parent SHA 3af223e2f680df8facee143d6210aefd190ce0ef; see [diagnosis and implementation plan](extensions/rc2-real-world-usability-diagnosis.md). RC1 remains on hold and unreleased. Source Electron mock and no-credential Codex metadata checks ran with no inference. Native read/write consent was not granted.
+
+**Recommended next action:** maintainer authorizes CA1 implementation of RC2.1 Real Runtime & Provider Selection on fix/rc2-real-world-usability, including actual daemon catalogs in Bot Editor/composer, truthful per-bot readiness, explicit non-destructive migration from mock configuration, and regression coverage. Correct new seeded workspace paths to absolute values and show existing tilde-seeded users a recovery chooser. Continue RC2.2 and RC2.3 as independent work permits. CA2/A2 performs focused acceptance on the integrated candidate. A bounded Codex request requires separate explicit authorization.
+
 ## Unified v0.1 release candidate — integration checkpoint
 
 **In Progress** — Draft PR #53 preserves the Alpha.3C, Alpha.4A, Alpha.4B, Alpha.4C and release-tooling histories. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` has passing hosted CI/CodeQL and maintainer visual acceptance 21/21. Independent review found a command-cancellation identity regression when terminal/build `taskId` is null. The follow-up guards command identities at action selection and request construction; its focused tests, Output Electron regression, lint, typecheck and source build pass locally. Verify hosted checks and exact-head independent acceptance on the resulting PR #53 head before RC freeze. Actual packaged acceptance remains open; no release or package build is authorized and v0.1 remains unreleased.

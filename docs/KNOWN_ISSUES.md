@@ -1,3 +1,10 @@
+## RC2.0 real-world diagnosis — 2026-11-28
+
+- **Confirmed:** New default bots are persisted with runtime mock-offline and mock model IDs. BotEditor and ChatComposer use mock catalogs for Codex and most non-Codex providers; ChatHeader’s “Codex Ready” represents global mode, not account or selected-bot readiness. Actual source Electron with a fresh temporary Codex profile showed auth-required/disconnected while still displaying “Codex Ready” and a gpt-6.2-mock model. No credentials or inference were used.
+- **Confirmed:** Fresh seeded workspace paths contain literal ~/ values. WorkspaceFilesService rejects non-absolute roots, so a new seeded bot cannot reach the native read grant until its path is reconfigured. Workspace has no direct Open Folder control; the path chooser is in Bot Editor. Actual tree/open/save verification awaits explicit native consent on a synthetic project.
+- **Capability boundary:** Runtime adapters differ in model discovery, effort metadata, authentication and tools. See the [provider matrix](extensions/rc2-real-world-usability-diagnosis.md#provider-runtime-capability-and-readiness-matrix). Do not present a provider as connected, ready or catalogued from a different runtime’s state.
+- **Still unverified:** Maintainer’s ChatGPT Plus account state and actual packaged RC1 behavior were not inspected in this task. Real Codex inference, native Workspace read/write consent and disk-save acceptance remain unverified. RC1 is on hold; v0.1.0 remains unreleased.
+
 ## Licensing and public source distribution
 
 ## Alpha.4 integrated release candidate
