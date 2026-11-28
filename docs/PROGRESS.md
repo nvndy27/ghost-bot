@@ -16,9 +16,15 @@ Focused runtime/provider persistence regressions (`rc2-provider-readiness`, `alp
 
 **In Progress** — The implementation and evidence require a focused review and exact-candidate hosted CI. Live discovery using the maintainer's authenticated Codex profile, real Codex inference, API-billed provider acceptance, package behavior and RC2.2 Workspace acceptance are not established.
 
+## RC2.1B Runtime Compatibility & CI Stabilization — 2026-11-28
+
+**Tested** — Addressed the ten root failures from hosted run `46143801415`. The production correction restores the two pre-RC2 mock model IDs only in the explicit mock adapter catalog; team routing now consumes that same catalog. Test-only corrections use the current seeded `mock-model`, canonical `mock-offline` API runtime, and a supported changed team route. The Workspace Electron test waits for selected-bot readiness and disclosure-open state while retaining its visible Connection assertion. Memory, Knowledge, authorization, task, and MCP outcome assertions were preserved. See [RC2.1B failure classification and evidence](extensions/rc2.1b-ci-stabilization.md).
+
+The serialized affected regressions and RC2.1 readiness suites passed **31/31**, including actual Workspace Electron. Lint, recursive typecheck, source build, and `git diff --check` passed. Hosted checks for the corrected PR head and independent acceptance are pending. No migration/dependency changes, live inference, credentials, or package build.
+
 ## RC2 handoff
 
-CA2/A2 owns independent acceptance of the published RC2.1 candidate. A bounded live Codex request needs separate explicit maintainer authorization. After RC2.1 review and hosted checks, RC2.2 covers default/legacy tilde-path recovery, Workspace Open Folder/switching, native read/write consent, disk-save verification and Ctrl+S. RC2.3 and RC2.4 remain **Not Started**.
+CA2/A2 owns independent acceptance of the published RC2.1B candidate; required hosted checks must pass on its exact SHA. A bounded live Codex request needs separate explicit maintainer authorization. After RC2.1B review and hosted checks, RC2.2 covers default/legacy tilde-path recovery, Workspace Open Folder/switching, native read/write consent, disk-save verification and Ctrl+S. RC2.3 and RC2.4 remain **Not Started**.
 
 ## Alpha.4A V03.2 shared UI and Chat
 

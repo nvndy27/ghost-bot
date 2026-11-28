@@ -2,9 +2,9 @@
 
 ## RC2 real-world usability — current handoff
 
-**Tested** — RC2.1 is implemented on `fix/rc2-real-world-usability` from frozen parent `3af223e2f680df8facee143d6210aefd190ce0ef`; see [implementation and focused evidence](extensions/rc2.1-real-runtime-provider-selection.md). The daemon capability projection, explicit catalogs, shared Bot Editor/Composer selectors, readiness, mock recovery, persistence and offline Electron restart acceptance pass. Exact candidate hosted checks and independent review remain pending. RC1 remains preserved, on hold and unreleased.
+**Tested** — RC2.1 and the RC2.1B regression correction are on `fix/rc2-real-world-usability` from frozen parent `3af223e2f680df8facee143d6210aefd190ce0ef`; see [RC2.1 implementation](extensions/rc2.1-real-runtime-provider-selection.md) and [RC2.1B failure classification](extensions/rc2.1b-ci-stabilization.md). The affected regressions/readiness tests pass 31/31 in serialized mode, with lint, typecheck, source build and actual Workspace disclosure E2E passing. PR #54 needs its own exact-head hosted checks and focused independent acceptance. RC1 remains preserved, on hold and unreleased.
 
-**Recommended next action:** review the exact published RC2.1 Draft PR and run its required hosted checks; CA2/A2 should provide focused independent acceptance of this candidate. Do not infer live readiness from the synthetic protocol fixture. After those gates, begin RC2.2: correct fresh and legacy tilde workspace paths, add a Workspace Open Folder/switching flow, and verify native read/write consent, file save to disk and Ctrl+S on a synthetic project. A bounded live Codex inference still requires separate explicit maintainer authorization.
+**Recommended next action:** allow hosted checks to finish on the corrected PR #54 head and obtain CA2/A2 focused independent acceptance. Do not infer live readiness from the synthetic protocol fixture. After those gates and CA1 authorization, begin RC2.2: correct fresh and legacy tilde workspace paths, add a Workspace Open Folder/switching flow, and verify native read/write consent, file save to disk and Ctrl+S on a synthetic project. A bounded live Codex inference still requires separate explicit maintainer authorization.
 
 ## Unified v0.1 release candidate — integration checkpoint
 
