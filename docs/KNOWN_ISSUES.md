@@ -112,3 +112,9 @@ Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM 
 ## Alpha.4C hosted CI follow-up
 
 Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The test-only corrections were independently accepted at `63992bb9f8544fae8205e36f8ceafce333991bb7`; the PDF entry had been hidden by closing an already-open desktop Explorer. Focused local tests pass and no production regression was demonstrated. Hosted run `46115138761` and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`. A later focused review identified four release-tooling blockers now being corrected; that new head must obtain its own hosted CI and delta acceptance.
+
+## RC2.R1 Codex stream / lifecycle follow-up — 2026-11-29
+
+**Tested correction in progress:** Codex pre-turn notifications and active-run events are now bounded at 256 each. Overflow yields an explicit incomplete/uncertain `run.failed` result and a bounded interruption request instead of silently dropping terminal notifications and leaving a run pending. Registry shutdown retains ownership and reports lifecycle `failed` when Codex process termination is not confirmed.
+
+**Still open:** Electron `stopDaemon()` currently resolves after issuing SIGKILL without confirming the daemon's `close` event, then removes the runtime directory. A concrete orphan/repro harness is still needed before changing that path. Codex per-session configuration retention and durable `run_events` growth also remain measured capacity follow-ups. The Codex queue correction does not establish external provider-side atomicity or guarantee a provider turn stopped when interruption acknowledgement/final status is absent.

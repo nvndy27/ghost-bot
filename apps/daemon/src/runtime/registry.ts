@@ -936,9 +936,8 @@ export class RuntimeRegistry {
 
   async stop(): Promise<void> {
     this.stopped = true
-    this.lifecycleState = 'disconnected'
-    this.generation += 1
     this.cachedSnapshot = null
+    this.cachedAtMs = 0
     this.lastAccountKey = null
     await this.mock.disconnect()
     for (const adapter of this.persistentAdapters.values()) {
@@ -946,11 +945,10 @@ export class RuntimeRegistry {
     }
     this.persistentAdapters.clear()
     this.providerModelCatalogs.clear()
-    if (this.codexClient) {
-      const client = this.codexClient
-      this.codexClient = null
-      await client.close().catch(() => undefined)
-    }
+    // Keep the owned client reference and report failed shutdown unless process
+    // termination is confirmed by closeOwnedClient(). Shutdown still completes
+    // its other daemon cleanup; the failed lifecycle state remains observable.
+    await this.closeOwnedClient().catch(() => undefined)
   }
 
   private async fetchSnapshot(forceVersionCheck = false): Promise<RuntimeSnapshot> {

@@ -56,12 +56,19 @@ interface ActiveRun {
   threadId: string
   turnId: string | null
   pendingNotifications: JsonRpcNotification[]
+  pendingNotificationOverflow: boolean
   seq: number
   queue: AgentEvent[]
+  eventQueueOverflow: boolean
+  overflowFailureQueued: boolean
   waiter: (() => void) | null
   done: boolean
   cancelled: boolean
 }
+
+const MAX_PENDING_TURN_NOTIFICATIONS = 256
+const MAX_QUEUED_RUN_EVENTS = 256
+const OVERFLOW_INTERRUPT_TIMEOUT_MS = 5_000
 
 interface PendingApproval {
   approvalId: string
@@ -571,8 +578,11 @@ export class CodexAppServerAdapter implements AgentRuntime {
       threadId: request.session.externalId,
       turnId: null,
       pendingNotifications: [],
+      pendingNotificationOverflow: false,
       seq: 0,
       queue: [],
+      eventQueueOverflow: false,
+      overflowFailureQueued: false,
       waiter: null,
       done: false,
       cancelled: false,
@@ -617,7 +627,29 @@ export class CodexAppServerAdapter implements AgentRuntime {
         throw new JsonRpcClientError('MALFORMED_PAYLOAD', 'Invalid turn/start response')
       }
       active.turnId = turn.id
-      if (active.pendingNotifications.length > 0) {
+      if (active.pendingNotificationOverflow) {
+        active.pendingNotifications.length = 0
+        let interruptAcknowledged = false
+        try {
+          await client.request(
+            'turn/interrupt',
+            { threadId: active.threadId, turnId: active.turnId },
+            { timeoutMs: OVERFLOW_INTERRUPT_TIMEOUT_MS },
+          )
+          interruptAcknowledged = true
+        } catch {
+          // A failed or timed-out interrupt leaves the provider-side outcome uncertain.
+        }
+        this.revokePendingApprovalsForRun(active.runId)
+        this.pushEvent(active, {
+          type: 'run.failed',
+          code: 'NOTIFICATION_BUFFER_OVERFLOW',
+          message: interruptAcknowledged
+            ? 'Codex emitted more pre-turn notifications than the adapter can preserve. An interruption request was acknowledged, but the final turn status was not observed; execution outcome is uncertain.'
+            : 'Codex emitted more pre-turn notifications than the adapter can preserve. The interruption request was not acknowledged; execution outcome is uncertain.',
+        })
+        active.done = true
+      } else if (active.pendingNotifications.length > 0) {
         const buffered = active.pendingNotifications.splice(0, active.pendingNotifications.length)
         for (const bufferedNotif of buffered) {
           this.handleNotification(bufferedNotif)
@@ -636,9 +668,42 @@ export class CodexAppServerAdapter implements AgentRuntime {
         }
       }
 
-      while (!active.done || active.queue.length > 0) {
+      while (
+        !active.done ||
+        active.queue.length > 0 ||
+        (active.eventQueueOverflow && !active.overflowFailureQueued)
+      ) {
         if (active.queue.length > 0) {
           yield active.queue.shift()!
+          continue
+        }
+        if (active.eventQueueOverflow && !active.overflowFailureQueued) {
+          active.overflowFailureQueued = true
+          const turnWasAlreadyDone = active.done
+          let interruptAcknowledged = false
+          if (!turnWasAlreadyDone && active.turnId !== null) {
+            try {
+              await client.request(
+                'turn/interrupt',
+                { threadId: active.threadId, turnId: active.turnId },
+                { timeoutMs: OVERFLOW_INTERRUPT_TIMEOUT_MS },
+              )
+              interruptAcknowledged = true
+            } catch {
+              // Report an uncertain outcome below; do not retry or silently drop the failure.
+            }
+          }
+          this.revokePendingApprovalsForRun(active.runId)
+          active.done = true
+          this.appendEvent(active, {
+            type: 'run.failed',
+            code: 'EVENT_QUEUE_OVERFLOW',
+            message: turnWasAlreadyDone
+              ? 'Codex emitted more events than the bounded adapter queue can preserve. The delivered event stream is incomplete; do not treat its partial transcript as the complete result.'
+              : interruptAcknowledged
+                ? 'Codex emitted more events than the bounded adapter queue can preserve. An interruption request was acknowledged, but the final turn status was not observed; execution outcome is uncertain.'
+                : 'Codex emitted more events than the bounded adapter queue can preserve. The interruption request was not acknowledged; execution outcome is uncertain.',
+          })
           continue
         }
         await new Promise<void>((resolveWait) => {
@@ -700,6 +765,15 @@ export class CodexAppServerAdapter implements AgentRuntime {
   }
 
   private pushEvent(active: ActiveRun, payload: EventPayload): void {
+    if (active.eventQueueOverflow) return
+    if (active.queue.length >= MAX_QUEUED_RUN_EVENTS) {
+      active.eventQueueOverflow = true
+      return
+    }
+    this.appendEvent(active, payload)
+  }
+
+  private appendEvent(active: ActiveRun, payload: EventPayload): void {
     active.seq += 1
     active.queue.push({
       ...payload,
@@ -764,8 +838,10 @@ export class CodexAppServerAdapter implements AgentRuntime {
       if (active.turnId === null) {
         // turn/start response and notifications can arrive in the same stdout read chunk before
         // the turn/start promise continuation assigns active.turnId; buffer until turnId is known.
-        if (active.pendingNotifications.length < 256) {
+        if (active.pendingNotifications.length < MAX_PENDING_TURN_NOTIFICATIONS) {
           active.pendingNotifications.push(n)
+        } else {
+          active.pendingNotificationOverflow = true
         }
         return
       }
