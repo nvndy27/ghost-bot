@@ -381,6 +381,19 @@ try {
   assert.equal(fixtureCodex.catalogState, 'available')
   assert.deepEqual(fixtureCodex.models.map((model) => model.id), ['fixture-codex-model'])
   assert.deepEqual(fixtureCodex.models[0].efforts, ['low', 'high', 'xhigh', 'max'])
+  await page.waitForFunction(() => document.querySelector('.gb-chat-header')?.innerText.includes('Execution gated'))
+  const connectedButUnconfiguredUi = await page.evaluate(() => ({
+    header: document.querySelector('.gb-chat-header')?.innerText ?? '',
+    sidebar: document.querySelector('[data-bot-id="chief"]')?.innerText ?? '',
+    sendDisabled: (() => {
+      const button = document.querySelector('button[aria-label="Send message"]') ?? document.querySelector('button[title="Send message"]')
+      return button instanceof HTMLButtonElement ? button.disabled : null
+    })(),
+  }))
+  assert.match(connectedButUnconfiguredUi.header, /Execution gated/)
+  assert.match(connectedButUnconfiguredUi.sidebar, /Mock/)
+  assert.equal(connectedButUnconfiguredUi.sendDisabled, true)
+  await capture(page, 'rc2-controlled-codex-gated-mock-bot')
   await page.getByRole('button', { name: 'Edit bot', exact: true }).click()
   const fixtureEditor = page.getByRole('dialog', { name: 'Edit bot' })
   await fixtureEditor.waitFor()
