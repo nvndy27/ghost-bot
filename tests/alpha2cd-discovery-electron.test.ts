@@ -39,9 +39,9 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
       return activeBotId
     }, workspace)
     await page.getByTestId('workspace-tab-files').click()
-    await app.evaluate(({ dialog }, root) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
-    }, workspace)
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+    })
     await page.getByRole('button', { name: 'Allow read access' }).click()
     const search = page.getByRole('searchbox', { name: 'Search workspace' })
     await search.fill('notes')
@@ -70,7 +70,12 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
     const dispatched = await page.evaluate((sessionId) => window.ghostBot!.listMessages({ sessionId }), origin)
     assert.equal(dispatched.messages.length, 0)
 
-    await page.getByTestId('workspace-tree-entry-page.pdf').click()
+    const explorerToggle = page.getByTestId('workspace-explorer-toggle')
+    if (await explorerToggle.getAttribute('aria-expanded') !== 'true') await explorerToggle.click()
+    assert.equal(await explorerToggle.getAttribute('aria-expanded'), 'true')
+    const pdfEntry = page.getByTestId('workspace-tree-entry-page.pdf')
+    await pdfEntry.waitFor({ state: 'visible' })
+    await pdfEntry.click()
     const preview = page.getByRole('region', { name: 'File preview' })
     await preview.getByRole('img', { name: 'page.pdf, page 1' }).waitFor()
     assert.equal(await preview.getByRole('img').evaluate((image: HTMLImageElement) => image.naturalWidth > 0), true)

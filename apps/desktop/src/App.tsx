@@ -1,3 +1,5 @@
+import { ProviderUsage } from './components/ProviderUsage.tsx'
+import { effectiveWorkspaceWidth } from './state/workspaceLayout.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
@@ -12,10 +14,11 @@ import type {
   GhostBotBridge,
   PersistedMessage,
   PrivateTaskChatRecord,
-  ProviderSummary,
   RoutineRecordDto,
   RunRecord,
   RuntimeSnapshot,
+  RuntimeProviderCapabilitiesResponse,
+  RuntimeProviderId,
   SessionInspectionResponse,
   SessionRecord,
   SidebarOrganization,
@@ -23,7 +26,6 @@ import type {
   UpdateBotInput,
   UpdateTeamIpcInput,
 } from '@ghost-bot/shared-types/ipc'
-import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { PanelRight, X } from 'lucide-react'
 import { BotEditorModal } from './components/BotEditorModal.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './components/IconButton.tsx'
@@ -145,6 +147,18 @@ export function App() {
   const [liveViewerOpen, setLiveViewerOpen] = useState(false)
   const [liveViewerSessionId, setLiveViewerSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [narrowViewport, setNarrowViewport] = useState(() => window.matchMedia('(max-width: 760px)').matches)
+  const [mobileSidebarExpanded, setMobileSidebarExpanded] = useState(false)
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 760px)')
+    const resetMobileSidebar = () => {
+      setNarrowViewport(media.matches)
+      setMobileSidebarExpanded(false)
+    }
+    media.addEventListener('change', resetMobileSidebar)
+    return () => media.removeEventListener('change', resetMobileSidebar)
+  }, [])
+
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (hasBridge) return DEFAULT_APP_SETTINGS
     return {
@@ -173,7 +187,7 @@ export function App() {
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
-  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines'>('appearance')
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines' | 'accounts' | 'tools'>('appearance')
   const [routines, setRoutines] = useState<RoutineRecordDto[]>([])
   const [unreadRoutineNotifications, setUnreadRoutineNotifications] = useState(0)
   const [botEditor, setBotEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
@@ -182,8 +196,8 @@ export function App() {
   })
   const [bannerError, setBannerError] = useState<string | null>(null)
   const [health, setHealth] = useState<DaemonHealthResponse | null>(null)
-  const [providers, setProviders] = useState<ProviderSummary[]>([])
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeSnapshot | null>(null)
+  const [providerCapabilities, setProviderCapabilities] = useState<RuntimeProviderCapabilitiesResponse | null>(null)
 
   const streamTimerRef = useRef<number | null>(null)
   const runPollTimersRef = useRef<Map<string, number>>(new Map())
@@ -192,6 +206,27 @@ export function App() {
   const prefs: UiPreferences = settings.appearance
   const isMockMode = health === null || health.runtimeMode === 'mock'
   const activeBot = bots.find((b) => b.id === activeBotId) ?? bots[0] ?? null
+  const activeSelectedBotIdRef = useRef<string | null>(activeBot?.id ?? null)
+  activeSelectedBotIdRef.current = activeBot?.id ?? null
+  const providerCapabilitiesRequestRef = useRef(0)
+  const selectedBotReadiness = activeBot && providerCapabilities?.selectedBot?.botId === activeBot.id
+    ? providerCapabilities.selectedBot
+    : null
+
+  useEffect(() => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    const request = ++providerCapabilitiesRequestRef.current
+    const botId = activeBot?.id
+    void bridge.getRuntimeProviderCapabilities({ botId }).then((snapshot) => {
+      if (request === providerCapabilitiesRequestRef.current && activeSelectedBotIdRef.current === botId) {
+        setProviderCapabilities(snapshot)
+      }
+    }).catch(() => {
+      if (request === providerCapabilitiesRequestRef.current) setProviderCapabilities(null)
+    })
+    return () => { providerCapabilitiesRequestRef.current += 1 }
+  }, [activeBot?.id, activeBot?.updatedAt, health?.runtimeMode])
   const [teams, setTeams] = useState<TeamRecordDto[]>([])
   const [teamsLoaded, setTeamsLoaded] = useState(false)
   const [teamsError, setTeamsError] = useState<string | null>(null)
@@ -285,7 +320,6 @@ export function App() {
     const legacy = loadUiPreferences()
     void Promise.all([
       bridge.getDaemonHealth(),
-      bridge.listProviders(),
       bridge.listBots(),
       bridge.migrateLocalSettings(legacy),
       bridge.getRuntimeSnapshot(false),
@@ -296,9 +330,8 @@ export function App() {
         teamOrder: [],
       })),
     ])
-      .then(([daemonHealth, providerList, botsRes, loadedSettings, snap, org]) => {
+      .then(([daemonHealth, botsRes, loadedSettings, snap, org]) => {
         setHealth(daemonHealth)
-        setProviders(providerList)
         setBots(botsRes.bots.map(recordToWorkspaceBot))
         setSettings(loadedSettings)
         setRuntimeSnapshot(snap)
@@ -673,12 +706,28 @@ export function App() {
   const handleRefreshRuntime = async (): Promise<void> => {
     const bridge = window.ghostBot
     if (!bridge) return
-    const [snap, providerList] = await Promise.all([
+    const [snap, capabilities] = await Promise.all([
       bridge.getRuntimeSnapshot(true),
-      bridge.listProviders(),
+      bridge.getRuntimeProviderCapabilities({ botId: activeSelectedBotIdRef.current ?? undefined, refresh: true }),
     ])
     setRuntimeSnapshot(snap)
-    setProviders(providerList)
+    setProviderCapabilities(capabilities)
+  }
+
+  const handleRefreshProviderCapabilities = async (providerId?: RuntimeProviderId): Promise<void> => {
+    const bridge = window.ghostBot
+    if (!bridge) throw new Error('Provider discovery requires the desktop daemon.')
+    const requestedBotId = activeSelectedBotIdRef.current
+    const capabilities = await bridge.getRuntimeProviderCapabilities({
+      botId: requestedBotId ?? undefined,
+      refresh: true,
+      discoverProviderId: providerId === 'claude-api' || providerId === 'gemini-api' || providerId === 'openrouter'
+        ? providerId
+        : undefined,
+    })
+    if (activeSelectedBotIdRef.current === requestedBotId) setProviderCapabilities(capabilities)
+    const snapshot = await bridge.getRuntimeSnapshot(false)
+    setRuntimeSnapshot(snapshot)
   }
 
   const updateAppearance = (patch: Partial<UiPreferences>) => {
@@ -691,14 +740,16 @@ export function App() {
     (side: 'left' | 'right') => (e: ReactMouseEvent<HTMLDivElement>) => {
       e.preventDefault()
       const startX = e.clientX
-      const startWidth = side === 'left' ? prefs.leftWidth : prefs.rightWidth
+      const startWidth = side === 'left'
+        ? prefs.leftWidth
+        : effectiveWorkspaceWidth(prefs.rightWidth, window.innerWidth, narrowViewport)
 
       const onMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startX
         if (side === 'left') {
           updateAppearance({ leftWidth: Math.min(360, Math.max(180, startWidth + delta)) })
         } else {
-          updateAppearance({ rightWidth: Math.min(420, Math.max(220, startWidth - delta)) })
+          updateAppearance({ rightWidth: effectiveWorkspaceWidth(startWidth - delta, window.innerWidth, narrowViewport) })
         }
       }
       const onUp = () => {
@@ -717,7 +768,7 @@ export function App() {
       if (side === 'left') {
         updateAppearance({ leftWidth: Math.min(360, Math.max(180, prefs.leftWidth + step)) })
       } else {
-        updateAppearance({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
+        updateAppearance({ rightWidth: effectiveWorkspaceWidth(prefs.rightWidth - step, window.innerWidth, narrowViewport) })
       }
     }
 
@@ -1023,6 +1074,18 @@ export function App() {
     }
   }
 
+  const createCompatibleConversation = async (botId: string): Promise<void> => {
+    const bridge = window.ghostBot
+    if (!bridge) return
+    const created = await bridge.createSession({ agentId: botId, title: 'New conversation' })
+    setSessionsByBot((previous) => ({
+      ...previous,
+      [botId]: [created, ...(previous[botId] ?? []).filter((session) => session.id !== created.id)],
+    }))
+    setActiveSessionByBot((previous) => ({ ...previous, [botId]: created.id }))
+    setMessagesBySession((previous) => ({ ...previous, [created.id]: [] }))
+  }
+
   const handleCreateBot = async (input: CreateBotInput) => {
     const bridge = window.ghostBot
     if (bridge) {
@@ -1051,15 +1114,42 @@ export function App() {
   const handleEditBot = async (input: UpdateBotInput) => {
     const bridge = window.ghostBot
     if (bridge) {
+      const routingChanged = input.patch.runtimeId !== undefined || input.patch.modelId !== undefined ||
+        input.patch.effort !== undefined || input.patch.permission !== undefined
       const updated = await bridge.updateBot(input)
       setBots((prev) =>
         prev.map((b) => (b.id === updated.id ? { ...b, ...recordToWorkspaceBot(updated) } : b)),
       )
+      if (routingChanged && activeBotIdRef.current === updated.id) {
+        await createCompatibleConversation(updated.id)
+      }
+      if (activeBotIdRef.current === updated.id) {
+        const capabilities = await bridge.getRuntimeProviderCapabilities({ botId: updated.id })
+        setProviderCapabilities(capabilities)
+      }
       return
     }
     setBots((prev) =>
       prev.map((b) => (b.id === input.id ? { ...b, ...input.patch } : b)),
     )
+  }
+
+  const handleApplyProviderConfiguration = async (input: {
+    runtimeId: string
+    modelId: string
+    effort: string
+    permission: BotRecord['permission']
+    catalogGeneration?: string
+  }) => {
+    const bridge = window.ghostBot
+    if (!bridge || !activeBot) throw new Error('Provider configuration requires the desktop daemon.')
+    const updated = await bridge.updateBot({ id: activeBot.id, patch: input })
+    setBots((previous) => previous.map((bot) =>
+      bot.id === updated.id ? { ...bot, ...recordToWorkspaceBot(updated) } : bot,
+    ))
+    await createCompatibleConversation(updated.id)
+    const capabilities = await bridge.getRuntimeProviderCapabilities({ botId: updated.id })
+    setProviderCapabilities(capabilities)
   }
 
   const handleDuplicateBot = async (id: string) => {
@@ -1126,12 +1216,26 @@ export function App() {
     return res.canceled ? null : res.path
   }
 
+  const handleOpenWorkspaceFolder = async (botId: string): Promise<boolean> => {
+    const bridge = window.ghostBot
+    if (!bridge) return false
+    const picked = await bridge.pickWorkspace()
+    if (picked.canceled || !picked.path) return false
+    await handleEditBot({ id: botId, patch: { workspacePath: picked.path } })
+    return true
+  }
+
   const handleReconnectRuntime = async () => {
     const bridge = window.ghostBot
     if (!bridge) return
     try {
       const snap = await bridge.reconnectRuntime()
       setRuntimeSnapshot(snap)
+      const capabilities = await bridge.getRuntimeProviderCapabilities({
+        botId: activeSelectedBotIdRef.current ?? undefined,
+        refresh: true,
+      })
+      setProviderCapabilities(capabilities)
       if (activeSessionId) {
         const insp = await bridge.inspectSession(activeSessionId)
         setInspectionBySession((prev) => ({ ...prev, [activeSessionId]: insp }))
@@ -1590,17 +1694,26 @@ export function App() {
     if (count > 0) unreadCountByBot[bId] = count
   }
 
+  const sidebarCompact = narrowViewport ? !mobileSidebarExpanded : prefs.leftCollapsed
+  const toggleSidebar = () => {
+    if (narrowViewport) setMobileSidebarExpanded((expanded) => !expanded)
+    else updateAppearance({ leftCollapsed: !prefs.leftCollapsed })
+  }
+
   const activePrivateTask =
     privateTasks.find((t) => t.teamRunId === activePrivateTaskId) ?? null
 
   return (
     <div className="gb-shell">
-      {!prefs.leftCollapsed && (
-        <>
+      <>
           <LeftSidebar
-            width={prefs.leftWidth}
+            width={narrowViewport ? 190 : prefs.leftWidth}
+            compact={sidebarCompact}
+            providerUsage={<ProviderUsage snapshot={runtimeSnapshot} compact={sidebarCompact}
+              onRefresh={handleRefreshRuntime} onOpenSettings={() => { setSettingsInitialSection('accounts'); setSettingsOpen(true) }} />}
             bots={bots}
             activeBotId={activeTeam || activePrivateTask ? null : (activeBot?.id ?? null)}
+            selectedBotReadiness={selectedBotReadiness}
             teams={teams}
             activeTeamId={activePrivateTask ? null : (activeTeam?.id ?? null)}
             privateTasks={privateTasks}
@@ -1625,10 +1738,10 @@ export function App() {
             onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
             onCreateTeam={() => setTeamEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
-            onCollapse={() => updateAppearance({ leftCollapsed: true })}
+            onCollapse={toggleSidebar}
             isMockMode={isMockMode}
           />
-          <div
+          {!sidebarCompact && <div
             className="gb-resize-handle"
             role="separator"
             aria-orientation="vertical"
@@ -1636,16 +1749,15 @@ export function App() {
             tabIndex={0}
             onMouseDown={startResize('left')}
             onKeyDown={handleResizeKeyDown('left')}
-          />
-        </>
-      )}
+          />}
+      </>
 
       <main className="gb-center">
         {activePrivateTask ? (
           <PrivateTaskChatView
             task={activePrivateTask}
             bot={bots.find((b) => b.id === activePrivateTask.assignedBotId) ?? null}
-            leftCollapsed={prefs.leftCollapsed}
+            leftCollapsed={sidebarCompact}
             rightCollapsed={prefs.rightCollapsed}
             onBackToGroup={() => {
               const targetTeamId = activePrivateTask.teamId
@@ -1657,7 +1769,7 @@ export function App() {
                 prev.map((t) => (t.teamRunId === updated.teamRunId ? updated : t)),
               )
             }}
-            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleLeft={toggleSidebar}
             onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
           />
         ) : activeTeam ? (
@@ -1677,7 +1789,7 @@ export function App() {
             isMockMode={isMockMode}
             startingRun={startingTeamRun}
             cancellingRun={cancellingTeamRun}
-            leftCollapsed={prefs.leftCollapsed}
+            leftCollapsed={sidebarCompact}
             rightCollapsed={prefs.rightCollapsed}
             onSelectRun={(teamRunId) => void loadTeamWorkspace(activeTeam.id, teamRunId)}
             onPreviewPlan={handlePreviewTeamPlan}
@@ -1692,16 +1804,17 @@ export function App() {
               setActivePrivateTaskId(task.teamRunId)
             }}
             onTasksChanged={refreshPrivateTasks}
-            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleLeft={toggleSidebar}
             onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
           />
         ) : (
           <>
             <ChatHeader
               bot={activeBot}
-              leftCollapsed={prefs.leftCollapsed}
+              leftCollapsed={sidebarCompact}
               rightCollapsed={prefs.rightCollapsed}
               isMockMode={isMockMode}
+              selectedBotReadiness={selectedBotReadiness}
               sessions={hasBridge ? activeBotSessions : undefined}
               activeSessionId={hasBridge ? activeSessionId : undefined}
               onSelectSession={hasBridge ? (sid) => void handleSelectSession(sid) : undefined}
@@ -1712,7 +1825,7 @@ export function App() {
               onArchiveSession={hasBridge ? (sid) => handleArchiveSession(sid) : undefined}
               onMarkSessionRead={hasBridge ? (sid) => handleMarkSessionRead(sid) : undefined}
               onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
-              onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+              onToggleLeft={toggleSidebar}
               onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
             />
 
@@ -1842,13 +1955,10 @@ export function App() {
               draft={draft}
               isStreaming={hasBridge ? activeSessionIsStreaming : streamingBotId !== null}
               isMockMode={isMockMode}
-              runtimeSnapshot={runtimeSnapshot}
+              providerCapabilities={providerCapabilities}
               onDraftChange={setDraft}
-              onModelChange={(modelId) => updateActiveBotInline({ modelId })}
-              onEffortChange={(effort) => updateActiveBotInline({ effort })}
-              onPermissionChange={(permission: PermissionMode) =>
-                updateActiveBotInline({ permission })
-              }
+              onApplyProviderConfiguration={handleApplyProviderConfiguration}
+              onRefreshProviderCapabilities={handleRefreshProviderCapabilities}
               onSend={() => handleSendMock()}
               onStop={handleStopStream}
             />
@@ -1857,15 +1967,16 @@ export function App() {
           <div style={{ margin: 'auto', textAlign: 'center', padding: '32px' }}>
             <h2 style={{ margin: '0 0 8px' }}>No bots yet</h2>
             <p className="gb-muted" style={{ margin: '0 0 16px' }}>
-              Create your first bot to configure its avatar, instructions, and workspace.
+              Connect a supported provider, then choose an available model. A bot is created only after you select its provider and configuration.
             </p>
-            <button
-              type="button"
-              className="gb-btn-accent"
-              onClick={() => setBotEditor({ open: true, mode: 'create' })}
-            >
-              Create your first bot
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button type="button" className="gb-btn-outline" onClick={() => { setSettingsInitialSection('accounts'); setSettingsOpen(true) }}>
+                Configure providers
+              </button>
+              <button type="button" className="gb-btn-accent" onClick={() => setBotEditor({ open: true, mode: 'create' })}>
+                Create your first bot
+              </button>
+            </div>
           </div>
         )}
           </>
@@ -1936,7 +2047,8 @@ export function App() {
                   : undefined
               }
               onOpenTerminal={hasBridge ? () => setTerminalOpen(true) : undefined}
-              onRefreshUsage={() => void handleRefreshRuntime()}
+              onOpenTools={hasBridge ? () => { setSettingsInitialSection('tools'); setSettingsOpen(true) } : undefined}
+              onOpenFolder={hasBridge ? handleOpenWorkspaceFolder : undefined}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
             />
@@ -1948,7 +2060,7 @@ export function App() {
       <SettingsModal
         open={settingsOpen}
         settings={settings}
-        providers={providers}
+        providerCapabilities={providerCapabilities}
         runtimeSnapshot={runtimeSnapshot}
         daemonHealth={health}
         bots={bots}
@@ -1958,6 +2070,7 @@ export function App() {
         onUpdateSettings={handleUpdateSettings}
         onResetSettings={handleResetSettings}
         onRefreshRuntime={handleRefreshRuntime}
+        onRefreshProviderCapabilities={handleRefreshProviderCapabilities}
         onRefreshWorkspaceRoutines={() => void refreshRoutines()}
         onNavigateToBot={handleSelectBot}
         onNavigateToTeam={handleSelectTeam}
@@ -1985,6 +2098,9 @@ export function App() {
         open={botEditor.open}
         mode={botEditor.mode}
         initialBot={botEditor.mode === 'edit' ? activeBot : null}
+        isMockMode={isMockMode}
+        providerCapabilities={providerCapabilities}
+        onRefreshProviderCapabilities={handleRefreshProviderCapabilities}
         canPickWorkspace={hasBridge}
         canImportSvg={true}
         onSaveCreate={handleCreateBot}

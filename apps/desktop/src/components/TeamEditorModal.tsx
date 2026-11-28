@@ -202,7 +202,7 @@ export function TeamEditorModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="team-editor-title"
-        style={{ width: 'min(620px, 94vw)', maxHeight: '88vh', overflow: 'auto' }}
+        style={{ width: 'min(510px, 94vw)', maxHeight: '88vh', overflow: 'auto' }}
       >
         <div className="gb-modal-head">
           <strong id="team-editor-title">

@@ -41,6 +41,25 @@ export class MockRuntimeAdapter implements AgentRuntime {
         supportsTools: false,
         supportsAttachments: false,
       },
+      // Keep the two pre-RC2 demo selections available only inside the
+      // explicitly selected mock runtime. Existing profiles can reselect
+      // these legacy IDs without treating them as real provider models.
+      {
+        id: 'gpt-6.2-mock',
+        label: 'GPT-6.2 (Mock)',
+        efforts: ['low', 'medium', 'high'],
+        permissionModes: ['read-only', 'ask-approval', 'workspace'],
+        supportsTools: false,
+        supportsAttachments: false,
+      },
+      {
+        id: 'codex-mock',
+        label: 'Codex (Mock)',
+        efforts: ['low', 'medium', 'high'],
+        permissionModes: ['read-only', 'ask-approval', 'workspace'],
+        supportsTools: false,
+        supportsAttachments: false,
+      },
     ]
   }
 

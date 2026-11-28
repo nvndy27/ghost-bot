@@ -33,7 +33,7 @@ test('Alpha.2A workspace tab definitions and keyboard navigation contract', () =
 
 test('Alpha.2A preserves UiPreferences compatibility and 12 avatar presets', () => {
   assert.equal(avatarPresets.length, 12)
-  assert.equal(DEFAULT_PREFERENCES.rightWidth, 285)
+  assert.equal(DEFAULT_PREFERENCES.rightWidth, 400)
   assert.equal(DEFAULT_PREFERENCES.rightCollapsed, false)
 
   const parsed = UiPreferencesSchema.parse({
@@ -68,15 +68,30 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     })
     page.on('pageerror', (err) => consoleErrors.push(err.message))
 
-    // 1. Default Overview rendering preserves existing right-panel sections
+    // 1. Approved Overview retains production actions and collapsed runtime details
     const shell = page.getByTestId('workspace-panel-shell')
     assert.equal(await shell.getAttribute('data-active-tab'), 'overview')
     assert.equal(await shell.getAttribute('data-maximized'), 'false')
-    await page.waitForSelector('text=Live computer')
-    await page.waitForSelector('text=Active tasks')
+    await page.getByRole('button', { name: 'Open Live Viewer', exact: true }).waitFor()
+    await page.waitForSelector('text=Current activity')
     await page.waitForSelector('text=Routines')
     await page.waitForSelector('text=Connected tools')
-    await page.waitForSelector('text=Account usage')
+    await page.waitForFunction(() =>
+      document.querySelector('[role="listbox"][aria-label="Bots"] [aria-selected="true"] .gb-bot-readiness')
+        ?.textContent?.trim() === 'Offline Demo',
+    )
+    const runtimeDetails = page.locator('.gb-overview-runtime')
+    await runtimeDetails.locator('summary').click()
+    await page.waitForFunction(() => {
+      const details = document.querySelector('.gb-overview-runtime')
+      return details instanceof HTMLDetailsElement && details.open
+    })
+    await runtimeDetails.getByText(/Connection:/).waitFor()
+    assert.equal(await runtimeDetails.getByText('Account usage', { exact: true }).count(), 0)
+    await runtimeDetails.locator('summary').click()
+    await page.getByRole('button', { name: 'Provider usage' }).click()
+    await page.getByRole('dialog', { name: 'Provider usage' }).waitFor()
+    await page.getByRole('button', { name: 'Close provider usage' }).click()
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-overview-dark-1440x900.png') })
 
     // 2. Sidebar Bot Identity UI contract: avatar + bot name + provider label only (no model/effort)
@@ -119,10 +134,10 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await resizeHandle.focus()
     for (const steps of [1, 2]) {
       await resizeHandle.press('ArrowLeft')
-      const expectedWidth = Math.min(420, initialWidth + 16 * steps)
+      const expectedWidth = initialWidth + 16 * steps
       await page.waitForFunction((width) => {
         const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
-        return panel?.getBoundingClientRect().width === width
+        return panel !== null && Math.abs(panel.getBoundingClientRect().width - width) < 0.5
       }, expectedWidth)
     }
     const resizedWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
@@ -159,7 +174,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.mouse.move(1438, handleY)
     await page.mouse.up()
     await page.waitForFunction(() =>
-      document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === 220)
+      Math.abs((document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width ?? 0) - 220) < 0.5)
     const screenshotOutput = process.env.GHOST_BOT_WORKSPACE_SCREENSHOT_DIR ?? screenshotDir
     await mkdir(screenshotOutput, { recursive: true })
     const tablist = shell.getByRole('tablist', { name: 'Workspace sections' })
@@ -189,14 +204,15 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
         })
       })
       assert.equal(row.length, 5)
-      assert.ok(row.every((tab) => tab.top === row[0].top && tab.width === 32 && tab.height === 32 && tab.inside))
+      assert.ok(row.every((tab) => tab.top === row[0].top &&
+        Math.abs(tab.width - 32) < 0.5 && Math.abs(tab.height - 32) < 0.5 && tab.inside))
       await tablist.getByRole('tab', { name: 'Output', exact: true }).click()
       await shell.getByTestId('workspace-output-tab').waitFor()
       assert.equal(await tablist.getByRole('tab', { name: 'Output', exact: true }).getAttribute('aria-selected'), 'true')
-      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(250, 249, 246)'
+      const expectedBackground = theme === 'dark' ? 'rgb(24, 24, 24)' : 'rgb(253, 253, 252)'
       await page.waitForFunction(({ theme, expectedBackground }) => {
         const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
-        return panel?.getBoundingClientRect().width === 220 &&
+        return panel !== null && Math.abs(panel.getBoundingClientRect().width - 220) < 0.5 &&
           document.documentElement.dataset.theme === theme &&
           getComputedStyle(panel).backgroundColor === expectedBackground
       }, { theme, expectedBackground })
@@ -214,11 +230,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     })
     await page.keyboard.press('Escape')
 
-    // 9. Responsive narrow layout + maximize overlay
+    // 9. At 900px the desktop panel remains capped at 65% of the viewport.
     await page.setViewportSize({ width: 900, height: 700 })
     await page.getByTestId('workspace-maximize-btn').click()
     const narrowMaxWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
-    assert.ok(narrowMaxWidth >= 880, `Expected full-width overlay on narrow viewport, got ${narrowMaxWidth}`)
+    assert.ok(Math.abs(narrowMaxWidth - 585) < 0.5, `Expected the 65% desktop maximum at 900px, got ${narrowMaxWidth}`)
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-narrow-maximized-900x700.png') })
     await page.getByTestId('workspace-maximize-btn').click()
 
@@ -227,34 +243,49 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     const file = join(workspace, 'sample.txt')
     await mkdir(workspace)
     await writeFile(file, 'Initial fixture\n')
-    await page.evaluate(async (workspacePath) => {
+    await page.evaluate(async () => {
       const bridge = window.ghostBot!
       const { bots } = await bridge.listBots()
       const bot = bots[0]
-      await bridge.updateBot({ id: bot.id, patch: { workspacePath, permission: 'workspace' } })
+      // Keep the legacy seeded tilde path until the user explicitly recovers it from Explorer.
+      await bridge.updateBot({ id: bot.id, patch: { permission: 'workspace' } })
       await bridge.setActiveBot(bot.id)
       await bridge.createTeam({
         name: 'Workspace Test Team',
         leadBotId: bot.id,
         memberBotIds: [bot.id, bots[1].id],
       })
-    }, workspace)
+    })
     await app.close()
     app = await launch()
     page = await app.firstWindow()
     page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
     page.on('pageerror', (err) => consoleErrors.push(err.message))
     await page.getByTestId('workspace-tab-files').click()
-    await page.getByText('Allow read access to this bot workspace', { exact: false }).waitFor()
-    const authorize = page.getByRole('button', { name: 'Allow read access', exact: true })
-    await app.evaluate(({ dialog }, chosen) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] })
-    }, dataDir)
-    await authorize.click()
-    await page.getByText('Select the configured bot workspace directory', { exact: false }).waitFor()
+    await page.getByTestId('workspace-files-unavailable').waitFor()
+    const recoverFolder = page.getByTestId('workspace-open-folder-unavailable-btn')
+    await recoverFolder.waitFor()
     await app.evaluate(({ dialog }, chosen) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] })
     }, workspace)
+    await recoverFolder.click()
+    await page.getByText('Allow read access to this bot workspace', { exact: false }).waitFor()
+    const authorize = page.getByRole('button', { name: 'Allow read access', exact: true })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async (_window, options) => {
+        ;(globalThis as Record<string, unknown>).__readConsentMessage = options.message
+        return { response: 1 }
+      }
+    })
+    await authorize.click()
+    await page.getByTestId('workspace-files-unavailable').waitFor()
+    const readConsentMessage = await app.evaluate(() =>
+      (globalThis as Record<string, unknown>).__readConsentMessage,
+    )
+    assert.match(String(readConsentMessage), /fixture-workspace/)
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+    })
     await authorize.click()
     await page.getByTestId('workspace-tree-entry-sample.txt').click()
     const editor = page.getByTestId('workspace-editor-textarea')
@@ -300,6 +331,26 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
       /native write consent is required/i,
     )
     assert.equal(await readFile(file, 'utf8'), 'External edit\n')
+
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+    })
+    await page.getByTestId('workspace-authorize-write-btn').click()
+    await page.getByTestId('workspace-files-permission-badge').getByText('Writable').waitFor()
+    await page.getByTestId('editor-reload-btn').click()
+    await editor.fill('Saved from Explorer\n')
+    await editor.press('Control+s')
+    await page.waitForFunction(() => {
+      const save = document.querySelector<HTMLButtonElement>('[data-testid="editor-save-btn"]')
+      return save?.disabled === true
+    })
+    assert.equal(await readFile(file, 'utf8'), 'Saved from Explorer\n')
+
+    await editor.fill('Keep this draft\n')
+    await writeFile(file, 'External change after edit\n')
+    await page.getByTestId('editor-conflict-banner').waitFor()
+    await editor.press('Control+s')
+    assert.equal(await readFile(file, 'utf8'), 'External change after edit\n')
 
     const reopenBotWorkspace = async () => {
       const options = page.getByRole('listbox', { name: 'Bots' }).getByRole('option')

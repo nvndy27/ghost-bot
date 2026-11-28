@@ -1,3 +1,4 @@
+import { FileCode, FilePlus, Folder, FolderOpen, FolderPlus, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import type { WorkspaceDirectoryEntryItem } from './workspaceFilesClient.ts'
 
@@ -17,6 +18,7 @@ export interface WorkspaceFileTreeProps {
   onToggleDir: (relativePath: string) => void
   onSelectFile: (relativePath: string) => void
   onRefresh: () => void
+  onOpenFolder?: () => void
   onCreateEntry?: (kind: 'file' | 'directory', relativePath: string) => void
 }
 
@@ -29,6 +31,7 @@ export function WorkspaceFileTree({
   onToggleDir,
   onSelectFile,
   onRefresh,
+  onOpenFolder,
   onCreateEntry,
 }: WorkspaceFileTreeProps) {
   const [creatingKind, setCreatingKind] = useState<'file' | 'directory' | null>(null)
@@ -96,20 +99,7 @@ export function WorkspaceFileTree({
                 onClick={() => (isDir ? onToggleDir(entry.relativePath) : onSelectFile(entry.relativePath))}
               >
                 <span aria-hidden="true" style={{ width: 14, display: 'inline-flex', justifyContent: 'center', flexShrink: 0 }}>
-                  {isDir ? (
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                      {expanded ? (
-                        <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-                      ) : (
-                        <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-                      )}
-                    </svg>
-                  ) : (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-                      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-                    </svg>
-                  )}
+                  {isDir ? (expanded ? <FolderOpen size={14} aria-hidden="true" /> : <Folder size={14} aria-hidden="true" />) : <FileCode size={14} aria-hidden="true" />}
                 </span>
                 <span className="gb-tree-label" title={entry.relativePath}>
                   {entry.name}
@@ -135,44 +125,56 @@ export function WorkspaceFileTree({
     <div className="gb-tree-pane" data-testid="workspace-file-tree">
       <div className="gb-tree-header">
         <span className="gb-section-label" style={{ margin: 0 }}>
-          Files
+          Explorer
         </span>
         <div style={{ display: 'flex', gap: 4 }}>
+          {onOpenFolder && (
+            <button
+              type="button"
+              className="gb-icon-btn"
+              onClick={onOpenFolder}
+              aria-label="Open workspace folder"
+              title="Open folder"
+              data-testid="workspace-open-folder-btn"
+            >
+              <FolderOpen size={16} aria-hidden="true" />
+            </button>
+          )}
           {canWrite && onCreateEntry && (
             <>
               <button
                 type="button"
-                className="gb-workspace-icon-btn"
+                className="gb-icon-btn"
                 onClick={() => {
                   setCreatingKind('file')
                   setCreatePath('')
                 }}
-                data-testid="workspace-new-file-btn"
+                aria-label="New file" title="New file" data-testid="workspace-new-file-btn"
               >
-                + File
+                <FilePlus size={16} aria-hidden="true" />
               </button>
               <button
                 type="button"
-                className="gb-workspace-icon-btn"
+                className="gb-icon-btn"
                 onClick={() => {
                   setCreatingKind('directory')
                   setCreatePath('')
                 }}
-                data-testid="workspace-new-dir-btn"
+                aria-label="New folder" title="New folder" data-testid="workspace-new-dir-btn"
               >
-                + Dir
+                <FolderPlus size={16} aria-hidden="true" />
               </button>
             </>
           )}
           <button
             type="button"
-            className="gb-workspace-icon-btn"
+            className="gb-icon-btn"
             onClick={onRefresh}
             aria-label="Refresh workspace files"
             title={rootPath}
             data-testid="workspace-files-refresh-btn"
           >
-            Refresh
+            <RefreshCw size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -197,7 +199,7 @@ export function WorkspaceFileTree({
           />
           <button
             type="button"
-            className="gb-workspace-icon-btn"
+            className="gb-icon-btn"
             data-testid="workspace-create-confirm-btn"
             onClick={() => {
               const trimmed = createPath.trim()
@@ -210,7 +212,7 @@ export function WorkspaceFileTree({
           </button>
           <button
             type="button"
-            className="gb-workspace-icon-btn"
+            className="gb-icon-btn"
             onClick={() => setCreatingKind(null)}
           >
             Cancel

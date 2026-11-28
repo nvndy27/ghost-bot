@@ -1,23 +1,35 @@
+import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import type { RuntimeSnapshot } from '@ghost-bot/shared-types/ipc'
+import type {
+  RuntimeProviderCapabilitiesResponse,
+  RuntimeProviderId,
+} from '@ghost-bot/shared-types/ipc'
 import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
-import { BrainCircuit, Paperclip, ShieldCheck } from 'lucide-react'
+import { Paperclip } from 'lucide-react'
 import { useComposerTextareaHeight } from '../hooks/useComposerTextareaHeight.ts'
-import { ComposerSendButton } from './ComposerSendButton.tsx'
-import { MOCK_MODELS } from '../data/mockWorkspace.ts'
+import { providerReadinessLabel } from '../state/providerReadiness.ts'
 import type { WorkspaceBot } from '../types/workspace.ts'
+import { ComposerSendButton } from './ComposerSendButton.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { ProviderModelControls } from './ProviderModelControls.tsx'
+
+type BotPermissionMode = Exclude<PermissionMode, 'full-access'>
 
 export interface ChatComposerProps {
   bot: WorkspaceBot
   draft: string
   isStreaming: boolean
   isMockMode: boolean
-  runtimeSnapshot: RuntimeSnapshot | null
+  providerCapabilities: RuntimeProviderCapabilitiesResponse | null
   onDraftChange: (value: string) => void
-  onModelChange: (modelId: string) => void
-  onEffortChange: (effort: string) => void
-  onPermissionChange: (mode: PermissionMode) => void
+  onApplyProviderConfiguration: (input: {
+    runtimeId: string
+    modelId: string
+    effort: string
+    permission: BotPermissionMode
+    catalogGeneration?: string
+  }) => Promise<void>
+  onRefreshProviderCapabilities: (providerId?: RuntimeProviderId) => Promise<void>
   onSend: () => void
   onStop: () => void
 }
@@ -27,54 +39,81 @@ export function ChatComposer({
   draft,
   isStreaming,
   isMockMode,
-  runtimeSnapshot,
+  providerCapabilities,
   onDraftChange,
-  onModelChange,
-  onEffortChange,
-  onPermissionChange,
+  onApplyProviderConfiguration,
+  onRefreshProviderCapabilities,
   onSend,
   onStop,
 }: ChatComposerProps) {
   const textareaRef = useComposerTextareaHeight(draft)
+  const [runtimeId, setRuntimeId] = useState(bot.runtimeId ?? '')
+  const [modelId, setModelId] = useState(bot.modelId)
+  const [effort, setEffort] = useState(bot.effort)
+  const [permission, setPermission] = useState<BotPermissionMode | ''>(bot.permission as BotPermissionMode)
+  const [savingConfiguration, setSavingConfiguration] = useState(false)
+  const [configurationError, setConfigurationError] = useState<string | null>(null)
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  useEffect(() => {
+    setRuntimeId(bot.runtimeId ?? '')
+    setModelId(bot.modelId)
+    setEffort(bot.effort)
+    setPermission(bot.permission as BotPermissionMode)
+    setConfigurationError(null)
+  }, [bot.id, bot.runtimeId, bot.modelId, bot.effort, bot.permission, bot.updatedAt])
+
+  const readiness = providerCapabilities?.selectedBot?.botId === bot.id
+    ? providerCapabilities.selectedBot
+    : null
+  const pendingProvider = providerCapabilities?.providers.find((item) => item.id === runtimeId)
+  const pendingModel = pendingProvider?.models.find((item) => item.id === modelId)
+  const configurationChanged = runtimeId !== bot.runtimeId || modelId !== bot.modelId ||
+    effort !== bot.effort || permission !== bot.permission
+  const selectionValid = Boolean(
+    pendingProvider && pendingProvider.catalogState === 'available' && pendingModel && permission &&
+    pendingModel.permissionModes.includes(permission) &&
+    (pendingModel.efforts.length === 0 ? effort === '' : pendingModel.efforts.includes(effort)) &&
+    (runtimeId === 'mock-offline' || pendingProvider.catalogGeneration),
+  )
+  const canSend = Boolean(readiness?.ready && !configurationChanged && !isStreaming && draft.trim())
+  const readyReason = configurationChanged
+    ? 'Apply the selected provider and model before sending.'
+    : readiness?.reason ?? 'Provider readiness is being checked by the daemon.'
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // Ignore Enter during IME composition (e.g. Vietnamese Telex/VNI, Japanese, Chinese).
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      if (canSend) {
-        onSend()
-      }
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      if (canSend) onSend()
     }
   }
 
-  const isCodexBot = bot.runtimeId === 'codex'
-  const verifiedModes = runtimeSnapshot?.verifiedPermissionModes ?? []
-  const permissionVerified =
-    isMockMode ||
-    (isCodexBot &&
-      bot.permission !== 'full-access' &&
-      verifiedModes.includes(bot.permission as 'read-only' | 'ask-approval' | 'workspace'))
-  const liveCodexReady =
-    !isMockMode &&
-    isCodexBot &&
-    runtimeSnapshot?.status === 'available' &&
-    runtimeSnapshot?.authStatus === 'connected' &&
-    permissionVerified
-  const availableModels =
-    isMockMode || !isCodexBot ? [...MOCK_MODELS] : (runtimeSnapshot?.models ?? [])
-  const activeModel =
-    availableModels.find((m) => m.id === bot.modelId) ??
-    availableModels[0] ??
-    { id: bot.modelId, label: bot.modelId, efforts: ['low', 'medium', 'high'] }
-  const canSend = (isMockMode || liveCodexReady) && !isStreaming && draft.trim().length > 0
+  const applyConfiguration = async () => {
+    if (!selectionValid || !pendingProvider || !pendingModel || !permission || savingConfiguration) return
+    setSavingConfiguration(true)
+    setConfigurationError(null)
+    try {
+      await onApplyProviderConfiguration({
+        runtimeId,
+        modelId,
+        effort,
+        permission,
+        catalogGeneration: pendingProvider.catalogGeneration ?? undefined,
+      })
+    } catch (error) {
+      setConfigurationError(error instanceof Error ? error.message : 'Provider configuration could not be saved.')
+    } finally {
+      setSavingConfiguration(false)
+    }
+  }
 
   return (
     <div className="gb-composer-wrap">
       <form
         className="gb-composer"
-        onSubmit={(e) => {
-          e.preventDefault()
+        onSubmit={(event) => {
+          event.preventDefault()
           if (canSend) onSend()
         }}
       >
@@ -82,14 +121,14 @@ export function ChatComposer({
           ref={textareaRef}
           rows={1}
           value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
+          onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={`Message ${bot.name}...`}
           aria-label={`Message ${bot.name}`}
           disabled={isStreaming}
         />
-        <div className="gb-composer-footer">
-          <div className="gb-composer-selectors">
+        <div className="gb-composer-footer" style={{ alignItems: 'flex-end' }}>
+          <div className="gb-composer-selectors" style={{ flex: '1 1 auto', minWidth: 0, alignItems: 'flex-end' }}>
             <IconButton
               label="Attach file (unavailable in Phase 1B)"
               title="Attachments (Phase 2)"
@@ -97,84 +136,57 @@ export function ChatComposer({
             >
               <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
             </IconButton>
-
-            <select
-              aria-label="Model"
-              value={bot.modelId}
-              disabled={isStreaming || availableModels.length === 0}
-              onChange={(e) => onModelChange(e.target.value)}
-            >
-              {availableModels.length === 0 ? (
-                <option value={bot.modelId}>No models discovered</option>
-              ) : (
-                <>
-                  {!availableModels.some((m) => m.id === bot.modelId) && (
-                    <option value={bot.modelId}>{bot.modelId} (Unavailable)</option>
-                  )}
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </>
+            <div style={{ minWidth: 'min(460px, 100%)', flex: '1 1 320px' }}>
+              <ProviderModelControls
+                capabilities={providerCapabilities}
+                isMockMode={isMockMode}
+                runtimeId={runtimeId}
+                modelId={modelId}
+                effort={effort}
+                permission={permission}
+                onRuntimeChange={(value) => {
+                  setRuntimeId(value)
+                  setModelId('')
+                  setEffort('')
+                  setPermission('')
+                  setConfigurationError(null)
+                }}
+                onModelChange={setModelId}
+                onEffortChange={setEffort}
+                onPermissionChange={setPermission}
+                onRefreshProviderCapabilities={onRefreshProviderCapabilities}
+                disabled={isStreaming || savingConfiguration}
+                compact
+              />
+              {configurationChanged && (
+                <button
+                  type="button"
+                  className="gb-btn-outline"
+                  onClick={() => void applyConfiguration()}
+                  disabled={!selectionValid || savingConfiguration || isStreaming}
+                  style={{ marginTop: '6px', fontSize: '11px', padding: '3px 9px' }}
+                >
+                  {savingConfiguration ? 'Saving…' : 'Apply provider settings'}
+                </button>
               )}
-            </select>
-
-            <div className="gb-composer-select-wrap">
-              <BrainCircuit size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <select
-                aria-label="Reasoning effort"
-                value={bot.effort}
-                disabled={isStreaming || availableModels.length === 0}
-                onChange={(e) => onEffortChange(e.target.value)}
-              >
-                {activeModel.efforts.map((eff) => (
-                  <option key={eff} value={eff}>
-                    {eff.charAt(0).toUpperCase() + eff.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="gb-composer-select-wrap">
-              <ShieldCheck size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <select
-                aria-label="Permission mode"
-                value={bot.permission}
-                disabled={isStreaming}
-                onChange={(e) => onPermissionChange(e.target.value as PermissionMode)}
-              >
-                <option value="read-only">Read Only</option>
-                <option
-                  value="ask-approval"
-                  disabled={!isMockMode && isCodexBot && !verifiedModes.includes('ask-approval')}
-                >
-                  Ask approval
-                </option>
-                <option
-                  value="workspace"
-                  disabled={!isMockMode && isCodexBot && !verifiedModes.includes('workspace')}
-                >
-                  Workspace Access
-                </option>
-                <option value="full-access" disabled>
-                  Full Access (Disabled)
-                </option>
-              </select>
+              {configurationError && <div role="alert" style={{ color: 'var(--gb-danger)', fontSize: '11px', marginTop: '4px' }}>{configurationError}</div>}
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <small className="gb-muted" style={{ fontSize: '11.5px' }}>
-              {isMockMode
-                ? 'Offline mock mode'
-                : liveCodexReady
-                  ? `Codex (${bot.permission})`
-                  : 'Codex unavailable'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 'none' }}>
+            <small className="gb-muted" title={readyReason} style={{ fontSize: '11.5px', maxWidth: 180 }}>
+              {configurationChanged
+                ? 'Configuration not applied'
+                : readiness ? providerReadinessLabel(readiness) : 'Checking provider…'}
             </small>
-            <ComposerSendButton canSend={canSend} stopping={isStreaming} onStop={onStop}
-              sendLabel="Send message" stopLabel="Stop generation"
-              disabledTitle="Unavailable for current mode/runtime" />
+            <ComposerSendButton
+              canSend={canSend}
+              stopping={isStreaming}
+              onStop={onStop}
+              sendLabel="Send message"
+              stopLabel="Stop generation"
+              disabledTitle={readyReason}
+            />
           </div>
         </div>
       </form>

@@ -73,10 +73,7 @@ function rowToBotRecord(row: AgentRow): BotRecord {
   const permCheck = BotPermissionSchema.safeParse(row.permission_mode)
   const permission = permCheck.success ? permCheck.data : 'ask-approval'
 
-  const effort =
-    row.effort === 'low' || row.effort === 'medium' || row.effort === 'high'
-      ? row.effort
-      : 'medium'
+  const effort = row.effort.trim().slice(0, 80)
 
   return BotRecordSchema.parse({
     id: row.id,

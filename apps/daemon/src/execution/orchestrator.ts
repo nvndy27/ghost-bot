@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type {
   AgentRuntime,
   ConversationHistoryTurn,
+  ModelInfo,
   PermissionMode,
   Session,
   SessionConfig,
@@ -746,10 +747,15 @@ export class RunOrchestrator {
           { statusCode: 400 },
         )
       }
-      if (modelMeta.efforts.length > 0 && !modelMeta.efforts.includes(preBot.effort)) {
+      if (
+        (modelMeta.efforts.length > 0 && !modelMeta.efforts.includes(preBot.effort)) ||
+        (modelMeta.efforts.length === 0 && preBot.effort !== '')
+      ) {
         throw new DaemonError(
           'EFFORT_UNSUPPORTED',
-          `Reasoning effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
+          modelMeta.efforts.length === 0
+            ? `Model "${preBot.model_id}" does not report reasoning effort support; clear the saved effort before execution.`
+            : `Reasoning effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
           { statusCode: 400 },
         )
       }
@@ -868,29 +874,40 @@ export class RunOrchestrator {
           )
         }
       }
-      const discoveredModels = await execInfo.adapter.listModels().catch(() => [])
-      if (
-        (preBot.runtime_id === 'lmstudio' ||
-          preBot.runtime_id === 'llamacpp' ||
-          preBot.runtime_id === 'ollama') &&
-        discoveredModels.length > 0 &&
-        !discoveredModels.some((m) => m.id === preBot.model_id)
-      ) {
+      let discoveredModels: ModelInfo[]
+      try {
+        discoveredModels = await execInfo.adapter.listModels()
+      } catch {
+        throw new DaemonError(
+          'MODEL_DISCOVERY_FAILED',
+          `Model discovery failed for "${preBot.runtime_id}"; refresh the catalog before execution.`,
+          { statusCode: 503, retryable: true },
+        )
+      }
+      if (discoveredModels.length === 0) {
+        throw new DaemonError(
+          'MODEL_CATALOG_UNAVAILABLE',
+          `No current model catalog is available for "${preBot.runtime_id}".`,
+          { statusCode: 503, retryable: true },
+        )
+      }
+      if (!discoveredModels.some((m) => m.id === preBot.model_id)) {
         throw new DaemonError(
           'UNSUPPORTED_MODEL',
           `Model "${preBot.model_id}" was not discovered on "${preBot.runtime_id}".`,
           { statusCode: 400 },
         )
       }
-      const matchedModel = discoveredModels.find((m) => m.id === preBot.model_id)
+      const matchedModel = discoveredModels.find((m) => m.id === preBot.model_id)!
       if (
-        matchedModel &&
-        matchedModel.efforts.length > 0 &&
-        !matchedModel.efforts.includes(preBot.effort)
+        (matchedModel.efforts.length > 0 && !matchedModel.efforts.includes(preBot.effort)) ||
+        (matchedModel.efforts.length === 0 && preBot.effort !== '')
       ) {
         throw new DaemonError(
           'UNSUPPORTED_EFFORT',
-          `Effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
+          matchedModel.efforts.length === 0
+            ? `Model "${preBot.model_id}" does not report reasoning effort support; clear the saved effort before execution.`
+            : `Effort "${preBot.effort}" is not supported by model "${preBot.model_id}".`,
           { statusCode: 400 },
         )
       }

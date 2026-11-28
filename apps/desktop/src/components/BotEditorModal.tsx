@@ -2,13 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { AVATAR_COLOR_PALETTE, avatarPresets } from '@ghost-bot/avatar/presets'
 import type { AvatarConfig, AvatarEyeStyle, PresetAvatarConfig } from '@ghost-bot/avatar/presets'
-import type { CreateBotInput, UpdateBotInput } from '@ghost-bot/shared-types/ipc'
+import type {
+  CreateBotInput,
+  RuntimeProviderCapabilitiesResponse,
+  RuntimeProviderId,
+  UpdateBotInput,
+} from '@ghost-bot/shared-types/ipc'
+import type { PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { X } from 'lucide-react'
-import { MOCK_MODELS } from '../data/mockWorkspace.ts'
 import { useModalDialog } from '../hooks/useModalDialog.ts'
 import type { AvatarStatus, WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { ProviderModelControls } from './ProviderModelControls.tsx'
 
 const AVATAR_STATES: AvatarStatus[] = [
   'idle',
@@ -28,11 +34,15 @@ const DEFAULT_PRESET_AVATAR: PresetAvatarConfig = {
   rotation: 0,
   animation: true,
 }
+type BotPermissionMode = Exclude<PermissionMode, 'full-access'>
 
 export interface BotEditorModalProps {
   open: boolean
   mode: 'create' | 'edit'
   initialBot: WorkspaceBot | null
+  isMockMode: boolean
+  providerCapabilities: RuntimeProviderCapabilitiesResponse | null
+  onRefreshProviderCapabilities: (providerId?: RuntimeProviderId) => Promise<void>
   canPickWorkspace: boolean
   canImportSvg: boolean
   onSaveCreate: (input: CreateBotInput) => Promise<void>
@@ -48,6 +58,9 @@ export function BotEditorModal({
   open,
   mode,
   initialBot,
+  isMockMode,
+  providerCapabilities,
+  onRefreshProviderCapabilities,
   canPickWorkspace,
   canImportSvg,
   onSaveCreate,
@@ -62,32 +75,10 @@ export function BotEditorModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
-  const [runtimeId, setRuntimeId] = useState<
-    | 'mock-offline'
-    | 'codex'
-    | 'openclaw'
-    | 'ollama'
-    | 'claude-api'
-    | 'gemini-api'
-    | 'kimi-acp'
-    | 'lmstudio'
-    | 'llamacpp'
-    | 'openrouter'
-  >('mock-offline')
-  const [ollamaStatus, setOllamaStatus] = useState<
-    import('@ghost-bot/shared-types/ipc').OllamaStatusDto | null
-  >(null)
-  const [claudeStatus, setClaudeStatus] = useState<
-    import('@ghost-bot/shared-types/ipc').ClaudeStatusDto | null
-  >(null)
-  const [geminiStatus, setGeminiStatus] = useState<
-    import('@ghost-bot/shared-types/ipc').GeminiStatusDto | null
-  >(null)
-  const [modelId, setModelId] = useState<string>(MOCK_MODELS[0].id)
-  const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
-  const [permission, setPermission] = useState<'read-only' | 'ask-approval' | 'workspace'>(
-    'ask-approval',
-  )
+  const [runtimeId, setRuntimeId] = useState('')
+  const [modelId, setModelId] = useState('')
+  const [effort, setEffort] = useState('')
+  const [permission, setPermission] = useState<BotPermissionMode | ''>('')
   const [workspacePath, setWorkspacePath] = useState('~')
   const [avatar, setAvatar] = useState<AvatarConfig>(DEFAULT_PRESET_AVATAR)
   const [previewState, setPreviewState] = useState<AvatarStatus>('idle')
@@ -99,57 +90,24 @@ export function BotEditorModal({
 
   useEffect(() => {
     if (!open) return
-    if (window.ghostBot?.getOllamaStatus) {
-      void window.ghostBot
-        .getOllamaStatus()
-        .then(setOllamaStatus)
-        .catch(() => setOllamaStatus(null))
-    }
-    if (window.ghostBot?.getClaudeStatus) {
-      void window.ghostBot
-        .getClaudeStatus()
-        .then(setClaudeStatus)
-        .catch(() => setClaudeStatus(null))
-    }
-    if (window.ghostBot?.getGeminiStatus) {
-      void window.ghostBot
-        .getGeminiStatus()
-        .then(setGeminiStatus)
-        .catch(() => setGeminiStatus(null))
-    }
     if (mode === 'edit' && initialBot) {
       setName(initialBot.name)
       setDescription(initialBot.description ?? '')
       setInstructions(initialBot.instructions)
-      setRuntimeId(
-        initialBot.runtimeId === 'codex' ||
-          initialBot.runtimeId === 'openclaw' ||
-          initialBot.runtimeId === 'ollama' ||
-          initialBot.runtimeId === 'claude-api' ||
-          initialBot.runtimeId === 'gemini-api' ||
-          initialBot.runtimeId === 'kimi-acp' ||
-          initialBot.runtimeId === 'lmstudio' ||
-          initialBot.runtimeId === 'llamacpp' ||
-          initialBot.runtimeId === 'openrouter'
-          ? initialBot.runtimeId
-          : 'mock-offline',
-      )
+      setRuntimeId(initialBot.runtimeId ?? '')
       setModelId(initialBot.modelId)
-      setEffort(
-        initialBot.effort === 'low' || initialBot.effort === 'high' ? initialBot.effort : 'medium',
-      )
-      setPermission(
-        initialBot.permission === 'full-access' ? 'ask-approval' : initialBot.permission,
-      )
+      setEffort(initialBot.effort)
+      setPermission(initialBot.permission as BotPermissionMode)
       setWorkspacePath(initialBot.workspacePath)
       setAvatar(initialBot.avatar)
     } else {
       setName('')
       setDescription('')
       setInstructions('')
-      setModelId(MOCK_MODELS[0].id)
-      setEffort('medium')
-      setPermission('ask-approval')
+      setRuntimeId('')
+      setModelId('')
+      setEffort('')
+      setPermission('')
       setWorkspacePath('~')
       setAvatar(DEFAULT_PRESET_AVATAR)
     }
@@ -235,6 +193,31 @@ export function BotEditorModal({
       setErrorMsg('Workspace path is required.')
       return
     }
+    const existing = mode === 'edit' ? initialBot : null
+    const routingChanged = !existing || runtimeId !== existing.runtimeId || modelId !== existing.modelId ||
+      effort !== existing.effort || permission !== existing.permission
+    let selectedCatalogGeneration: string | undefined
+    if (routingChanged) {
+      const provider = providerCapabilities?.providers.find((candidate) => candidate.id === runtimeId)
+      const model = provider?.models.find((candidate) => candidate.id === modelId)
+      if (!runtimeId || !provider || provider.catalogState !== 'available' || !model) {
+        setErrorMsg('Choose a provider and a currently discovered model before saving this routing change.')
+        return
+      }
+      if ((model.efforts.length > 0 && !model.efforts.includes(effort)) || (model.efforts.length === 0 && effort !== '')) {
+        setErrorMsg(model.efforts.length ? 'Choose a reasoning effort reported for this model.' : 'Clear the saved reasoning effort; this model reports no effort choices.')
+        return
+      }
+      if (!permission || !model.permissionModes.includes(permission)) {
+        setErrorMsg('Choose a permission mode reported as supported for this provider model.')
+        return
+      }
+      if (runtimeId !== 'mock-offline' && !provider.catalogGeneration) {
+        setErrorMsg('The provider catalog has no current identity. Refresh models and select again.')
+        return
+      }
+      selectedCatalogGeneration = provider.catalogGeneration ?? undefined
+    }
     setSubmitting(true)
     setErrorMsg(null)
     try {
@@ -247,8 +230,9 @@ export function BotEditorModal({
           runtimeId,
           modelId,
           effort,
+          catalogGeneration: selectedCatalogGeneration,
           workspacePath: workspacePath.trim(),
-          permission,
+          permission: permission as CreateBotInput['permission'],
         })
       } else if (initialBot) {
         await onSaveEdit({
@@ -258,13 +242,16 @@ export function BotEditorModal({
             description: description.trim(),
             instructions: instructions.trim(),
             avatar,
-            runtimeId,
-            modelId,
-            effort,
             ...(workspacePath.trim() === initialBot.workspacePath
               ? {}
               : { workspacePath: workspacePath.trim() }),
-            permission,
+            ...(routingChanged ? {
+              runtimeId,
+              modelId,
+              effort,
+              permission: permission as BotPermissionMode,
+              catalogGeneration: selectedCatalogGeneration,
+            } : {}),
           },
         })
       }
@@ -282,7 +269,7 @@ export function BotEditorModal({
         ref={modalRef}
         tabIndex={-1}
         className="gb-modal"
-        style={{ maxWidth: '640px' }}
+        style={{ maxWidth: '510px' }}
       >
         <div className="gb-modal-head">
           <strong>{mode === 'create' ? 'Create bot' : `Edit ${initialBot?.name ?? 'bot'}`}</strong>
@@ -565,192 +552,32 @@ export function BotEditorModal({
             />
           </label>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
-            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>Runtime</span>
-              <select
-                data-testid="bot-runtime-select"
-                value={runtimeId}
-                onChange={(e) => {
-                  const next = e.target.value as
-                    | 'mock-offline'
-                    | 'codex'
-                    | 'openclaw'
-                    | 'ollama'
-                    | 'claude-api'
-                    | 'gemini-api'
-                    | 'kimi-acp'
-                    | 'lmstudio'
-                    | 'llamacpp'
-                    | 'openrouter'
-                  setDirty(true)
-                  setRuntimeId(next)
-                  if (next === 'ollama') {
-                    setPermission('read-only')
-                    if (ollamaStatus && ollamaStatus.models.length > 0) {
-                      setModelId(ollamaStatus.models[0].id)
-                    }
-                  } else if (next === 'claude-api') {
-                    setPermission('read-only')
-                    if (claudeStatus && claudeStatus.models.length > 0) {
-                      setModelId(claudeStatus.models[0].id)
-                    }
-                  } else if (next === 'gemini-api') {
-                    setPermission('read-only')
-                    if (geminiStatus && geminiStatus.models.length > 0) {
-                      setModelId(geminiStatus.models[0].id)
-                    }
-                  } else if (
-                    next === 'kimi-acp' ||
-                    next === 'lmstudio' ||
-                    next === 'llamacpp' ||
-                    next === 'openrouter'
-                  ) {
-                    setPermission('read-only')
-                  }
-                }}
-              >
-                <option value="mock-offline">Mock Offline</option>
-                <option value="codex">Codex (ChatGPT)</option>
-                <option value="openclaw">OpenClaw Gateway</option>
-                <option value="ollama">Ollama Local</option>
-                <option value="claude-api">Anthropic Claude API (API-key billed)</option>
-                <option value="gemini-api">Google Gemini API (API key)</option>
-                <option value="kimi-acp">Kimi Code ACP</option>
-                <option value="lmstudio">LM Studio (Local)</option>
-                <option value="llamacpp">llama.cpp Server (Local)</option>
-                <option value="openrouter">OpenRouter API (API-key billed)</option>
-              </select>
-            </label>
-
-            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>
-                {runtimeId === 'ollama'
-                  ? 'Model (Ollama)'
-                  : runtimeId === 'claude-api'
-                    ? 'Model (Claude API)'
-                    : runtimeId === 'gemini-api'
-                      ? 'Model (Gemini API)'
-                      : 'Model (mock)'}
-              </span>
-              <select
-                data-testid="bot-model-select"
-                value={modelId}
-                onChange={(e) => {
-                  setDirty(true)
-                  setModelId(e.target.value)
-                }}
-              >
-                {runtimeId === 'ollama' ? (
-                  ollamaStatus && ollamaStatus.models.length > 0 ? (
-                    ollamaStatus.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                        {m.parameterSize ? ` (${m.parameterSize})` : ''}
-                      </option>
-                    ))
-                  ) : (
-                    <option value={modelId}>
-                      {ollamaStatus?.available
-                        ? 'No local Ollama models installed'
-                        : 'Ollama unavailable (127.0.0.1:11434)'}
-                    </option>
-                  )
-                ) : runtimeId === 'claude-api' ? (
-                  claudeStatus && claudeStatus.models.length > 0 ? (
-                    claudeStatus.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))
-                  ) : (
-                    <option value={modelId}>
-                      {claudeStatus?.credentialConfigured
-                        ? 'API-billed model discovery requires explicit opt-in'
-                        : 'Configure Anthropic API key in Settings'}
-                    </option>
-                  )
-                ) : runtimeId === 'gemini-api' ? (
-                  geminiStatus && geminiStatus.models.length > 0 ? (
-                    geminiStatus.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))
-                  ) : (
-                    <option value={modelId}>
-                      {geminiStatus?.credentialConfigured
-                        ? 'API model discovery requires explicit opt-in'
-                        : 'Configure Gemini API key in Settings'}
-                    </option>
-                  )
-                ) : (
-                  MOCK_MODELS.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-
-            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>Effort</span>
-              {(() => {
-                const supportedEfforts =
-                  runtimeId === 'mock-offline' || runtimeId === 'codex'
-                    ? ['low', 'medium', 'high']
-                    : []
-                const effortDisabled = supportedEfforts.length === 0
-                return (
-                  <select
-                    data-testid="bot-effort-select"
-                    value={effort}
-                    disabled={effortDisabled}
-                    title={
-                      effortDisabled
-                        ? 'Effort selection is not supported by this provider'
-                        : undefined
-                    }
-                    onChange={(e) => {
-                      setDirty(true)
-                      setEffort(e.target.value as 'low' | 'medium' | 'high')
-                    }}
-                  >
-                    {effortDisabled ? (
-                      <option value={effort}>Not supported by provider</option>
-                    ) : (
-                      <>
-                        {supportedEfforts.includes('low') && <option value="low">Low</option>}
-                        {supportedEfforts.includes('medium') && (
-                          <option value="medium">Medium</option>
-                        )}
-                        {supportedEfforts.includes('high') && <option value="high">High</option>}
-                      </>
-                    )}
-                  </select>
-                )
-              })()}
-            </label>
-
-            <label style={{ display: 'grid', gap: '4px', fontSize: '12.5px' }}>
-              <span>Permission</span>
-              <select
-                value={permission}
-                onChange={(e) => {
-                  setDirty(true)
-                  setPermission(e.target.value as 'read-only' | 'ask-approval' | 'workspace')
-                }}
-              >
-                <option value="read-only">Read Only</option>
-                <option value="ask-approval">Ask approval</option>
-                <option value="workspace">Workspace Access</option>
-                <option value="full-access" disabled>
-                  Full Access (Disabled)
-                </option>
-              </select>
-            </label>
-          </div>
+          {mode === 'edit' && initialBot?.runtimeId === 'mock-offline' && !isMockMode && (
+            <div className="gb-card" role="status" style={{ fontSize: '12.5px' }}>
+              This bot is configured for Offline Mock. Its identity and conversations are preserved.
+              Choose a discovered real provider and model below to change its execution configuration.
+            </div>
+          )}
+          <ProviderModelControls
+            capabilities={providerCapabilities}
+            isMockMode={isMockMode}
+            runtimeId={runtimeId}
+            modelId={modelId}
+            effort={effort}
+            permission={permission}
+            onRuntimeChange={(value) => {
+              setDirty(true)
+              setRuntimeId(value)
+              setModelId('')
+              setEffort('')
+              setPermission('')
+            }}
+            onModelChange={(value) => { setDirty(true); setModelId(value) }}
+            onEffortChange={(value) => { setDirty(true); setEffort(value) }}
+            onPermissionChange={(value) => { setDirty(true); setPermission(value) }}
+            onRefreshProviderCapabilities={onRefreshProviderCapabilities}
+            disabled={submitting}
+          />
 
           <div style={{ display: 'grid', gap: '4px', fontSize: '13px' }}>
             <span>Workspace path</span>

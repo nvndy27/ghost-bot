@@ -114,6 +114,10 @@ export class RuntimeRegistry {
   private lifecycleState: RuntimeLifecycleState = 'disconnected'
   private stopped = false
   private readonly persistentAdapters = new Map<string, AgentRuntime>()
+  private readonly providerModelCatalogs = new Map<
+    string,
+    { binding: string; models: ModelInfo[]; observedAt: string }
+  >()
 
   constructor(options: RuntimeRegistryOptions) {
     this.options = options
@@ -129,6 +133,28 @@ export class RuntimeRegistry {
 
   getLifecycleState(): RuntimeLifecycleState {
     return this.lifecycleState
+  }
+
+  rememberProviderModels(runtimeId: string, binding: string, models: ModelInfo[]): string {
+    const observedAt = new Date().toISOString()
+    this.providerModelCatalogs.set(runtimeId, {
+      binding,
+      models: models.map((model) => ({ ...model, efforts: [...model.efforts], permissionModes: [...model.permissionModes] })),
+      observedAt,
+    })
+    return observedAt
+  }
+
+  getRememberedProviderModels(runtimeId: string, binding: string): {
+    models: ModelInfo[]
+    observedAt: string
+  } | null {
+    const entry = this.providerModelCatalogs.get(runtimeId)
+    if (!entry || entry.binding !== binding) return null
+    return {
+      models: entry.models.map((model) => ({ ...model, efforts: [...model.efforts], permissionModes: [...model.permissionModes] })),
+      observedAt: entry.observedAt,
+    }
   }
 
   /**
@@ -671,11 +697,11 @@ export class RuntimeRegistry {
   async getTeamRoutingCatalogs(): Promise<import('@ghost-bot/shared-types/ipc').TeamMemberRoutingDto['catalogs']> {
     const snapshot = await this.getSnapshot(false)
     if (snapshot.runtimeMode === 'mock') {
-      const models = [...snapshot.models,
-        { id: 'gpt-6.2-mock', label: 'GPT-6.2 (Mock)', efforts: ['low', 'medium', 'high'] },
-        { id: 'codex-mock', label: 'Codex (Mock)', efforts: ['low', 'medium', 'high'] },
-      ]
-      return ['mock-offline', 'mock'].map((runtimeId) => ({ runtimeId, accountId: 'mock-account', models }))
+      return ['mock-offline', 'mock'].map((runtimeId) => ({
+        runtimeId,
+        accountId: 'mock-account',
+        models: snapshot.models,
+      }))
     }
     if (snapshot.status === 'available' && snapshot.authStatus === 'connected' &&
         snapshot.authMethod === 'chatgpt' && this.lastAccountKey) {
@@ -919,6 +945,7 @@ export class RuntimeRegistry {
       await adapter.disconnect().catch(() => {})
     }
     this.persistentAdapters.clear()
+    this.providerModelCatalogs.clear()
     if (this.codexClient) {
       const client = this.codexClient
       this.codexClient = null

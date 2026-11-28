@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SessionRecord } from '@ghost-bot/shared-types/ipc'
+import type { SelectedBotReadiness, SessionRecord } from '@ghost-bot/shared-types/ipc'
 import {
   Archive,
   Check,
   CheckCheck,
   Ellipsis,
-  MessageSquare,
+  History,
   PanelLeft,
   PanelRight,
   Pencil,
@@ -15,12 +15,14 @@ import {
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { providerReadinessLabel } from '../state/providerReadiness.ts'
 
 export interface ChatHeaderProps {
   bot: WorkspaceBot | null
   leftCollapsed: boolean
   rightCollapsed: boolean
   isMockMode: boolean
+  selectedBotReadiness?: SelectedBotReadiness | null
   sessions?: SessionRecord[]
   activeSessionId?: string | null
   onSelectSession?: (sessionId: string) => void
@@ -49,6 +51,7 @@ export function ChatHeader({
   leftCollapsed,
   rightCollapsed,
   isMockMode,
+  selectedBotReadiness,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -134,9 +137,11 @@ export function ChatHeader({
             size={32}
             label={`${bot.name} avatar`}
           />
-          <strong className="gb-chat-header-title">{bot.name}</strong>
+          <strong className="gb-chat-header-title" title={bot.name}>{bot.name}</strong>
           <span className="gb-badge">
-            {isMockMode ? 'Mock UI' : 'Codex Ready'}
+            {selectedBotReadiness?.botId === bot.id
+              ? providerReadinessLabel(selectedBotReadiness)
+              : isMockMode ? 'Checking offline demo' : 'Checking provider'}
           </span>
           <div style={{ flex: 1 }} />
           {sessions && sessions.length > 0 && onSelectSession && (
@@ -169,7 +174,7 @@ export function ChatHeader({
                 active={popoverOpen}
                 onClick={() => setPopoverOpen((v) => !v)}
               >
-                <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
               </IconButton>
               {unreadSessionsCount > 0 && (
                 <span
@@ -342,7 +347,7 @@ export function ChatHeader({
               style={{ fontSize: 12, padding: '4px 10px' }}
             >
               <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <span>New chat</span>
+              <span className="gb-new-chat-label">New chat</span>
             </button>
           )}
           <IconButton

@@ -53,6 +53,7 @@ export const IPC_CHANNELS = {
   SETTINGS_RESET: 'ghost:settings:reset',
   SETTINGS_MIGRATE_LOCAL: 'ghost:settings:migrate-local',
   RUNTIME_SNAPSHOT: 'ghost:runtime:snapshot',
+  RUNTIME_PROVIDER_CAPABILITIES: 'ghost:runtime:provider-capabilities',
   SESSIONS_LIST: 'ghost:sessions:list',
   SESSIONS_CREATE: 'ghost:sessions:create',
   SESSIONS_RENAME: 'ghost:sessions:rename',
@@ -271,8 +272,8 @@ export const BotRecordSchema = z.object({
   instructions: z.string().max(4000),
   avatar: BotAvatarConfigSchema,
   runtimeId: z.string().min(1).max(64),
-  modelId: z.string().min(1).max(128),
-  effort: z.enum(['low', 'medium', 'high']),
+  modelId: z.string().min(1).max(256),
+  effort: z.string().trim().max(80),
   workspacePath: z.string().min(1).max(512),
   permission: BotPermissionSchema,
   createdAt: z.string().min(1),
@@ -294,8 +295,9 @@ export const CreateBotInputSchema = z.object({
   instructions: z.string().trim().max(4000).default(''),
   avatar: BotAvatarConfigSchema,
   runtimeId: z.string().min(1).max(64).default('mock-offline'),
-  modelId: z.string().min(1).max(128).default('gpt-6.2-mock'),
-  effort: z.enum(['low', 'medium', 'high']).default('medium'),
+  modelId: z.string().min(1).max(256).default('gpt-6.2-mock'),
+  effort: z.string().trim().max(80).default('medium'),
+  catalogGeneration: z.string().min(1).max(512).optional(),
   workspacePath: z.string().trim().min(1).max(512).default('~'),
   permission: BotPermissionSchema.default('ask-approval'),
 })
@@ -311,8 +313,9 @@ export const UpdateBotInputSchema = z.object({
       instructions: z.string().trim().max(4000).optional(),
       avatar: BotAvatarConfigSchema.optional(),
       runtimeId: z.string().min(1).max(64).optional(),
-      modelId: z.string().min(1).max(128).optional(),
-      effort: z.enum(['low', 'medium', 'high']).optional(),
+      modelId: z.string().min(1).max(256).optional(),
+      effort: z.string().trim().max(80).optional(),
+      catalogGeneration: z.string().min(1).max(512).optional(),
       workspacePath: z.string().trim().min(1).max(512).optional(),
       permission: BotPermissionSchema.optional(),
     })
@@ -362,7 +365,7 @@ export const AppearanceSettingsSchema = z.object({
   theme: z.enum(['system', 'dark', 'light']).default('dark'),
   reducedMotion: z.boolean().default(false),
   leftWidth: z.number().min(180).max(380).default(240),
-  rightWidth: z.number().min(220).max(420).default(285),
+  rightWidth: z.number().min(220).max(2048).default(400),
   leftCollapsed: z.boolean().default(false),
   rightCollapsed: z.boolean().default(false),
   workspaceTab: WorkspaceTabIdSchema.default('overview'),
@@ -527,6 +530,110 @@ export const RuntimeSnapshotParamsSchema = z
   .object({ refresh: z.boolean().optional() })
   .strict()
   .optional()
+
+export const RuntimeProviderIdSchema = z.enum([
+  'codex',
+  'openclaw',
+  'ollama',
+  'claude-api',
+  'gemini-api',
+  'kimi-acp',
+  'lmstudio',
+  'llamacpp',
+  'openrouter',
+  'mock-offline',
+])
+export type RuntimeProviderId = z.infer<typeof RuntimeProviderIdSchema>
+
+export const ProviderCatalogStateSchema = z.enum([
+  'available',
+  'not-discovered',
+  'unavailable',
+  'not-authorized',
+  'stale',
+  'failed',
+])
+
+export const ProviderModelCapabilitySchema = z.object({
+  id: z.string().min(1).max(256),
+  label: z.string().min(1).max(256),
+  efforts: z.array(z.string().min(1).max(80)).max(64),
+  permissionModes: z.array(BotPermissionSchema).max(4),
+  supportsTools: z.boolean(),
+  supportsAttachments: z.boolean(),
+})
+
+export const RuntimeProviderCapabilitySchema = z.object({
+  id: RuntimeProviderIdSchema,
+  label: z.string().min(1).max(80),
+  kind: z.enum(['subscription', 'api', 'local', 'mock']),
+  installed: z.boolean().nullable(),
+  available: z.boolean(),
+  configured: z.boolean(),
+  accountRef: z.string().max(128).nullable(),
+  accountLabel: z.string().max(128).nullable(),
+  authentication: z.enum(['connected', 'disconnected', 'pending', 'error', 'unverified', 'not-applicable']),
+  authenticationDetail: z.string().max(500),
+  catalogState: ProviderCatalogStateSchema,
+  catalogObservedAt: z.string().datetime().nullable(),
+  catalogGeneration: z.string().max(512).nullable(),
+  models: z.array(ProviderModelCapabilitySchema).max(100),
+  permissionModes: z.array(BotPermissionSchema).max(4),
+  capabilities: z.object({
+    streaming: z.boolean(),
+    cancellation: z.boolean(),
+    resume: z.boolean(),
+    approvals: z.boolean(),
+    sandbox: z.boolean(),
+    tools: z.boolean(),
+    attachments: z.boolean(),
+  }),
+  executionReady: z.boolean(),
+  executionReason: z.string().max(500),
+  diagnostics: z.array(z.string().max(500)).max(12),
+})
+
+export type RuntimeProviderCapability = z.infer<typeof RuntimeProviderCapabilitySchema>
+
+export const SelectedBotReadinessSchema = z.object({
+  botId: BotIdSchema.nullable(),
+  runtimeId: z.string().max(64).nullable(),
+  accountRef: z.string().max(128).nullable(),
+  status: z.enum([
+    'ready',
+    'mock',
+    'runtime-unavailable',
+    'provider-not-configured',
+    'authentication-required',
+    'catalog-unavailable',
+    'model-unavailable',
+    'effort-unsupported',
+    'permission-unsupported',
+    'workspace-unavailable',
+    'execution-gated',
+  ]),
+  ready: z.boolean(),
+  reason: z.string().max(500),
+  catalogGeneration: z.string().max(512).nullable(),
+  modelLabel: z.string().max(256).nullable(),
+})
+export type SelectedBotReadiness = z.infer<typeof SelectedBotReadinessSchema>
+
+export const RuntimeProviderCapabilitiesParamsSchema = z.object({
+  botId: BotIdSchema.optional(),
+  refresh: z.boolean().optional(),
+  /** Explicit user action. Only the authorized API providers may perform remote model discovery. */
+  discoverProviderId: z.enum(['claude-api', 'gemini-api', 'openrouter']).optional(),
+}).strict()
+export type RuntimeProviderCapabilitiesParams = z.infer<typeof RuntimeProviderCapabilitiesParamsSchema>
+
+export const RuntimeProviderCapabilitiesResponseSchema = z.object({
+  runtimeMode: z.enum(['codex', 'mock']),
+  observedAt: z.string().datetime(),
+  providers: z.array(RuntimeProviderCapabilitySchema).length(10),
+  selectedBot: SelectedBotReadinessSchema.nullable(),
+})
+export type RuntimeProviderCapabilitiesResponse = z.infer<typeof RuntimeProviderCapabilitiesResponseSchema>
 
 export const SessionIdSchema = z.string().trim().min(1).max(100)
 export const RunIdSchema = z.string().trim().min(1).max(100)
@@ -2578,6 +2685,9 @@ export interface GhostBotBridge {
   resetSettings(): Promise<AppSettings>
   migrateLocalSettings(legacy: Partial<AppearanceSettingsInput>): Promise<AppSettings>
   getRuntimeSnapshot(refresh?: boolean): Promise<RuntimeSnapshot>
+  getRuntimeProviderCapabilities(
+    input?: RuntimeProviderCapabilitiesParams,
+  ): Promise<RuntimeProviderCapabilitiesResponse>
   listSessions(params: { agentId: string; limit?: number; offset?: number }): Promise<SessionsListResponse>
   createSession(input: CreateSessionInput): Promise<SessionRecord>
   renameSession(input: RenameSessionInput): Promise<SessionRecord>

@@ -41,13 +41,27 @@ async function createFixture() {
     leadBotId: 'chief',
     memberBotIds: ['chief', 'developer'],
   })
-  return { dataDir, db, sessionRepo, registry, teams, routing, discussion, team }
+  return { dataDir, db, botRepo, sessionRepo, registry, teams, routing, discussion, team }
 }
 
 test('Alpha.1C supports 2-round bounded discussion, inherited routing, and leaves personal sessions isolated', async () => {
   const fx = await createFixture()
   try {
+    // Distinct global selections make inherited dispatch observable in the fixture.
+    await fx.botRepo.updateBot({ id: 'chief', patch: { modelId: 'gpt-6.2-mock', effort: 'low' } })
+    await fx.botRepo.updateBot({ id: 'developer', patch: { modelId: 'codex-mock', effort: 'high' } })
+    const otherTeam = fx.teams.createTeam({
+      name: 'Discussion Isolation Team',
+      leadBotId: 'chief',
+      memberBotIds: ['chief', 'developer'],
+    })
     const personalSess = fx.sessionRepo.createSession({ agentId: 'chief', title: 'Personal' })
+    const inherited = await Promise.all([
+      fx.routing.get({ teamId: fx.team.id, botId: 'chief' }),
+      fx.routing.get({ teamId: fx.team.id, botId: 'developer' }),
+    ])
+    assert.deepEqual(inherited.map((choice) => choice.effective.modelId), ['gpt-6.2-mock', 'codex-mock'])
+    assert.ok(inherited.every((choice) => choice.override === null && choice.supported))
     const turn = await fx.discussion.send({
       teamId: fx.team.id,
       operationId: '00000000-0000-4000-8000-000000000001',
@@ -65,8 +79,33 @@ test('Alpha.1C supports 2-round bounded discussion, inherited routing, and leave
         ['developer', 2],
       ],
     )
-    assert.equal(turn.replies[0].routing.modelId, 'gpt-6.2-mock')
-    assert.equal(turn.replies[1].routing.modelId, 'codex-mock')
+    assert.deepEqual(
+      turn.replies.map((reply) => [reply.botId, reply.round, reply.routing.modelId, reply.routing.effort]),
+      [
+        ['chief', 1, 'gpt-6.2-mock', 'low'],
+        ['developer', 1, 'codex-mock', 'high'],
+        ['chief', 2, 'gpt-6.2-mock', 'low'],
+        ['developer', 2, 'codex-mock', 'high'],
+      ],
+    )
+
+    const scopedOverride = await fx.routing.set({
+      teamId: fx.team.id,
+      botId: 'developer',
+      override: { modelId: 'mock-model', effort: 'medium' },
+    })
+    assert.equal(scopedOverride.effective.modelId, 'mock-model')
+    const overriddenTurn = await fx.discussion.send({
+      teamId: fx.team.id,
+      operationId: '00000000-0000-4000-8000-000000000004',
+      text: '@all use scoped routing',
+    })
+    assert.deepEqual(
+      overriddenTurn.replies.map((reply) => [reply.botId, reply.routing.modelId]),
+      [['chief', 'gpt-6.2-mock'], ['developer', 'mock-model']],
+    )
+    assert.equal((await fx.routing.get({ teamId: otherTeam.id, botId: 'developer' })).effective.modelId, 'codex-mock')
+    assert.equal(fx.botRepo.getBot('developer')?.modelId, 'codex-mock')
     assert.equal(fx.sessionRepo.getSessionMessages(personalSess.id).total, 0)
   } finally {
     fx.db.close()

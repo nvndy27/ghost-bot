@@ -182,7 +182,9 @@ test('Provider.7: Unified multi-provider execution through GhostBotDaemon, RunOr
     authToken,
     port: 0,
     dataDir,
-    runtimeMode: 'mock',
+    runtimeMode: 'codex',
+    // Keep the unified provider tests independent of a host Codex install/profile.
+    codexVersion: '0.171.0',
     secretStore,
     testProviderAdapters: {
       openrouter: openRouterAdapter,
@@ -254,12 +256,31 @@ test('Provider.7: Unified multi-provider execution through GhostBotDaemon, RunOr
     assert.equal(lmConfigRes.data.executionAuthorized, true)
 
     // 4. Create bots for LM Studio, OpenRouter, and gated runtimes (OpenClaw, Ollama, Kimi, Claude, Gemini)
-    const createBot = async (name: string, runtimeId: string, modelId: string) => {
+    const createBot = async (name: string, runtimeId: string, modelId: string, effort = '') => {
+      const catalog = await apiJson<{
+        providers: Array<{
+          id: string
+          catalogState: string
+          catalogGeneration: string | null
+          models: Array<{ id: string; efforts: string[]; permissionModes: string[] }>
+        }>
+      }>(port, authToken, 'POST', '/runtime/provider-capabilities', {
+        refresh: true,
+        ...(runtimeId === 'claude-api' || runtimeId === 'gemini-api' || runtimeId === 'openrouter'
+          ? { discoverProviderId: runtimeId }
+          : {}),
+      })
+      assert.equal(catalog.status, 200)
+      const provider = catalog.data.providers.find((item) => item.id === runtimeId)
+      assert.equal(provider?.catalogState, 'available', `Expected a discovered ${runtimeId} catalog`)
+      assert.ok(provider?.catalogGeneration)
+      assert.ok(provider.models.some((item) => item.id === modelId), `Expected ${modelId} in the discovered ${runtimeId} catalog`)
       const res = await apiJson<{ id: string }>(port, authToken, 'POST', '/bots', {
         name,
         runtimeId,
         modelId,
-        effort: 'medium',
+        effort,
+        catalogGeneration: provider.catalogGeneration,
         permission: 'read-only',
         workspacePath: workspaceDir,
         instructions: 'Be concise.',
@@ -292,7 +313,9 @@ test('Provider.7: Unified multi-provider execution through GhostBotDaemon, RunOr
         text,
       })
 
-    // 4a. Fail-closed checks: unauthorized/unavailable providers MUST return 403/501 and never fall back to Codex/mock
+    // 4a. A provider bot cannot be configured from a guessed model or a missing
+    // catalog generation. The daemon must fail closed before creating a session
+    // or allowing any possible Codex/mock fallback.
     for (const [runtimeId, modelId] of [
       ['openclaw', 'openclaw-default'],
       ['ollama', 'llama3.2'],
@@ -302,15 +325,16 @@ test('Provider.7: Unified multi-provider execution through GhostBotDaemon, RunOr
       ['gemini-api', 'gemini-2.5-flash'],
       ['openrouter', 'openai/gpt-4o-mini'],
     ] as const) {
-      const botId = await createBot(`${runtimeId} Bot`, runtimeId, modelId)
-      const sessionId = await createSession(botId)
-      const runRes = await startRun<{ code?: string }>(port, sessionId, 'Should fail closed')
-      assert.equal(
-        runRes.status,
-        403,
-        `Expected 403 PERMISSION_DENIED for unconfigured/gated ${runtimeId}, got ${runRes.status}`,
+      const rejected = await apiJson<{ code?: string }>(port, authToken, 'POST', '/bots', {
+        name: `${runtimeId} Bot`, runtimeId, modelId, effort: 'medium',
+        permission: 'read-only', workspacePath: workspaceDir, instructions: 'Be concise.',
+        avatar: { kind: 'preset', shape: 'assistant', color: '#2563eb', eyes: 'classic', rotation: 0, animation: false },
+      })
+      assert.equal(rejected.status, 409, `Expected configuration to require a current catalog for ${runtimeId}`)
+      assert.ok(
+        rejected.data.code === 'MODEL_DISCOVERY_REQUIRED' || rejected.data.code === 'MODEL_CATALOG_STALE',
+        `Unexpected ${runtimeId} configuration result: ${JSON.stringify(rejected.data)}`,
       )
-      assert.equal(runRes.data.code, 'PERMISSION_DENIED')
     }
 
     // 5. LM Studio end-to-end execution through RunOrchestrator + RuntimePolicyBroker + real loopback HTTP
@@ -444,7 +468,8 @@ test('Provider.7: Unified multi-provider execution through GhostBotDaemon, RunOr
       authToken,
       port: 0,
       dataDir,
-      runtimeMode: 'mock',
+      runtimeMode: 'codex',
+      codexVersion: '0.171.0',
       secretStore,
     })
     try {

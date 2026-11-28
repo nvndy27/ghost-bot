@@ -204,6 +204,7 @@ test('Alpha.2F Electron Output filters, cancels, isolates and recovers persisted
     await output.getByTestId('output-refresh-btn').click()
     const pending = output.getByTestId(`output-entry-run-summary:${fixture.pendingId}`)
     await pending.getByText('Run awaiting_approval', { exact: true }).waitFor()
+    assert.equal(await page.locator(`[data-testid="output-cancel-${fixture.pendingId}"]`).count(), 1)
     await pending.getByRole('button', { name: 'Cancel', exact: true }).click()
     const cancelledTitle = pending.getByText('Run cancelled', { exact: true })
     const outputError = output.getByTestId('output-error-banner')

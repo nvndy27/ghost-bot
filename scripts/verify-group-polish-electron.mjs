@@ -162,7 +162,7 @@ try {
   const delegateBox = await page.getByRole('button', { name: 'Delegate task' }).boundingBox()
   assert.ok(delegateBox.x - mentionBox.x < 100)
   assert.ok(sendBox.x > delegateBox.x + delegateBox.width)
-  assert.equal(await send.evaluate((button) => getComputedStyle(button).borderRadius), '50%')
+  assert.equal(await send.evaluate((button) => getComputedStyle(button).borderRadius), '10px')
   await composer.press('Enter')
   await page.locator('.gb-discussion-user').waitFor()
   await page.getByText(/Round 2/).first().waitFor()
