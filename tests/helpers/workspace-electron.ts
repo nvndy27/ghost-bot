@@ -20,9 +20,12 @@ export async function launchWorkspaceElectron(dataDir: string) {
   delete env.GHOST_BOT_DEV_URL
   const app = await electron.launch({
     executablePath: packaged ?? join(desktop, 'node_modules', '.bin', 'electron'),
-    args: packaged ? [] : [join(desktop, 'dist-electron', 'main.js')],
+    args: packaged ? [] : [
+      ...(process.platform === 'linux' && process.env.WAYLAND_DISPLAY ? ['--ozone-platform=wayland'] : []),
+      join(desktop, 'dist-electron', 'main.js'),
+    ],
     cwd: packaged ? dataDir : desktop,
-    chromiumSandbox: Boolean(packaged),
+    chromiumSandbox: true,
     env: {
       ...env,
       ...(packaged?.endsWith('.AppImage') ? { APPIMAGE_EXTRACT_AND_RUN: '1' } : {}),

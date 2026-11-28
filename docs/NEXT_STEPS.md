@@ -2,9 +2,11 @@
 
 ## Unified v0.1 release candidate — integration checkpoint
 
-**In Progress** — Draft PR #53 converges the accepted Alpha.4C head `63992bb9f8544fae8205e36f8ceafce333991bb7` with release tooling PR #52 at `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05`, preserving both histories. Hosted CI and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`; independent review then blocked that exact head on four release-tooling findings. The focused runner correction now passes 7/7 offline tests and is ready to publish on the same PR. The corrected head then needs its own required checks and exact-head delta review. Maintainer visual approval and actual packaged acceptance remain open. No release or package build is authorized; v0.1 remains unreleased.
+**In Progress** — Draft PR #53 preserves the Alpha.3C, Alpha.4A, Alpha.4B, Alpha.4C and release-tooling histories. Source and release-tooling checkpoint `22e704aa8b6d57a41cfa71a132bd8dd4fd41ad4b` has passing hosted CI/CodeQL and focused independent acceptance. This final UI inspection found and fixed the Group editor width and narrow Output controls/cancellation duplication; local focused Electron tests, lint, typecheck and source build passed. Publish this exact delta, obtain its required hosted checks and focused review, then request maintainer visual acceptance. Actual packaged acceptance remains open. No release or package build is authorized; v0.1 remains unreleased.
 
 ## Alpha.4 integration handoff
+
+Review the final actual-Electron captures for the five requested areas. Sidebar, bot creation, Files/Editor and Changes were left unchanged after inspection found no concrete defect. Group editor width and narrow Output filters/cancellation were corrected. The local before/after captures are in `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/alpha4-final-maintainer-polish/`; screenshots remain outside Git. Hosted checks for the published delta and maintainer visual acceptance are the next gates.
 
 Alpha.3C PR #49 remains provisional until maintainer merge approval. Agent 2 accepted exact head `5a8c69d`, and required hosted CI passed. Alpha.4A PR #50 proceeds independently from that checkpoint. Agent 2 consumes the shared V03.2 contract and owns Workspace-specific UI. Reconcile the two feature histories before integrated visual acceptance. Final packages follow UI approval and candidate freeze.
 

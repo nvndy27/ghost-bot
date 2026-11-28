@@ -3,7 +3,7 @@
 ## Alpha.4 integrated release candidate
 
 - The runtime exposes one usage projection and no enumerable account identity catalog. The compact Usage surface reports other-account usage unavailable; Workspace no longer duplicates provider quota.
-- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The targeted Alpha.4C test correction delta is independently accepted. Hosted CI and CodeQL passed on `117a0c2`; independent review blocked that exact SHA on four release-runner findings. The corrected SHA needs fresh checks and focused delta review. Maintainer visual approval remains pending.
+- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The accepted source/release-tooling checkpoint is `22e704aa8b6d57a41cfa71a132bd8dd4fd41ad4b`; its hosted checks and focused independent acceptance are complete. Final local Electron inspection found and corrected the Group editor width and narrow Output controls/cancellation duplication. This new polish delta still needs publication, its own hosted checks and maintainer visual approval.
 - Persisted widths remain compatible and are bounded only when rendered. New profiles use the approved 400px Workspace default; desktop and narrow effective bounds do not rewrite saved widths.
 
 

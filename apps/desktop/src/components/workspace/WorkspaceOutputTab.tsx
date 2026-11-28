@@ -5,6 +5,13 @@ import type {
 } from '@ghost-bot/shared-types/ipc'
 import './workspace-output.css'
 
+function cancelTargetKey(entry: WorkspaceOutputEntry): string {
+  const command = entry.source === 'terminal' || entry.source === 'build'
+  return command
+    ? `command:${entry.runId}:${entry.taskId ?? ''}`
+    : `run:${entry.runId}`
+}
+
 export interface WorkspaceOutputTabProps {
   contextKey: string
   contextKind: 'bot' | 'team'
@@ -99,6 +106,22 @@ export function WorkspaceOutputTab({
       return true
     })
   }, [clearedAt, data, runFilter, searchQuery, severityFilter, sourceFilter])
+
+  const cancellationActionEntryByTarget = useMemo(() => {
+    const latest = new Map<string, string>()
+    if (contextKind !== 'bot') return latest
+    for (const entry of filteredEntries) {
+      if (entry.cancellable && entry.id === `run-summary:${entry.runId}`) {
+        latest.set(cancelTargetKey(entry), entry.id)
+      }
+    }
+    for (const entry of filteredEntries) {
+      if (entry.cancellable && !latest.has(cancelTargetKey(entry))) {
+        latest.set(cancelTargetKey(entry), entry.id)
+      }
+    }
+    return latest
+  }, [contextKind, filteredEntries])
 
   useEffect(() => {
     if (autoScroll && streamRef.current) {
@@ -289,8 +312,10 @@ export function WorkspaceOutputTab({
             No execution output recorded for this context.
           </span>
         ) : (
-          filteredEntries.map((entry) => (
-            <article
+          filteredEntries.map((entry) => {
+            const showCancel = entry.cancellable &&
+              cancellationActionEntryByTarget.get(cancelTargetKey(entry)) === entry.id
+            return <article
               key={entry.id}
               className="gb-output-entry"
               data-testid={`output-entry-${entry.id}`}
@@ -310,7 +335,7 @@ export function WorkspaceOutputTab({
                   <span className="gb-muted" style={{ fontSize: 11 }}>
                     {new Date(entry.timestamp).toLocaleTimeString()}
                   </span>
-                  {entry.cancellable && contextKind === 'bot' && (
+                  {showCancel && (
                     <button
                       type="button"
                       className="gb-workspace-icon-btn"
@@ -325,7 +350,7 @@ export function WorkspaceOutputTab({
               <strong style={{ fontSize: 12 }}>{entry.title}</strong>
               <pre className="gb-output-pre">{entry.message}</pre>
             </article>
-          ))
+          })
         )}
       </div>
     </div>

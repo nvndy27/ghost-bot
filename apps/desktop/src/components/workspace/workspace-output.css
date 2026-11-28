@@ -79,5 +79,5 @@
   color: var(--gb-text);
 }
 
-.gb-output-select { flex: 1; max-width: 100%; }
+.gb-output-select { flex: 1 1 100px; min-width: 90px; max-width: 100%; }
 .gb-output-controls .gb-workspace-icon-btn { min-height: 28px; }
