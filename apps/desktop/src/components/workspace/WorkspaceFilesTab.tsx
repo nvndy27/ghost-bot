@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Folder, PanelLeft } from 'lucide-react'
+import { IconButton } from '../IconButton.tsx'
 import { WorkspaceCodeEditor } from './WorkspaceCodeEditor.tsx'
 import { WorkspacePreview, WorkspaceSearch } from './WorkspaceDiscoveryPanel.tsx'
 import {
@@ -51,6 +53,11 @@ export function WorkspaceFilesTab({
     () => injectedDiscovery === undefined ? getWorkspaceDiscoveryTransport() : injectedDiscovery,
     [injectedDiscovery],
   )
+  const layoutRef = useRef<HTMLDivElement | null>(null)
+  const treeDrag = useRef<{ x: number; width: number } | null>(null)
+  const [treeWidth, setTreeWidth] = useState(145)
+  const [narrow, setNarrow] = useState(true)
+  const [explorer, setExplorer] = useState<'auto' | 'open' | 'closed'>('auto')
   const [previewTarget, setPreviewTarget] = useState<{ key: string; relativePath: string } | null>(null)
   const [jumpTo, setJumpTo] = useState<{ relativePath: string; lineNumber: number } | null>(null)
 
@@ -79,6 +86,7 @@ export function WorkspaceFilesTab({
   }, [contextKind, ownerId])
 
   const currentState = store.getActiveWorkspaceState(contextKey)
+  const explorerVisible = explorer === 'open' || (explorer === 'auto' && (!narrow || !currentState?.activePath))
 
   const loadDirectory = useCallback(
     async (
@@ -325,6 +333,14 @@ export function WorkspaceFilesTab({
     }
   }
 
+  useEffect(() => {
+    const element = layoutRef.current
+    if (!element) return
+    const observer = new ResizeObserver(() => setNarrow(element.clientWidth <= 360))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [contextLoading, contextKey])
+
   if (!transport) {
     return (
       <section className="gb-workspace-placeholder" data-testid="workspace-files-unavailable">
@@ -440,6 +456,17 @@ export function WorkspaceFilesTab({
 
   return (
     <div className="gb-files-tab" data-testid="workspace-files-tab">
+      <div className="gb-files-project-bar">
+        <IconButton label="Toggle explorer" pressed={explorerVisible} aria-expanded={explorerVisible}
+          aria-controls="workspace-explorer" data-testid="workspace-explorer-toggle"
+          onClick={() => setExplorer(explorerVisible ? 'closed' : 'open')}>
+          <PanelLeft size={17} aria-hidden="true" />
+        </IconButton>
+        <Folder size={16} aria-hidden="true" />
+        <span className="gb-files-root-path" title={currentState.contextInfo.canonicalRoot ?? undefined}>
+          {currentState.contextInfo.canonicalRoot?.split('/').filter(Boolean).at(-1)}
+        </span>
+      </div>
       <div className="gb-files-meta-bar">
         <span
           className="gb-files-root-path"
@@ -517,7 +544,16 @@ export function WorkspaceFilesTab({
           onClose={() => setPreviewTarget(null)} />
       )}
 
-      <div className="gb-files-layout">
+      <div ref={layoutRef} className="gb-files-layout" data-narrow={narrow}
+        data-explorer-visible={explorerVisible}
+        style={{ gridTemplateColumns: explorerVisible && !narrow ? `minmax(90px, min(50%, ${treeWidth}px)) 5px minmax(0, 1fr)` : 'minmax(0, 1fr)' }}>
+        <div id="workspace-explorer" className="gb-files-explorer" hidden={!explorerVisible}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && narrow) {
+              setExplorer('closed')
+              event.currentTarget.closest('.gb-files-tab')?.querySelector<HTMLButtonElement>('[data-testid="workspace-explorer-toggle"]')?.focus()
+            }
+          }}>
         <WorkspaceFileTree
           rootPath={currentState.contextInfo.canonicalRoot ?? ''}
           directories={currentState.directories}
@@ -525,7 +561,7 @@ export function WorkspaceFilesTab({
           selectedFilePath={currentState.activePath}
           canWrite={currentState.contextInfo.canWrite}
           onToggleDir={handleToggleDir}
-          onSelectFile={selectFile}
+          onSelectFile={(path) => { selectFile(path); if (narrow) setExplorer('auto') }}
           onRefresh={() => void refreshContextAndRoot()}
           onCreateEntry={
             selector && transport.createEntry && currentState.contextInfo.authGeneration
@@ -554,6 +590,24 @@ export function WorkspaceFilesTab({
           }
         />
 
+        </div>
+        {explorerVisible && !narrow && <div role="separator" tabIndex={0}
+          className="gb-files-tree-resize" aria-label="Resize file explorer" aria-orientation="vertical"
+          aria-valuemin={90} aria-valuemax={260} aria-valuenow={treeWidth}
+          onPointerDown={(event) => {
+            treeDrag.current = { x: event.clientX, width: treeWidth }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={(event) => {
+            if (treeDrag.current) setTreeWidth(Math.max(90, Math.min(260, treeDrag.current.width + event.clientX - treeDrag.current.x)))
+          }}
+          onPointerUp={() => { treeDrag.current = null }}
+          onPointerCancel={() => { treeDrag.current = null }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            event.preventDefault()
+            setTreeWidth((value) => Math.max(90, Math.min(260, value + (event.key === 'ArrowRight' ? 10 : -10))))
+          }} />}
         <WorkspaceCodeEditor
           tabs={currentState.tabs}
           jumpTo={jumpTo}

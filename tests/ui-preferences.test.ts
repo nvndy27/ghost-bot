@@ -19,7 +19,10 @@ test('UiPreferencesSchema validates bounds and rejects invalid persisted payload
   assert.equal(valid.leftCollapsed, true)
 
   assert.equal(UiPreferencesSchema.safeParse({ leftWidth: 50 }).success, false)
-  assert.equal(UiPreferencesSchema.safeParse({ rightWidth: 999 }).success, false)
+  assert.equal(UiPreferencesSchema.safeParse({ rightWidth: 285 }).success, true)
+  assert.equal(UiPreferencesSchema.safeParse({ rightWidth: 999 }).success, true)
+  assert.equal(UiPreferencesSchema.safeParse({ rightWidth: 2048 }).success, true)
+  assert.equal(UiPreferencesSchema.safeParse({ rightWidth: 2049 }).success, false)
   assert.equal(UiPreferencesSchema.safeParse({ theme: 'neon' }).success, false)
 })
 

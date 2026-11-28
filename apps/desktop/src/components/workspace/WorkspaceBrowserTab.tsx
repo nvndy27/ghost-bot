@@ -1,3 +1,4 @@
+import { ArrowLeft, ArrowRight, Camera, Monitor, Plus, RefreshCw, Smartphone, Square, Terminal, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type { WorkspaceBrowserState } from '@ghost-bot/shared-types/ipc'
 import './workspace-browser.css'
@@ -54,7 +55,11 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
 
   const syncBounds = useCallback(() => {
     if (!supported || !bridge) return
-    if (!visible || !activeTab || !activeTab.url || !viewportRef.current) {
+    const obscured = Array.from(document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"], [popover]:popover-open, .gb-modal-backdrop, .gb-conv-popover, .gb-group-composer-popover',
+    ))
+      .some((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
+    if (obscured || !visible || !activeTab || !activeTab.url || !viewportRef.current) {
       void bridge.setWorkspaceBrowserBounds(null).catch(() => {})
       return
     }
@@ -88,10 +93,16 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
       }
     }
     const observer = new ResizeObserver(() => syncBounds())
+    const overlays = new MutationObserver(() => syncBounds())
+    overlays.observe(document.body, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden'] })
+    document.addEventListener('scroll', syncBounds, true)
     observer.observe(el)
     window.addEventListener('resize', syncBounds)
     return () => {
       observer.disconnect()
+      overlays.disconnect()
+      document.removeEventListener('scroll', syncBounds, true)
       window.removeEventListener('resize', syncBounds)
       if (supported && bridge) {
         void bridge.setWorkspaceBrowserBounds(null).catch(() => {})
@@ -181,46 +192,46 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
                 style={{ padding: '0 2px', border: 0, fontSize: 11 }}
                 onClick={() => void runCommand({ kind: 'close', tabId: tab.id })}
               >
-                ×
+                <X size={14} aria-hidden="true" />
               </button>
             </div>
           )
         })}
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           onClick={() => void runCommand({ kind: 'new' })}
-          aria-label="New browser tab"
+          aria-label="New browser tab" title="New browser tab"
           data-testid="browser-new-tab-btn"
         >
-          + Tab
+          <Plus size={16} aria-hidden="true" />
         </button>
       </div>
 
       <div className="gb-browser-toolbar">
         <button
           type="button"
-          className="gb-workspace-icon-btn"
-          disabled={!activeTab?.back}
+          className="gb-icon-btn"
+          title="Browser back" disabled={!activeTab?.back}
           onClick={() => activeTab && void runCommand({ kind: 'back', tabId: activeTab.id })}
           aria-label="Browser back"
           data-testid="browser-back-btn"
         >
-          ←
+          <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           disabled={!activeTab?.forward}
           onClick={() => activeTab && void runCommand({ kind: 'forward', tabId: activeTab.id })}
-          aria-label="Browser forward"
+          aria-label="Browser forward" title="Browser forward"
           data-testid="browser-forward-btn"
         >
-          →
+          <ArrowRight size={16} aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           disabled={!activeTab}
           onClick={() =>
             activeTab &&
@@ -229,10 +240,10 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
               tabId: activeTab.id,
             })
           }
-          aria-label={activeTab?.loading ? 'Stop loading' : 'Reload page'}
+          aria-label={activeTab?.loading ? 'Stop loading' : 'Reload page'} title={activeTab?.loading ? 'Stop loading' : 'Reload page'}
           data-testid="browser-reload-btn"
         >
-          {activeTab?.loading ? 'Stop' : 'Reload'}
+          {activeTab?.loading ? <Square size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
         </button>
 
         <form className="gb-browser-url-form" onSubmit={(e) => void handleNavigate(e)}>
@@ -256,7 +267,7 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
 
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           disabled={!activeTab}
           aria-pressed={activeTab?.preset === 'mobile'}
           onClick={() =>
@@ -267,30 +278,30 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
               preset: activeTab.preset === 'desktop' ? 'mobile' : 'desktop',
             })
           }
-          aria-label="Toggle desktop or mobile viewport"
+          aria-label="Toggle desktop or mobile viewport" title="Toggle desktop or mobile viewport"
           data-testid="browser-viewport-btn"
         >
-          {activeTab?.preset === 'mobile' ? 'Mobile' : 'Desktop'}
+          {activeTab?.preset === 'mobile' ? <Smartphone size={16} aria-hidden="true" /> : <Monitor size={16} aria-hidden="true" />}
         </button>
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           disabled={!activeTab?.url}
           onClick={() => void handleScreenshot()}
-          aria-label="Capture browser screenshot"
+          aria-label="Capture browser screenshot" title="Capture browser screenshot"
           data-testid="browser-screenshot-btn"
         >
-          Shot
+          <Camera size={16} aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="gb-workspace-icon-btn"
+          className="gb-icon-btn"
           aria-pressed={showConsole}
           onClick={() => setShowConsole((prev) => !prev)}
-          aria-label="Toggle browser console"
+          aria-label="Toggle browser console" title="Toggle browser console"
           data-testid="browser-console-btn"
         >
-          Console ({activeTab?.console.length ?? 0})
+          <Terminal size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -322,7 +333,7 @@ export function WorkspaceBrowserTab({ visible, isMockMode }: WorkspaceBrowserTab
             </span>
             <button
               type="button"
-              className="gb-workspace-icon-btn"
+              className="gb-icon-btn"
               onClick={() => setScreenshotUrl(null)}
             >
               Dismiss

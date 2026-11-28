@@ -1,12 +1,43 @@
 # Progress log
 
+## Alpha.4A V03.2 shared UI and Chat
+
+**Implemented** — Provisional baseline Alpha.3C `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`, Draft PR #49, independently accepted with passing required CI. The actual approved archive SHA-256 is `85f495035c61f2387b215de983c09249baa6f69b3c3e9920c82d215410b6bd67`; all six internal checksums passed. Shared contract checkpoint `85f4b7f2c486ece800a82e8dd7f9c450d7389647` publishes semantic tokens and compatible component/Workspace boundaries in PR #50.
+
+The shell adds a persistent compact rail, independent sidebar scrolling and footer Usage. Chat uses approved tokens, 750 px content, 48–160 px textarea, 34 px composer actions and compact header behavior. Settings/Accounts and the Bot editor preserve their production callbacks and configuration while adopting the approved geometry. Usage displays only daemon snapshot windows, statuses, observation time and errors. The snapshot cannot enumerate per-provider account identities, so other-account quota is explicitly unavailable. Agent 2 owns Workspace UI and removal of the old Overview usage duplicate.
+
+Focused Group/organization/routing/private-task modules passed 13/13. The existing Group workflow passed avatar modes/crop/restart, member routing, discussion, approval, cancellation, summaries and narrow layout. Lint, desktop typecheck and source build passed. The affected Workspace shell suite passed 3/3, including actual Electron theme/resize/collapse/restart and native-grant checks. The Alpha.4A offline Electron fixture covers compact persistence, responsive search, personal drafts and auto-grow, Accounts, real mock discussion, all 12 avatars, usage unavailable/error handling and light/dark capture. Captures include the usage refresh error with an offline IPC failure fixture. The final Alpha.4A Electron run passed after the assistant-identity, compact-empty-state, footer alignment and popover-focus corrections. Final visual evidence is retained locally under ghost-bot-coordination/alpha4a-screenshots. Publication is through Draft PR #50. No package or inference ran. Production IPC, migrations and runtime gates are preserved.
+
+
+## Alpha.3C unified checkpoint
+
+**Implemented** — Provisional convergence of Alpha.3A PR #47 at `f6716739e5ba9897c9a77e4fd3d0a2096a436202` and Alpha.3B PR #48 at `140b591dfe79dec3760365ea36c965e608f2cc24` on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. Both histories, the CSP attachment and acknowledged-save timing corrections, and all nine provider plans are preserved. Reconciliation changes documentation only. Existing tests are reused. Required CI and Agent 2 focused acceptance gate merging.
+
+The maintainer has now approved V03.2 for Alpha.4 implementation. Agent 1 proceeds with shared and Chat UI on this provisional checkpoint while Agent 2 owns Workspace UI independently. Final candidate freeze and Agent 2 package verification follow UI acceptance. v0.1 remains unreleased.
+
+
+## Accepted release baseline — 2026-11-28
+
+PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
+
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. Alpha.4 UI acceptance requires maintainer scope approval before final candidate freeze and a single final package build and verification cycle.
+
+
+## Alpha.3B documentation checkpoint
+
+**Implemented** — Updated the release capability matrix, nine adapter acceptance plans, audience-specific checklist and Alpha.3A/Alpha.4/freeze/final-packaging handoff. Documentation validation checks local links, the scoped diff and whitespace. Existing test, CI and package evidence is reused. This assignment runs zero inference, builds or runtime tests. Publication and maintainer review remain separate from release approval.
+
+## Historical integration evidence
+
+The dated and provisional checkpoints below retain their original scope. The accepted PR #46 baseline above supersedes their integration and review gates.
+
 ## Unified Alpha.1 and Alpha.2
 
 The integration candidate preserves main `815023b7dc134fe5fc4037ccf434db2ae3d34b1f`, Alpha.1 PR #44 at `c9d332d39d1df4a2429d52c7dbba94bb5444db34` (including PR #42 at `bdb6c75d37fcab1d38473cdd77f7f5d55d969acf`) and coordinated Workspace PR #45 successor `871190743d8a35735cfb895c0a4a85629a2fe228`, which contains the pinned icon refinement `c174875bcfa9fded3f08fbec09f9eacdba6ec541`. Branding PR #38 stays separate.
 
 The PR #42 regression fixtures delegate through the authorized boundary and hold dispatch. Concurrent contenders with one operation ID and different assignees preserve the winning task, session, dispatch and stored metadata. The unified candidate closes the personal Workspace panel and draft handoff in Private Task Chat, stops admitting new discussion and task requests during daemon shutdown, and persists appearance changes as ordered, field-specific updates. Existing migrations `0001–0014` and the Alpha.3 executable harness are preserved.
 
-Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Required hosted CI, Agent 2 acceptance and maintainer visual approval are pending. No inference or package acceptance ran on the unified candidate.
+Lint, recursive typecheck and build passed. Focused tests passed 31/31 for daemon IPC, permission gates, settings persistence, fresh and legacy database fixtures, routing, discussion, delegation and summaries. The PR #42 correction independently passed 7/7. Final hosted CI and Agent 2 acceptance passed at `c08c4a7`, followed by PR #46 merge. Final release UI acceptance remains subject to maintainer scope approval. No inference or package acceptance ran on the unified candidate.
 
 All six Workspace scenarios passed in local offline Electron with Git and PDF sandbox enforcement before the coordinated Output delta. The Group Chat Electron run passed native avatar content validation and restart persistence, member routing and two-round discussion, single-action task approval, cancellation, summary navigation and Private Task Workspace isolation. Two Personal Chat launches passed conversation switching during a mock run, provider and grant changes, sidebar and tab restoration, and read-only save denial. The Group composer and five icon-only Workspace tabs were checked together at 900 px in dark and light. Personal Workspace tabs also passed in both themes at 220 px. Synthetic screenshots are stored locally for maintainer review.
 
@@ -24,7 +55,7 @@ After merging the Workspace successor, affected lint, daemon typecheck, desktop 
 
 Hosted PR #45 at `c174875bcfa9fded3f08fbec09f9eacdba6ec541` reproduced the Computer Use Chrome SUID helper abort while passing Workspace. CI returns to the known-good Jammy runner with a checksum-pinned Bubblewrap 0.13.1 build and distinct namespace preflights. The runtime launches, containment tests and Chromium sandbox requirements stay in force.
 
-The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The exact hosted check remains required.
+The upstream archive hash and build were reproduced inside an unprivileged Jammy container. Both CI preflights and 12/12 targeted isolation regressions passed with that binary mounted at the production path on Fedora. Lint, recursive typecheck and build passed. The final PR #46 hosted check subsequently passed. Preserve the earlier failure and remediation as historical evidence.
 
 Personal Workspace Output now excludes marked private-task sessions and legacy linked team sessions for listing and cancellation. Focused output module and Electron checks passed. The same targeted scenario passed in a rebuilt Fedora AppImage, including Linux sandbox checks and mock daemon restart. This evidence applies to the Workspace branch. See [cause, validation and unified handoff](extensions/alpha2g-workspace-convergence.md#alpha3-hosted-isolation-remediation).
 
@@ -42,7 +73,7 @@ Stage, unstage and revert remain **Blocked**. The Git lock probe confirmed coope
 
 Lint, all workspace typechecks and build passed. Linux sandbox-required regressions passed 17/17, including real mock-runtime Electron Files, Changes, discovery and Output with stubbed native dialog decisions. The Git scenario refreshed an external index and working-tree edit without modifying the index or unrelated files. Daemon IPC and discovery passed 12/12, including mutation denial before consent, after native read and Files write grants, and after write revocation. Denial preserved the external index, pending lock and working-tree bytes. These checks cover read-only inspection and denial. Mutation execution and recovery from a partially committed Git write remain unverified.
 
-PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. Agent 1 owns follow-up.
+PR #37 received a [Changes requested verdict](https://github.com/nvndy27/ghost-bot/pull/37#issuecomment-7217574184) at `9bb9e3c0eb98046f96f0193b32924432a23f5711` for Private Task Chat delegation, restart recovery and cancellation. Its two offline fixture tests passed. The integrity follow-up and restart regression correction were subsequently incorporated through PR #42 and PR #46.
 
 ## Alpha.2C.2 write hardening (PR #39)
 
@@ -52,7 +83,7 @@ Lint, all workspace typechecks and build, and 14/14 focused tests passed. The da
 
 ## Alpha.2C.1 shared discovery integration
 
-**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance is pending with Agent 2. Reconcile against accepted main before merge. Zero live inference.
+**Tested** — Provisional base PR #21 at `1e2858fc8dfdf6b9ecb324c71154d31c0dac7e1f` with PR #22 at `a58686e17c47a9f92642da1cea9dfe41244a9dae` merged by ancestry. Native-grant search, preview and cancellation routes, Electron bridge and conversation-scoped draft insertion are wired. Lint, affected typechecks, desktop build and 5/5 daemon IPC tests passed. Combined Electron acceptance and reconciliation were subsequently completed through PR #46. Zero live inference.
 
 ## Shared baseline convergence
 
@@ -389,3 +420,76 @@ Phase 2D is **Verified** (**PASS** with authorized RPM packaging deferral to Pha
 | Verified | Initialized `main` and pushed starter commit `4af838c` to the authorized private repository. |
 | Verified | Node 24.22.3, Codex 0.172.0 and OpenClaw CLI 2026.11.8 (2d4ab29). |
 | Tested | `npm test` passed four offline tests. Strict TypeScript check and JavaScript syntax checks passed. |
+
+## Alpha.3A packaging readiness — 2026-11-28
+
+**In Progress** on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. Added the packaged harness CSP attachment wait while retaining all assertions. Inspected the two Linux packaging paths, embedded daemon startup and external prerequisite handling. Reused accepted integration/package evidence. Main CI and CodeQL were in progress at the one permitted check. No package rebuild, installation or live inference. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md) for executable final-build and host acceptance steps.
+
+Alpha.3A validation **Tested** — lint, recursive typechecks and the focused Browser Electron CSP scenario passed (1/1, existing `1071688` AppImage). Four prepared Bash blocks passed syntax validation. No package rebuild or host installation. Final platform acceptance remains **Blocked** on final artifacts and target hosts.
+
+## Alpha.3A targeted file-save regression — 2026-11-28
+
+**Tested** — Reproduced the main CI empty-content assertion by pausing the daemon at save admission in the affected Electron scenario. Disabled Save was an in-flight state. Updated the test to await the acknowledged clean state before its unchanged exact disk-content assertion. The gated reproduction and corrected ordinary scenario passed against the existing `1071688` AppImage. Persistence, external conflicts, dirty buffers and revocation assertions remain intact. No production or package changes. Complete-suite verification belongs to hosted CI on the updated PR #47.
+
+Targeted save correction checks passed lint, recursive typechecks and `git diff --check`. The unmodified local scenario passed before fault injection, confirming timing sensitivity. The daemon-paused old predicate reproduced the exact CI failure. Both the corrected gated experiment and normal focused scenario passed 1/1.
+## Alpha.4B V03.2 Workspace implementation — 2026-11-28
+
+**Tested** — Started at exact provisional Alpha.3A `f6716739e5ba9897c9a77e4fd3d0a2096a436202`, then preserved Alpha.3C `5a8c69d` and Agent 1 shared tokens/contract `85f4b7f` by ancestry. Archive SHA-256 `85f495035c61f2387b215de983c09249baa6f69b3c3e9920c82d215410b6bd67`; all six internal hashes passed. Implemented Workspace header/tabs, Overview hierarchy, Explorer/Editor split and narrow overlay, compact Changes/Browser/Output presentation and native-view occlusion while renderer overlays are visible. Actual production state/IPC and all gates retained.
+
+Lint, desktop typecheck and desktop build passed. Five affected Files/discovery/Git/Browser/Output Electron scenarios passed. Shell and the added Alpha.4B layout/capture scenario passed 2/2 after updating the exact light-background assertion to approved V03.2 `#fdfdfc`. The original assertion caught the intentional palette change. Earlier layout fixture failures led to correcting automatic Explorer restoration on widening and refreshing the renderer after synthetic setup. All final affected scenarios passed. Captures cover the five tabs in Dark/Light/System at 1440×900, Files at 1280×720 and 1920×1080, 220px and maximized layouts, and Group Overview.
+
+Focused independent Alpha.3C review accepted `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`, with all reported hosted checks green and both Alpha.3A/3B histories preserved. No tests or packages were repeated for that documentation review. Maintainer visual approval and the shared App width/Usage Center/Tools navigation handoff remain pending. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md). No package rebuild, inference, backend, IPC or migration change.
+
+Final Alpha.4B capture acceptance passed 1/1 with loaded-bot and effective-theme waits. These state-based waits corrected screenshot fixture timing without delays. Twenty-four actual Electron PNGs were retained. The capture-only test was linted after the final correction.
+
+Final Group Overview refinement follows the approved task/current-task/diagnostics hierarchy. Runtime, permission, concurrency and uncertainty information remains accessible, and safety notices stay visible. The affected capture/layout scenario passed 1/1 with diagnostics checks after the refinement. Affected lint/typechecks and desktop build passed.
+
+## Alpha.4C shared UI convergence — 2026-11-28
+
+**Tested** — On `integration/alpha4-unified`, preserved Alpha.3C `5a8c69d`, Alpha.4A `3d35918` and Alpha.4B `41623c5` by history-preserving merges. Reconciled V03.2 Workspace width/default behavior, Tools & MCP Settings navigation, canonical sidebar Usage, and native Browser occlusion for shared overlays. New profiles use the 400 px Workspace default; existing saved widths remain intact and are bounded visually to 220 px / 65% desktop, with <=760 px overlay up to 90% viewport.
+
+Lint, recursive typecheck, desktop source build, focused bounds tests (2/2), Alpha.4B Electron layout test (1/1 final screenshot run), Browser Electron test (2/2), Alpha.4A Electron scenario and `git diff --check` passed. Actual offline Electron captures are under `design/reviews/alpha4c-shared/` and `design/reviews/alpha4c-workspace/`. No inference or package build. Exact final SHA, CI and review verdict will be recorded in the published convergence PR. Maintainer visual approval and Agent 2 combined review remain pending.
+
+## Alpha.4C targeted hosted CI closure — 2026-11-28
+
+**Tested** — On the existing PR #53 branch, corrected stale tests for the 400px default, 65% desktop sizing at 900px, canonical sidebar Provider usage, and persisted widths through 2048px. Reproduced the invisible PDF tree entry: the desktop Explorer was already expanded, and the old unconditional toggle collapsed it before selection. The Electron test now checks `aria-expanded`, opens only when collapsed, and asserts entry visibility before clicking. No production changes. Alpha.2A shell Electron 3/3, discovery Electron 1/1, preference and Alpha.4C bounds 4/4, and Alpha.4B Workspace Electron 1/1 passed. Agent 2 accepted this exact test/documentation delta; combined PR #53 CI and maintainer visual approval remain separate gates. No package build or inference.
+
+## Alpha.4C and Alpha.3A release-tooling convergence — 2026-11-28
+
+**Implemented** — Normal merge commit `2fe3df18098b73e603f8171fc4320e6236d4632b` integrates exact Alpha.4C PR #53 head `63992bb9f8544fae8205e36f8ceafce333991bb7` and release tooling PR #52 head `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05` on accepted main `bae63048978ea0188d784a4d53910f3fb31cd552`. The only merge conflict was `docs/PROGRESS.md`; both Alpha.4C and release-tooling evidence were retained. Alpha.3C, Alpha.4A, Alpha.4B and the shared V03.2 contract remain in candidate ancestry.
+
+Reviewed and integrated the read-only Linux prerequisite checker and mock-only artifact upgrade runner. Tightened the runner to require packaged Chromium sandbox/context isolation/no Node integration, strip sandbox/code-injection environment overrides, and compare the full previous migration version/name sequence as an unchanged ordered prefix. No production source, migration, dependency, lockfile or security-gate changes.
+
+**Tested** — Both scripts pass `node --check`; workspace lint passed (scripts are excluded by the configured ESLint ignore, so their syntax was checked directly). The Linux prerequisite checker passed read-only probes on Fedora 45 GNOME Wayland: declared host dependencies, `/dev/fuse`/helper, Bubblewrap namespace, Poppler, Git and Chrome sandbox prerequisites were present. Ghost Bot RPM/launcher is not installed and Ubuntu is not this host. The upgrade runner's same-artifact refusal exited 2 before creating evidence. `phase-2d-recovery` 3/3, `alpha1d-private-task-chat` 3/3, and `alpha1c-discussion-migration` 1/1 passed. `git diff --check` passed. Existing Alpha.4C focused Electron evidence and Agent 2 acceptance at `63992bb` are reused. Hosted CI and CodeQL later passed on exact SHA `117a0c208247439f47442404e0cbdace92477806`; independent review then blocked that SHA on four tooling findings, so the corrected head needs its own checks and focused delta review.
+
+**Blocked** — No distinct previous/candidate release artifact pair was used, no packages were built, and artifact upgrade/restart, installed launcher, native AppImage launch, Ubuntu acceptance and optional native write-grant expiry remain unverified. No live inference or credentials were used. v0.1 remains unreleased.
+
+## Targeted release tooling hardening — 2026-11-28
+
+**In Progress** — Independent review of PR #53 at `117a0c208247439f47442404e0cbdace92477806` confirmed four blockers. The runner now strips inherited renderer-development and Electron override variables, checks packaged main-frame identity, tracks launched Electron instances before validation, requires bounded cleanup of owned Electron/daemon descendants before profile deletion, checks the precise expired native-write-grant error and absent target, and snapshots durable run/task/session/dispatch/approval/usage/message/event identities around startup and idempotent retries. Focused offline synthetic regression tests pass 7/7, including renderer mismatch, launch-validation failure, cleanup failure, unrelated daemon PID, grant-error mismatch and duplicate/replay injections. Workspace lint, three Node syntax checks and `git diff --check` pass. These tests exercise runner logic, not an actual package pair. Historical CI/CodeQL PASS applies only to `117a0c2`; the corrected SHA requires new hosted checks and exact-head delta review.
+
+**Blocked** — Actual two-artifact upgrade/restart, optional interactive native grant expiry, packaged renderer launch, platform package/launcher acceptance and v0.1 distribution remain unverified. No packages, host installations, live inference or credentials are used by this correction.
+
+## Final maintainer UI acceptance — 2026-11-28
+
+**Tested** — Resumed on the accepted `integration/alpha4-unified` checkpoint `22e704aa8b6d57a41cfa71a132bd8dd4fd41ad4b`. Restored the pinned Electron 36.9.5 binary using the project-local official install script after frozen-lockfile installation/rebuild left it absent; no manifest, lockfile, dependency version or system setting changed. Built source with `pnpm build` and launched the real sandboxed Electron app with a disposable mock profile and sanitized environment. Verified `no-sandbox` is false, Chromium sandbox and context isolation are enabled, and Node integration is disabled.
+
+Inspected Sidebar, bot/group creation, Workspace Files & Editor, Changes and Output at desktop, compact and narrow widths. Sidebar, bot creation, Files/Editor and Changes showed no concrete defect and were left unchanged. Group creation was 620px despite the approved shared-modal max-width of 510px; it now uses the contract width. At the 220px Workspace width, Output filters were only 62px and clipped labels; they now wrap to legible rows. One pending run exposed one Cancel button per event (seven for one run); Output now exposes one cancellation action per run or distinct terminal/build command target. Added focused checks and made the Playwright Electron helper retain Chromium sandboxing, adding Wayland selection only when the host advertises it.
+
+`alpha4-final-ui-polish.test.ts` 1/1, `alpha2f-execution-output.test.ts` 2/2, `alpha4b-workspace-ui.test.ts` 1/1, `pnpm lint`, `pnpm typecheck`, `pnpm build` and `git diff --check` passed. Actual before/after synthetic Electron screenshots are stored outside Git in `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/alpha4-final-maintainer-polish/`. No live inference, package build, grant expansion or security-gate change. The published polish delta needs hosted CI and maintainer visual acceptance; packaged release checks remain separate.
+
+## Alpha.4 Output cancellation target correction — 2026-11-28
+
+**Tested** — Independent review `6096777632` of exact head `d34aaf164bb9f29e1424a266541de66518744c9d` found nullable terminal/build `taskId` values produced an empty command key and could dispatch whole-run cancellation. The renderer now creates command cancellation targets only for non-empty IDs and uses the same validated request builder at the click-handler boundary. Distinct command IDs remain distinct; duplicate events share one control; run summaries remain preferred with filtered-entry fallback; team contexts remain non-cancellable. No daemon or IPC contract change.
+
+Focused cancellation unit cases pass 4/4, existing Alpha.2F Output service/Electron regression passes 2/2, and the final UI polish Electron test passes 1/1. `pnpm lint`, `pnpm typecheck` and `pnpm build` pass. This is offline/mock evidence; it does not constitute live inference or package acceptance. The corrected exact head still requires hosted CI/CodeQL and independent delta acceptance. RC1 remains blocked until that acceptance is recorded.
+
+## Alpha.3A release acceptance tooling — 2026-11-28
+
+**Implemented** — Branch `feat/release-acceptance-tooling` is based on Alpha.3C `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`. Added `scripts/verify-release-upgrade.mjs`, which requires explicit previous/candidate executable artifacts and candidate source SHA, rejects identical artifact hashes, uses a private synthetic profile and mock runtime, verifies bot/avatar and conversation persistence, migration/data IDs/content, private-task identity/session isolation, idempotent retries, interrupted-run recovery, Workspace settings, optional native read/write grant expiry, workspace canary preservation and daemon exit. It emits a JSON evidence record with source and artifact hashes and unsupported checks.
+
+**Implemented** — Added `scripts/check-linux-release-prerequisites.mjs`. It reports Fedora RPM runtime packages and launcher presence, FUSE prerequisites, Ubuntu session context, Bubblewrap namespace behavior, Chrome sandbox helper ownership/mode and required host tools. It makes no installation, download, mount or permission changes.
+
+**Tested** — Both scripts passed `node --check`; `git diff --check` passed. The prerequisite checker ran on Fedora 45 GNOME Wayland x86_64. Required Git/Bubblewrap/prlimit/Poppler tools, Chrome and a root-owned `04755` Chrome sandbox helper were present; a read-only Bubblewrap user namespace probe passed; FUSE device/helper and explicit Fedora RPM dependencies were present. Ghost Bot's RPM launcher was not installed and Ubuntu was not the current host.
+
+**Blocked** — No distinct previous and candidate executable artifact pair is available locally. The upgrade runner was not run against package artifacts. It rejects identical hashes to prevent a false upgrade claim. Final candidate migration/restart behavior, native grant-expiry interaction, Fedora RPM launcher, AppImage native FUSE and Ubuntu desktop remain release acceptance dependencies. No package was built and no host package was installed.

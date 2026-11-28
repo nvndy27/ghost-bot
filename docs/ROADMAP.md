@@ -1,5 +1,12 @@
 # Roadmap
 
+## Accepted release baseline — 2026-11-28
+
+PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
+
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. V03.2 implementation scope is approved; maintainer visual acceptance and integrated CI remain gates before candidate freeze and the single final package build/verification cycle.
+
+
 States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. See [progress](PROGRESS.md) for test evidence.
 
 ## Product release track — v0.1 Personal & Friends Alpha
@@ -15,9 +22,9 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Gate: at least one verified live provider path remains functional; each advertised live provider/capability has matching evidence; unsupported paths fail closed with clear status; no unauthorized inference or billing.
 
 ### Alpha.1 — Group Bot & private task collaboration
-- **Tested** — Original Private Task integrity fixes and compact Group Chat polish are included in the unified Alpha.1 and Alpha.2 candidate. Independent acceptance, required CI and maintainer visual approval are pending.
+- **Verified** — Alpha.1 integrity, organization, routing, offline discussion, private delegation, summaries and avatars were accepted through PR #46. Final release UI acceptance belongs to the proposed Alpha.4 scope.
 - **Tested** — [Alpha.1B membership and routing](extensions/alpha1b-group-membership-model-routing-contract.md) supports scoped overrides and immutable offline routing. Other provider catalogs and live Teams remain gated.
-- **Tested** — Alpha.1A adds durable bot and group pinning, ordering and search, provider-only labels alongside existing avatars and names, personal conversation management and durable personal unread indicators. See [Alpha.1A evidence](extensions/alpha1a-bot-conversation-management.md). Group tasks and Private Task Chats remain in later milestones.
+- **Tested** — Alpha.1A adds durable bot and group pinning, ordering and search, provider-only labels alongside existing avatars and names, personal conversation management and durable personal unread indicators. See [Alpha.1A evidence](extensions/alpha1a-bot-conversation-management.md). Offline Group tasks and Private Task Chats are accepted through PR #46. Live execution stays gated.
 - Group creation/editing: add/remove existing bots; default new groups 2–6 members, existing supported advanced cap 12, preserve legacy groups without destructive migration. Default concurrency 2 and automatic discussion 1–2 rounds; enforce daemon-side bounds and user-configurable token/time budgets within validated limits.
 - Group is discussion-first: user/bot messages, `@bot` and `@all`, independent answers and bounded replies/reflection. No direct filesystem edits, command execution, browser actions or other side-effecting tools in group discussion. Keep Chief of Staff/DAG/ledger functionality as a bounded advanced task/activity surface; do not remove established security controls.
 - Each member inherits its own provider/account/model/effort/personality by default. Click member to select a discovered, authorized model; distinguish explicit team-scoped overrides from global bot changes. Validate effective configuration at dispatch, snapshot it per run, and create compatible sessions when changing provider; never mutate an active run or silently substitute a model.
@@ -26,13 +33,13 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Gate: real group UI and daemon persistence survive restart; per-bot runtime/model routing is correct; member removal/revocation/cancellation and duplicate delivery are tested; discussion cannot invoke privileged tools; private context stays isolated; at least a bounded, explicitly authorized multi-provider group/task workflow is verified before advertising live multi-model collaboration. Existing live Teams gates remain until separately verified and approved.
 
 ### Alpha.2 — Right-hand Workspace Panel (Mini IDE & Live Demo)
-- **Not Started** — [Alpha.2C read-only Git proposal](extensions/alpha-shared-convergence.md) awaits approval.
-- **In Progress** — Retain current three-panel Chat shell, light/dark/system theme and resizable/collapsible sidebars. Existing Bot Workspace / Team Activity becomes the default Overview tab; keep Live Computer, Active Tasks, Routines, Connected Tools and Account Usage. New tabs are Files/Editor, Changes, Browser and Output. Reuse the panel later in Terminal Mode.
-- **Tested** — Alpha.2A/B integration candidate provides daemon-authorized personal workspace list and read over Electron IPC, with persisted tab selection and Team Activity in Group Chat.
-- **Tested** — Alpha.2C.2 provisional PR #39 supports native-granted personal text save and empty file/folder creation. Exact-SHA integration acceptance remains pending.
+- **Verified** — Read-only Git Changes is accepted through PR #46 within native-grant and sandbox boundaries.
+- **Verified** — Accepted shell retains the three-panel Chat shell, light/dark/system theme and resizable/collapsible sidebars. Existing Bot Workspace / Team Activity becomes the default Overview tab; keep Live Computer, Active Tasks, Routines, Connected Tools and Account Usage. New tabs are Files/Editor, Changes, Browser and Output. Reuse the panel later in Terminal Mode.
+- **Verified** — Accepted Alpha.2A/B integration provides daemon-authorized personal workspace list and read over Electron IPC, with persisted tab selection and Team Activity in Group Chat.
+- **Verified** — Alpha.2C.2 supports native-granted personal text save and empty file/folder creation within the accepted PR #46 boundaries.
 - **Blocked** — Non-empty create, rename, quarantine delete, Ask Approval writes and group writes await safe publication or dedicated authorization.
-- **In Progress** — Alpha.2C.1 workspace search, previews, and selection-to-chat. Workspace modules, isolated PDF rendering and UI await Agent 1 shared integration before end-to-end acceptance.
-- **Tested** — Alpha.2D.1 native-granted, read-only Git Changes. Draft review and convergence remain pending.
+- **Verified** — Alpha.2C.1 search, preview, cancellation and explicit personal conversation draft insertion are integrated and offline accepted through PR #46.
+- **Verified** — Alpha.2D.1 native-granted, read-only Git Changes is accepted through PR #46.
 - **Blocked** — Alpha.2D.2 stage, unstage and single-file revert await enforceable protection of the real index and working tree. The Changes tab exposes the gate and supports read-only refresh.
 - Files/Editor: authorized workspace tree, open multiple files in tabs, syntax highlighting, edit/save, create/rename/delete with appropriate confirmation, file and content search, file-change watching, explicit send-selection-to-chat, preview Markdown/images/SVG/PDF. Handle unsaved/external-change conflicts; root/symlink/path traversal protections, bounded file sizes, binary/secret handling and no privileged renderer filesystem access.
 - Changes: current branch, Git status, modified files, before/after diffs, stage/unstage, confirmed revert and basic commit history. Bind to selected bot/task authorized workspace; no implicit destructive Git operations. Show actual evidence, not fabricated changes.
@@ -41,14 +48,22 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 - Candidate libraries (not mandatory until justified against current lockfile/architecture): Monaco Editor, Chokidar, Git CLI, Ripgrep, Electron WebContentsView, optional Dockview, PDF.js and safe Markdown renderer. Avoid unnecessary dependencies; verify licenses, packaging and security.
 - Gate: actual file/diff/live-preview/output vertical slices through validated IPC, workspace isolation and write-conflict tests, browser isolation and loopback fixture tests, no regression in existing Overview/Team/Computer Use/approval behavior, no fake production data, responsive panel layout and keyboard access.
 
-- **Tested** — Alpha.2G integrates all five Workspace tabs with native grant and restart coverage on the provisional integration branch. See [convergence and package acceptance](extensions/alpha2g-workspace-convergence.md). Hosted CI and independent acceptance remain pending.
+- **Verified** — Alpha.2G integrates all five Workspace tabs with native grant and restart coverage on accepted main. See [convergence and package acceptance](extensions/alpha2g-workspace-convergence.md). Hosted CI and independent acceptance passed for the merged PR #46 head.
 
 ### Alpha.3 — Personal & Friends Alpha release acceptance
-- **In Progress** — Hosted Workspace isolation remediation and private-task Output scoping are on the Workspace draft. Combined Alpha.1/Alpha.2 exact-SHA packaging and hosted acceptance are pending.
-- **Not Started** — Integrate Alpha.0–2 after review on the accepted baseline. Existing migrations `0001–0013` are immutable; any schema change must use a coordinated forward migration, tested fresh/upgrade/restart/rollback. Do not bypass the existing policy broker, authenticated daemon, sandbox, approvals, or provider-specific gates.
-- Two-agent parallel work is permitted only after agreeing contracts and ownership: separate worktrees/branches; one owner for shared IPC, schema/migration allocation and desktop shell integration; independent review and draft PRs; never edit the other agent's uncommitted work or auto-merge main. Keep existing assignments until explicitly changed.
+- **Tested** — PR #47 corrects the save Electron wait to require acknowledged completion. The exact empty-content CI failure was reproduced with a paused daemon. Corrected focused save/watch/conflict/revocation acceptance passed using an existing artifact. Complete-suite verification is delegated to hosted CI.
+- **In Progress** — Alpha.3A package and platform readiness belongs to Agent 2. Fedora launcher, AppImage native FUSE, Ubuntu sessions and final artifact upgrade acceptance remain open. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
+- **Implemented** — Alpha.3B documents the capability matrix, nine bounded provider acceptance plans and v0.1 checklist. These plans are not live provider acceptance.
+- **Tested** — Release upgrade/restart runner and read-only Linux prerequisite checker are integrated on the Alpha.4 candidate. Syntax and safe identical-artifact refusal checks passed; the checker passed read-only Fedora host probes. Artifact-pair upgrade acceptance remains unrun until distinct release artifacts exist. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
+- **Verified** — Alpha.0–2 are integrated on the accepted baseline. Existing migrations `0001–0014` are preserved; any schema change must use a coordinated forward migration, tested fresh/upgrade/restart/rollback. Do not bypass the existing policy broker, authenticated daemon, sandbox, approvals, or provider-specific gates.
+- Follow the parallel development policy in AGENTS.md. Coordinate reconciliation and migrations while preserving separate worktrees and maintainer merge authority.
 - Gate: lint, typecheck, build, regression and real Electron E2E evidence, secrets/permissions review, data preservation, independent acceptance; install/launch/update/restart checks on Fedora GNOME and Ubuntu where available, Windows only when actually supported/tested (not a required first-alpha release platform). Verify packages and document supported platforms and known limitations. Prepare simple installation/usage instructions; no public repository visibility or license change as part of this roadmap decision.
 - **Release boundary:** v0.1 Personal & Friends Alpha is ready only when Alpha.0–3 pass for the documented supported scope. No Terminal Workspace, full interactive PTY, advanced AI browser automation, Companion, billing or remote/cloud services are required. Use existing versioning convention; alpha tags/numbering to be coordinated at release.
+
+### Alpha.4 — Approved V03.2 UI implementation
+
+- **Implemented** — V03.2 shared shell/Chat/Settings/Usage and Workspace UI are converged in Draft PR #53 with Alpha.3C, Alpha.4A and Alpha.4B histories preserved. The targeted Alpha.4C correction delta was independently accepted; see [shared UI contract](extensions/alpha4-shared-ui-contract.md).
+- **In Progress** — Source convergence and release-tooling correction are accepted. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` has hosted CI/CodeQL PASS and maintainer visual acceptance 21/21. Independent review found a nullable terminal/build command identity could fall through to whole-run cancellation. The focused correction needs exact-head hosted checks and independent acceptance before RC freeze. Alpha.3A platform and actual packaged-upgrade requirements remain open; do not build packages until all gates are satisfied.
 
 ### Post-alpha roadmap (deferred, not current assignments)
 - **Not Started** — v0.2 Dual-Mode Workspace: Chat / Terminal switch in upper-left of both layouts; Orca-style project/worktree sidebar, interactive user PTY, CLI registry (including supported agy/Codex/Claude flows), tabs and nested splits, reconnect, usage from official sources. Reuse Alpha.2 workspace tools; retain existing scoped sandbox separately.
@@ -110,3 +125,8 @@ Gate: restart/idempotency/approval handling and isolated browser tested.
 ## Phase 6 — Expansion
 - [ ] Consented meeting assistant, mobile companion, remote gateway, marketplace, Windows/macOS.
 Gate: threat model, consent, privacy and platform-specific tests reviewed.
+
+## Alpha.4 — Approved V03.2 UI implementation
+
+- **Tested** — Alpha.4B Workspace UI retains responsive Explorer, five tabs, and its focused offline Electron evidence. Shared tokens and Alpha.3C ancestry are preserved. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
+- **In Progress** — Alpha.4C integrates Workspace bounds, Tools navigation, canonical Usage, Browser overlap and the approved shared design. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` passed hosted CI/CodeQL and maintainer visual acceptance 21/21. A final review found a nullable terminal/build command cancellation identity regression; the correction awaits exact-head checks and focused independent acceptance. Actual integrated screenshots and focused evidence are in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).

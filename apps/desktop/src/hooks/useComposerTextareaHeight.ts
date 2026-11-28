@@ -8,7 +8,7 @@ export function useComposerTextareaHeight(draft: string) {
     if (!textarea) return
     const fit = () => {
       textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
     }
     fit()
     let width = textarea.clientWidth

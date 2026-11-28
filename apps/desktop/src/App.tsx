@@ -1,3 +1,5 @@
+import { ProviderUsage } from './components/ProviderUsage.tsx'
+import { effectiveWorkspaceWidth } from './state/workspaceLayout.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { sanitizeCustomSvg } from '@ghost-bot/avatar/svg-sanitizer'
@@ -145,6 +147,18 @@ export function App() {
   const [liveViewerOpen, setLiveViewerOpen] = useState(false)
   const [liveViewerSessionId, setLiveViewerSessionId] = useState<string | null>(null)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [narrowViewport, setNarrowViewport] = useState(() => window.matchMedia('(max-width: 760px)').matches)
+  const [mobileSidebarExpanded, setMobileSidebarExpanded] = useState(false)
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 760px)')
+    const resetMobileSidebar = () => {
+      setNarrowViewport(media.matches)
+      setMobileSidebarExpanded(false)
+    }
+    media.addEventListener('change', resetMobileSidebar)
+    return () => media.removeEventListener('change', resetMobileSidebar)
+  }, [])
+
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (hasBridge) return DEFAULT_APP_SETTINGS
     return {
@@ -173,7 +187,7 @@ export function App() {
   const [streamingBotId, setStreamingBotId] = useState<string | null>(null)
   const [diffApproval, setDiffApproval] = useState<PendingApproval | null>(null)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false)
-  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines'>('appearance')
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'routines' | 'accounts' | 'tools'>('appearance')
   const [routines, setRoutines] = useState<RoutineRecordDto[]>([])
   const [unreadRoutineNotifications, setUnreadRoutineNotifications] = useState(0)
   const [botEditor, setBotEditor] = useState<{ open: boolean; mode: 'create' | 'edit' }>({
@@ -691,14 +705,16 @@ export function App() {
     (side: 'left' | 'right') => (e: ReactMouseEvent<HTMLDivElement>) => {
       e.preventDefault()
       const startX = e.clientX
-      const startWidth = side === 'left' ? prefs.leftWidth : prefs.rightWidth
+      const startWidth = side === 'left'
+        ? prefs.leftWidth
+        : effectiveWorkspaceWidth(prefs.rightWidth, window.innerWidth, narrowViewport)
 
       const onMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startX
         if (side === 'left') {
           updateAppearance({ leftWidth: Math.min(360, Math.max(180, startWidth + delta)) })
         } else {
-          updateAppearance({ rightWidth: Math.min(420, Math.max(220, startWidth - delta)) })
+          updateAppearance({ rightWidth: effectiveWorkspaceWidth(startWidth - delta, window.innerWidth, narrowViewport) })
         }
       }
       const onUp = () => {
@@ -717,7 +733,7 @@ export function App() {
       if (side === 'left') {
         updateAppearance({ leftWidth: Math.min(360, Math.max(180, prefs.leftWidth + step)) })
       } else {
-        updateAppearance({ rightWidth: Math.min(420, Math.max(220, prefs.rightWidth - step)) })
+        updateAppearance({ rightWidth: effectiveWorkspaceWidth(prefs.rightWidth - step, window.innerWidth, narrowViewport) })
       }
     }
 
@@ -1590,15 +1606,23 @@ export function App() {
     if (count > 0) unreadCountByBot[bId] = count
   }
 
+  const sidebarCompact = narrowViewport ? !mobileSidebarExpanded : prefs.leftCollapsed
+  const toggleSidebar = () => {
+    if (narrowViewport) setMobileSidebarExpanded((expanded) => !expanded)
+    else updateAppearance({ leftCollapsed: !prefs.leftCollapsed })
+  }
+
   const activePrivateTask =
     privateTasks.find((t) => t.teamRunId === activePrivateTaskId) ?? null
 
   return (
     <div className="gb-shell">
-      {!prefs.leftCollapsed && (
-        <>
+      <>
           <LeftSidebar
-            width={prefs.leftWidth}
+            width={narrowViewport ? 190 : prefs.leftWidth}
+            compact={sidebarCompact}
+            providerUsage={<ProviderUsage snapshot={runtimeSnapshot} compact={sidebarCompact}
+              onRefresh={handleRefreshRuntime} onOpenSettings={() => { setSettingsInitialSection('accounts'); setSettingsOpen(true) }} />}
             bots={bots}
             activeBotId={activeTeam || activePrivateTask ? null : (activeBot?.id ?? null)}
             teams={teams}
@@ -1625,10 +1649,10 @@ export function App() {
             onCreateBot={() => setBotEditor({ open: true, mode: 'create' })}
             onCreateTeam={() => setTeamEditor({ open: true, mode: 'create' })}
             onOpenSettings={() => setSettingsOpen(true)}
-            onCollapse={() => updateAppearance({ leftCollapsed: true })}
+            onCollapse={toggleSidebar}
             isMockMode={isMockMode}
           />
-          <div
+          {!sidebarCompact && <div
             className="gb-resize-handle"
             role="separator"
             aria-orientation="vertical"
@@ -1636,16 +1660,15 @@ export function App() {
             tabIndex={0}
             onMouseDown={startResize('left')}
             onKeyDown={handleResizeKeyDown('left')}
-          />
-        </>
-      )}
+          />}
+      </>
 
       <main className="gb-center">
         {activePrivateTask ? (
           <PrivateTaskChatView
             task={activePrivateTask}
             bot={bots.find((b) => b.id === activePrivateTask.assignedBotId) ?? null}
-            leftCollapsed={prefs.leftCollapsed}
+            leftCollapsed={sidebarCompact}
             rightCollapsed={prefs.rightCollapsed}
             onBackToGroup={() => {
               const targetTeamId = activePrivateTask.teamId
@@ -1657,7 +1680,7 @@ export function App() {
                 prev.map((t) => (t.teamRunId === updated.teamRunId ? updated : t)),
               )
             }}
-            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleLeft={toggleSidebar}
             onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
           />
         ) : activeTeam ? (
@@ -1677,7 +1700,7 @@ export function App() {
             isMockMode={isMockMode}
             startingRun={startingTeamRun}
             cancellingRun={cancellingTeamRun}
-            leftCollapsed={prefs.leftCollapsed}
+            leftCollapsed={sidebarCompact}
             rightCollapsed={prefs.rightCollapsed}
             onSelectRun={(teamRunId) => void loadTeamWorkspace(activeTeam.id, teamRunId)}
             onPreviewPlan={handlePreviewTeamPlan}
@@ -1692,14 +1715,14 @@ export function App() {
               setActivePrivateTaskId(task.teamRunId)
             }}
             onTasksChanged={refreshPrivateTasks}
-            onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+            onToggleLeft={toggleSidebar}
             onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
           />
         ) : (
           <>
             <ChatHeader
               bot={activeBot}
-              leftCollapsed={prefs.leftCollapsed}
+              leftCollapsed={sidebarCompact}
               rightCollapsed={prefs.rightCollapsed}
               isMockMode={isMockMode}
               sessions={hasBridge ? activeBotSessions : undefined}
@@ -1712,7 +1735,7 @@ export function App() {
               onArchiveSession={hasBridge ? (sid) => handleArchiveSession(sid) : undefined}
               onMarkSessionRead={hasBridge ? (sid) => handleMarkSessionRead(sid) : undefined}
               onEditBot={() => setBotEditor({ open: true, mode: 'edit' })}
-              onToggleLeft={() => updateAppearance({ leftCollapsed: !prefs.leftCollapsed })}
+              onToggleLeft={toggleSidebar}
               onToggleRight={() => updateAppearance({ rightCollapsed: !prefs.rightCollapsed })}
             />
 
@@ -1936,7 +1959,7 @@ export function App() {
                   : undefined
               }
               onOpenTerminal={hasBridge ? () => setTerminalOpen(true) : undefined}
-              onRefreshUsage={() => void handleRefreshRuntime()}
+              onOpenTools={hasBridge ? () => { setSettingsInitialSection('tools'); setSettingsOpen(true) } : undefined}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
             />

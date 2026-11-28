@@ -5,7 +5,7 @@ import {
   Check,
   CheckCheck,
   Ellipsis,
-  MessageSquare,
+  History,
   PanelLeft,
   PanelRight,
   Pencil,
@@ -134,7 +134,7 @@ export function ChatHeader({
             size={32}
             label={`${bot.name} avatar`}
           />
-          <strong className="gb-chat-header-title">{bot.name}</strong>
+          <strong className="gb-chat-header-title" title={bot.name}>{bot.name}</strong>
           <span className="gb-badge">
             {isMockMode ? 'Mock UI' : 'Codex Ready'}
           </span>
@@ -169,7 +169,7 @@ export function ChatHeader({
                 active={popoverOpen}
                 onClick={() => setPopoverOpen((v) => !v)}
               >
-                <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
+                <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden="true" />
               </IconButton>
               {unreadSessionsCount > 0 && (
                 <span
@@ -342,7 +342,7 @@ export function ChatHeader({
               style={{ fontSize: 12, padding: '4px 10px' }}
             >
               <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden="true" />
-              <span>New chat</span>
+              <span className="gb-new-chat-label">New chat</span>
             </button>
           )}
           <IconButton

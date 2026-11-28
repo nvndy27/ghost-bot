@@ -1,5 +1,19 @@
 ## Licensing and public source distribution
 
+## Alpha.4 integrated release candidate
+
+- The runtime exposes one usage projection and no enumerable account identity catalog. The compact Usage surface reports other-account usage unavailable; Workspace no longer duplicates provider quota.
+- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` has hosted CI/CodeQL PASS and maintainer visual acceptance 21/21. Independent review found that a terminal/build Output row with null `taskId` could expose a whole-run Cancel action. The follow-up now suppresses that action and guards the handler; its exact published head needs hosted checks and focused independent acceptance before RC freeze.
+- Persisted widths remain compatible and are bounded only when rendered. New profiles use the approved 400px Workspace default; desktop and narrow effective bounds do not rewrite saved widths.
+
+
+## Accepted release baseline — 2026-11-28
+
+PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
+
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. Alpha.4 UI acceptance requires maintainer scope approval before final candidate freeze and a single final package build and verification cycle.
+
+
 ## Alpha.1B routing limits
 
 - Routing catalogs expose the offline mock catalog or the active verified Codex subscription catalog. Other provider/account catalogs remain unavailable for team routing. Live Teams remains gated. The Codex catalog path has no live acceptance evidence.
@@ -12,10 +26,10 @@
 - The Alpha.2A/B candidate exposes personal workspace list and read after native directory confirmation. Read grants expire when the daemon stops or the bot authorization changes. Group filesystem access requires an authorized task scope.
 - The PR #39 checkpoint allows native-granted personal Workspace mode to save text and create empty files/folders on Linux. Save performs bounded verification after atomic replacement. External processes can race POSIX namespace operations. Non-empty creation needs descriptor-bound publication and cleanup. Rename and delete need source identity guarantees, and delete also needs safe quarantine creation and recovery. Existing quarantine entries stay recoverable. Ask Approval and group writes remain gated.
 - Alpha.2D.2 Git writes are unavailable. Snapshot inspection is read-only. Real index publication needs to preserve external index and lock changes and validate the approved revision at publication. Reverting a working-tree file also needs a safe expected-revision replacement.
-- Hosted Noble passed Workspace and failed Computer Use at Chrome's SUID helper on PR #45 through `c174875`. The replacement CI uses Jammy and pinned Bubblewrap 0.13.1. Exact-head hosted acceptance remains pending. [Previous hosted failure](https://github.com/nvndy27/ghost-bot/actions/runs/45998660975/job/140504401185)
-- The unified candidate adds an explicit Private Task Chat guard for right-panel and draft routing. Personal Output filters private runs at the daemon boundary. Agent 2's integrated verdict remains pending.
+- Hosted Noble passed Workspace and failed Computer Use at Chrome's SUID helper on PR #45 through `c174875`. The replacement CI uses Jammy and pinned Bubblewrap 0.13.1. Final hosted acceptance subsequently passed on PR #46 head `c08c4a7`. [Previous hosted failure](https://github.com/nvndy27/ghost-bot/actions/runs/45998660975/job/140504401185)
+- The unified candidate adds an explicit Private Task Chat guard for right-panel and draft routing. Personal Output filters private runs at the daemon boundary. Agent 2 accepted the integrated head through PR #46.
 - Alpha.2G Workspace package acceptance is scoped to Fedora desktop fixtures and the offline mock runtime. Installed RPM launcher, AppImage FUSE path, Ubuntu desktop packaging, public browser networking and live runtime checks require separate evidence.
-- Unified acceptance requires independent review, maintainer visual approval and required CI on the actual candidate. Agent 2 owns any follow-up on the hosted isolation check.
+- Unified independent acceptance and required CI passed. Final release UI scope and approval remain with the maintainer.
 - Group integrity PR #42 prevents new split private bindings and fails closed on legacy orphan metadata. Its corrected restart fixture exercises authorized private delegation. The correction also covers a concurrent operation-ID collision across assignees.
 - Final Personal & Friends Alpha platform and live acceptance gates are open.
 
@@ -25,8 +39,8 @@
 
 ## Shared baseline review
 
-- Independent review of PR #20 and the convergence candidate remains pending. The read-only Git proposal is independent of the filesystem write gate and still requires maintainer approval.
-- Alpha.2C.1 search, preview and chat draft insertion require Agent 1 shared IPC and composer integration. PDF previews require compatible host Poppler, prlimit and Bubblewrap with isolated user and network namespaces. Preview is unavailable when those capabilities cannot be established.
+- PR #20 and the convergence work are superseded by accepted PR #46. Read-only Git is accepted. Git mutations remain gated independently of Files grants.
+- Alpha.2C.1 search, preview and chat draft insertion are integrated and accepted. PDF previews require compatible host Poppler, prlimit and Bubblewrap with isolated user and network namespaces. Preview is unavailable when those capabilities cannot be established.
 
 ## Alpha.2C.1 integration
 
@@ -36,11 +50,11 @@
 
 ## Alpha.1 convergence
 
-- Issue #41 awaits independent acceptance and history-preserving convergence with Agent 2’s workspace stack. The successor introduces no database migration. Advance neither workspace permissions nor Alpha.3 acceptance during reconciliation.
+- Issue #41 functionality and history-preserving convergence were accepted through PR #46. Final visual approval is part of the maintainer-scoped UI handoff.
 
 ## Existing issues
 
-- Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.
+- Historical Phase 1 packaging observation, superseded by later extracted RPM evidence. Fedora RPM packaging via `electron-builder` (`pnpm package:rpm`) is blocked on this host because bundled `fpm` requires `libcrypt.so.1` (`libxcrypt-compat`, not installed) and `fpm` is not on `PATH`; deferred to Phase 2E.
 - AppImage native FUSE launch requires `libfuse.so.2`, which is absent on Fedora 45; use `APPIMAGE_EXTRACT_AND_RUN=1` until FUSE2 or RPM distribution is available.
 - Ollama CLI and daemon are not installed on this host (`http://127.0.0.1:11434` unreachable, `~/.ollama` absent); `OllamaLocalAdapter`, `RuntimePolicyBroker.authorizeOllamaExecution`, and Electron IPC/UI are verified against deterministic loopback HTTP fixtures, while live local inference requires installing Ollama and pulling a local model.
 - LM Studio (`127.0.0.1:1234`), llama.cpp (`127.0.0.1:8080`), and OpenRouter (`https://openrouter.ai/api/v1`) are unified-execution verified against loopback HTTP / synthetic transport and Electron E2E, but local binaries/servers are absent on host and OpenRouter live API execution remains gated by default.
@@ -55,3 +69,22 @@
 ## Open-source automation acceptance
 
 CI, CodeQL, Scorecard, Dependabot and dependency-graph SBOM export are configured; first successful runs and repository settings are pending verification. OpenSSF Best Practices and REUSE compliance have not been achieved. A graph SBOM is not a complete packaged-binary SBOM or legal attribution inventory.
+
+## Alpha.3A remaining package acceptance
+
+**Blocked** pending final artifacts and candidate-specific host acceptance. Fedora 45 read-only preflight found the declared runtime dependencies, FUSE device/helper, Bubblewrap namespace, Poppler and Chrome sandbox prerequisites available, but the Ghost Bot RPM/desktop launcher is not installed and candidate launch remains unverified. AppImage native launch remains unverified despite present FUSE prerequisites. Ubuntu desktop policy/session checks and two-distinct-artifact upgrade/restart remain open. Native and electron-builder RPM dependency declarations differ. Existing artifacts have no established source SHA and do not close these gaps. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
+
+The new upgrade runner has not been exercised with two distinct release artifacts because only prior-evidence artifacts are present locally. Its full evidence remains **Blocked** until a candidate artifact exists. `--interactive-write-grant` also requires an operator to approve the native prompt for a temporary folder. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
+
+## Main CI save-test timing correction
+
+**Tested** — Run `46045474681` observed a disabled Save button before persistence completed. PR #47 now waits for the acknowledged clean state. The focused scenario and daemon-paused reproduction pass with the correction. Hosted complete-suite verification remains pending for this updated head. Existing final-package acceptance gaps still apply.
+Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM and repository settings retain their own verification requirements. OpenSSF Best Practices and REUSE compliance have not been achieved. A graph SBOM is not a complete packaged-binary SBOM or legal attribution inventory.
+
+## Alpha.4B visual integration dependencies
+
+**Tested** — The integrated PR #53 candidate applies V03.2 Workspace bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed. Hosted CI and CodeQL passed at `117a0c2`; the later independent review blocked that SHA on release-tooling findings. The corrected head requires its own CI. Maintainer visual approval remains pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+
+## Alpha.4C hosted CI follow-up
+
+Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The test-only corrections were independently accepted at `63992bb9f8544fae8205e36f8ceafce333991bb7`; the PDF entry had been hidden by closing an already-open desktop Explorer. Focused local tests pass and no production regression was demonstrated. Hosted run `46115138761` and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`. A later focused review identified four release-tooling blockers now being corrected; that new head must obtain its own hosted CI and delta acceptance.
