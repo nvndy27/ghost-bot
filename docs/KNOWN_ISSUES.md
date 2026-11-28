@@ -7,6 +7,8 @@
 
 ## RC2.0 real-world diagnosis — 2026-11-28
 
+- **Corrected in RC2.K1 source:** ACP initialization, `authMethods`, and undocumented `authenticated` values are not treated as proof of account authentication. Status remains unverified until a protected session operation succeeds; a specific Kimi `auth_required` RPC response clears confirmation. This closes false-positive status finding A2-RC2-KIMI-001 at the correction checkpoint. It does not verify a live Kimi account, CLI interoperability, or Kimi execution; those remain gated and unverified.
+
 - **Confirmed:** New default bots are persisted with runtime mock-offline and mock model IDs. BotEditor and ChatComposer use mock catalogs for Codex and most non-Codex providers; ChatHeader’s “Codex Ready” represents global mode, not account or selected-bot readiness. Actual source Electron with a fresh temporary Codex profile showed auth-required/disconnected while still displaying “Codex Ready” and a gpt-6.2-mock model. No credentials or inference were used.
 - **Confirmed:** Fresh seeded workspace paths contain literal ~/ values. WorkspaceFilesService rejects non-absolute roots, so a new seeded bot cannot reach the native read grant until its path is reconfigured. Workspace has no direct Open Folder control; the path chooser is in Bot Editor. Actual tree/open/save verification awaits explicit native consent on a synthetic project.
 - **Capability boundary:** Runtime adapters differ in model discovery, effort metadata, authentication and tools. See the [provider matrix](extensions/rc2-real-world-usability-diagnosis.md#provider-runtime-capability-and-readiness-matrix). Do not present a provider as connected, ready or catalogued from a different runtime’s state.

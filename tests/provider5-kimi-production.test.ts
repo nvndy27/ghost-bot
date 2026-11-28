@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
   KimiAcpAdapter,
+  KimiAcpRpcError,
   type KimiAcpTransport,
 } from '../packages/runtime-adapters/kimi/kimi-acp.ts'
 import { RuntimePolicyBroker } from '../apps/daemon/src/runtime/policy-broker.ts'
@@ -11,8 +15,11 @@ import type { AgentEvent } from '@ghost-bot/shared-types/runtime'
 
 function createFakeAcpTransport(opts: {
   protocolVersion?: number
-  authenticated?: boolean
+  authenticated?: unknown
+  authMethods?: unknown
   loadSession?: boolean
+  sessionNewError?: Error
+  promptError?: Error
   onPrompt?: (
     t: {
       emitNotif: (m: string, p: Record<string, unknown>) => void
@@ -24,6 +31,7 @@ function createFakeAcpTransport(opts: {
 }): KimiAcpTransport & {
   agentResponses: Array<{ id: number | string; result?: unknown; error?: { code: number; message: string } }>
   notificationsSent: Array<{ method: string; params: Record<string, unknown> }>
+  closeConnection: (reason?: string) => void
 } {
   const notifHandlers = new Set<(m: string, p: Record<string, unknown>) => void>()
   const reqHandlers = new Set<(id: number | string, m: string, p: Record<string, unknown>) => void>()
@@ -48,23 +56,28 @@ function createFakeAcpTransport(opts: {
   return {
     agentResponses,
     notificationsSent,
+    closeConnection: (reason = 'fixture closed') => emitClose(reason),
     async sendRequest(method, params = {}) {
       if (method === 'initialize') {
         assert.equal((params.clientCapabilities as { terminal: boolean }).terminal, false)
-        return {
+        const result: Record<string, unknown> = {
           protocolVersion: opts.protocolVersion ?? 1,
-          authenticated: opts.authenticated ?? true,
           agentCapabilities: { loadSession: opts.loadSession ?? true },
           models: [{ id: 'kimi-k2', label: 'Kimi K2' }],
         }
+        if (Object.hasOwn(opts, 'authenticated')) result.authenticated = opts.authenticated
+        if (opts.authMethods !== undefined) result.authMethods = opts.authMethods
+        return result
       }
       if (method === 'session/new') {
+        if (opts.sessionNewError) throw opts.sessionNewError
         return { sessionId: 'kimi-sess-1' }
       }
       if (method === 'session/load') {
         return {}
       }
       if (method === 'session/prompt') {
+        if (opts.promptError) throw opts.promptError
         return (await opts.onPrompt?.({ emitNotif, emitReq, emitClose }, params)) ?? { stopReason: 'end_turn' }
       }
       return {}
@@ -105,7 +118,10 @@ test('KimiAcpAdapter handles missing CLI, unsupported protocol, unauthenticated 
   assert.equal(badInfo.acpProtocolSupported, false)
 
   const unauth = new KimiAcpAdapter({
-    transportFactory: () => createFakeAcpTransport({ authenticated: false }),
+    transportFactory: () => createFakeAcpTransport({
+      authenticated: false,
+      sessionNewError: new KimiAcpRpcError(-32000, 'auth_required'),
+    }),
   })
   const authState = await unauth.getAuthStatus()
   assert.equal(authState.status, 'pending')
@@ -121,6 +137,148 @@ test('KimiAcpAdapter handles missing CLI, unsupported protocol, unauthenticated 
       }),
     /kimi login/i,
   )
+  const rejectedStatus = await unauth.getAuthStatus()
+  assert.equal(rejectedStatus.status, 'pending')
+  assert.match(rejectedStatus.detail ?? '', /requires authentication/i)
+})
+
+test('Kimi authentication remains unverified for standard or malformed ACP initialization fields', async () => {
+  const cases: Array<{ label: string; options: Parameters<typeof createFakeAcpTransport>[0] }> = [
+    { label: 'standard ACP authMethods only', options: { authMethods: [{ id: 'kimi-login' }] } },
+    { label: 'omitted field', options: {} },
+    { label: 'null field', options: { authenticated: null } },
+    { label: 'malformed field', options: { authenticated: 'true' } },
+    { label: 'explicit unauthenticated', options: { authenticated: false } },
+    { label: 'undocumented positive field', options: { authenticated: true } },
+  ]
+
+  for (const item of cases) {
+    const adapter = new KimiAcpAdapter({
+      transportFactory: () => createFakeAcpTransport(item.options),
+    })
+    const status = await adapter.getAuthStatus()
+    assert.equal(status.status, 'pending', item.label)
+    assert.match(status.detail ?? '', /unverified/i, item.label)
+    assert.equal((await adapter.inspectRuntime()).authenticated, false, item.label)
+    if (item.label === 'explicit unauthenticated') {
+      await adapter.createSession({
+        agentId: 'b-auth', accountId: 'local', modelId: 'kimi-k2', permission: 'read-only',
+        workspace: '/tmp', instructions: '',
+      })
+      assert.equal((await adapter.getAuthStatus()).status, 'connected')
+    }
+    await adapter.disconnect()
+  }
+  const standardAcp = new KimiAcpAdapter({
+    transportFactory: () => createFakeAcpTransport({ authMethods: [{ id: 'kimi-login' }] }),
+  })
+  const registry = new RuntimeRegistry({ runtimeMode: 'mock', kimiAdapter: standardAcp })
+  const statusDto = KimiStatusDtoSchema.parse(await registry.getKimiStatus())
+  assert.equal(statusDto.authenticated, false)
+  assert.equal(statusDto.authStatus, 'pending')
+  assert.match(statusDto.detail, /unverified/i)
+  await registry.stop()
+  await standardAcp.disconnect()
+})
+
+test('successful protected session creation confirms auth; auth_required prompt clears it', async () => {
+  const adapter = new KimiAcpAdapter({
+    isExecutionAuthorized: () => true,
+    transportFactory: () => createFakeAcpTransport({
+      promptError: new KimiAcpRpcError(-32000, 'auth_required'),
+    }),
+  })
+
+  assert.equal((await adapter.getAuthStatus()).status, 'pending')
+  const session = await adapter.createSession({
+    agentId: 'b-auth',
+    accountId: 'local',
+    modelId: 'kimi-k2',
+    permission: 'read-only',
+    workspace: '/tmp',
+    instructions: '',
+  })
+  assert.equal((await adapter.getAuthStatus()).status, 'connected')
+
+  const events: AgentEvent[] = []
+  for await (const event of adapter.run({ runId: 'auth-required-prompt', session, text: 'synthetic fixture request' })) {
+    events.push(event)
+  }
+  assert.equal((events.at(-1) as Extract<AgentEvent, { type: 'run.failed' }>).code, 'KIMI_AUTH_REQUIRED')
+  const statusAfterRejection = await adapter.getAuthStatus()
+  assert.equal(statusAfterRejection.status, 'pending')
+  assert.match(statusAfterRejection.detail ?? '', /requires authentication/i)
+  await adapter.disconnect()
+})
+
+test('Kimi connection loss clears confirmed auth and unrelated RPC failures do not imply auth denial', async () => {
+  let fake: ReturnType<typeof createFakeAcpTransport> | null = null
+  let connections = 0
+  const adapter = new KimiAcpAdapter({
+    transportFactory: () => {
+      connections += 1
+      fake = createFakeAcpTransport(connections === 1 ? { authenticated: true } : {})
+      return fake
+    },
+  })
+
+  assert.equal((await adapter.getAuthStatus()).status, 'pending')
+  await adapter.createSession({
+    agentId: 'b-auth', accountId: 'local', modelId: 'kimi-k2', permission: 'read-only',
+    workspace: '/tmp', instructions: '',
+  })
+  assert.equal((await adapter.getAuthStatus()).status, 'connected')
+  fake!.closeConnection('fixture process exited')
+  const afterReconnect = await adapter.getAuthStatus()
+  assert.equal(afterReconnect.status, 'pending')
+  assert.match(afterReconnect.detail ?? '', /unverified/i)
+  await adapter.disconnect()
+
+  const unrelatedFailure = new KimiAcpAdapter({
+    transportFactory: () => createFakeAcpTransport({
+      sessionNewError: new KimiAcpRpcError(-32000, 'workspace unavailable'),
+    }),
+  })
+  await assert.rejects(() => unrelatedFailure.createSession({
+    agentId: 'b-auth', accountId: 'local', modelId: 'kimi-k2', permission: 'read-only',
+    workspace: '/tmp', instructions: '',
+  }), /workspace unavailable/)
+  assert.match((await unrelatedFailure.getAuthStatus()).detail ?? '', /unverified/i)
+  await unrelatedFailure.disconnect()
+})
+
+test('stdio ACP transport preserves the Kimi auth_required RPC code through session creation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ghost-kimi-auth-fixture-'))
+  const executable = join(directory, 'kimi')
+  const source = `#!/usr/bin/env node
+const readline = require('node:readline');
+if (process.argv[2] === '--version') { console.log('Kimi Code 1.2.3'); process.exit(0); }
+const input = readline.createInterface({ input: process.stdin });
+input.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1, authMethods: [{ id: 'kimi-login' }] } }) + '\\n');
+  } else if (request.method === 'session/new') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'auth_required' } }) + '\\n');
+  }
+});
+`
+  await writeFile(executable, source, { mode: 0o700 })
+  await chmod(executable, 0o700)
+  const adapter = new KimiAcpAdapter({ kimiCommand: executable })
+
+  try {
+    await assert.rejects(() => adapter.createSession({
+      agentId: 'b-auth', accountId: 'local', modelId: 'kimi-k2', permission: 'read-only',
+      workspace: '/tmp', instructions: '',
+    }), /kimi login/i)
+    const status = await adapter.getAuthStatus()
+    assert.equal(status.status, 'pending')
+    assert.match(status.detail ?? '', /requires authentication/i)
+  } finally {
+    await adapter.disconnect()
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('KimiAcpAdapter enforces ACP streaming, thought suppression, fs/terminal rejection, single-use approvals, cancellation, and quarantine', async () => {
