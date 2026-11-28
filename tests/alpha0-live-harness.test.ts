@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { createInterface, type Interface } from 'node:readline'
 import test from 'node:test'
 import { _electron as electron } from 'playwright-core'
 import {
@@ -393,19 +395,35 @@ function readLinuxProcessSnapshot(pid: number): LinuxProcessSnapshot | undefined
 }
 
 function readLinuxChildPids(pid: number): number[] {
+  let threadIds: string[]
   try {
-    return readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .map(Number)
+    threadIds = readdirSync(`/proc/${pid}/task`).filter((entry) => /^\d+$/.test(entry))
   } catch (error) {
     if (isMissingProcess(error)) return []
     throw error
   }
+
+  const childPids = new Set<number>()
+  for (const threadId of threadIds) {
+    try {
+      const children = readFileSync(`/proc/${pid}/task/${threadId}/children`, 'utf8')
+      for (const childPid of children.trim().split(/\s+/).filter(Boolean).map(Number)) {
+        childPids.add(childPid)
+      }
+    } catch (error) {
+      if (isMissingProcess(error)) continue
+      throw error
+    }
+  }
+  return [...childPids]
 }
 
-function collectOwnedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
+/**
+ * Captures currently parented descendants, including children forked by non-leader
+ * threads. A process already detached or reparented before this scan is not
+ * discoverable from rootPid; this is not an exhaustive ownership inventory.
+ */
+function collectTrackedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
   const pending = [rootPid]
   const visited = new Set<number>()
   const processes: LinuxProcessSnapshot[] = []
@@ -425,15 +443,10 @@ function collectOwnedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
 
 function isSameLiveProcess(snapshot: LinuxProcessSnapshot): boolean {
   const current = readLinuxProcessSnapshot(snapshot.pid)
-  return Boolean(
-    current &&
-      current.state !== 'Z' &&
-      current.commandLine === snapshot.commandLine &&
-      current.startTime === snapshot.startTime,
-  )
+  return Boolean(current && current.state !== 'Z' && current.startTime === snapshot.startTime)
 }
 
-async function waitForOwnedProcessTreeToExit(
+async function waitForTrackedProcessesToExit(
   processes: LinuxProcessSnapshot[],
   timeoutMs = 5000,
 ): Promise<LinuxProcessSnapshot[]> {
@@ -461,6 +474,205 @@ function writeCleanupDiagnostic(
     { mode: 0o600 },
   )
 }
+
+function isTrackedProcessSetStopped(
+  rootPid: number | undefined,
+  trackedProcesses: LinuxProcessSnapshot[],
+  remaining: LinuxProcessSnapshot[],
+  captureError?: unknown,
+  waitError?: unknown,
+): boolean {
+  return (
+    !captureError &&
+    !waitError &&
+    Boolean(rootPid && trackedProcesses.some((process) => process.pid === rootPid)) &&
+    remaining.length === 0
+  )
+}
+
+function cleanupTemporaryProfile(
+  tempRoot: string,
+  shutdownVerified: boolean,
+  processes: LinuxProcessSnapshot[],
+): 'removed' | 'retained' {
+  if (!shutdownVerified) {
+    writeCleanupDiagnostic(
+      tempRoot,
+      'Tracked Electron/daemon process shutdown was not confirmed; temporary profile retained',
+      processes,
+    )
+    return 'retained'
+  }
+
+  rmSync(tempRoot, { recursive: true, force: true })
+  if (existsSync(tempRoot)) throw new Error('Temporary IPC profile remains after removal')
+  return 'removed'
+}
+
+function waitForChildLine(child: ChildProcess, lines: Interface, expected: string): Promise<void> {
+  return new Promise((resolveLine, rejectLine) => {
+    const cleanup = () => {
+      lines.off('line', onLine)
+      child.off('exit', onExit)
+      child.off('error', onError)
+    }
+    const onLine = (line: string) => {
+      if (line !== expected) return
+      cleanup()
+      resolveLine()
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup()
+      rejectLine(new Error(`Owned child exited before emitting ${expected}: code=${code}, signal=${signal}`))
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      rejectLine(error)
+    }
+    lines.on('line', onLine)
+    child.once('exit', onExit)
+    child.once('error', onError)
+  })
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  return new Promise((resolveExit) => {
+    const onExit = () => {
+      clearTimeout(timer)
+      resolveExit(true)
+    }
+    const timer = setTimeout(() => {
+      child.off('exit', onExit)
+      resolveExit(false)
+    }, timeoutMs)
+    child.once('exit', onExit)
+  })
+}
+
+async function stopOwnedChild(child: ChildProcess): Promise<boolean> {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return true
+  const gracefulExit = waitForChildExit(child, 1500)
+  child.kill('SIGTERM')
+  if (await gracefulExit) return true
+  const forcedExit = waitForChildExit(child, 1500)
+  child.kill('SIGKILL')
+  return forcedExit
+}
+
+function cleanupTestProfileAfterOwnedChild(
+  tempRoot: string,
+  childStopped: boolean,
+  snapshot: LinuxProcessSnapshot | undefined,
+): void {
+  if (childStopped && (!snapshot || !isSameLiveProcess(snapshot))) {
+    rmSync(tempRoot, { recursive: true, force: true })
+  } else if (existsSync(tempRoot)) {
+    try {
+      writeCleanupDiagnostic(
+        tempRoot,
+        'Regression child shutdown was not confirmed; temporary profile retained',
+        snapshot ? [snapshot] : [],
+      )
+    } catch {
+      // Keep the profile in place if diagnostic writing also fails.
+    }
+  }
+}
+
+test('Cleanup retains the profile when a live process changes its title without changing identity', async (t) => {
+  assert.equal(process.platform, 'linux', 'The controlled process identity regression requires Linux /proc')
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-process-identity-regression-'))
+  chmodSync(tempRoot, 0o700)
+  const profileDir = join(tempRoot, 'profile')
+  mkdirSync(profileDir, { mode: 0o700 })
+
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      "process.on('SIGUSR1', () => { process.title = 'ghost-qa-title-after'; process.stdout.write('renamed\\n') }); process.stdout.write('ready\\n'); setInterval(() => {}, 1000)",
+      '--',
+      '--ghost-qa-title-before',
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  )
+  const lines = createInterface({ input: child.stdout! })
+  let snapshot: LinuxProcessSnapshot | undefined
+
+  try {
+    await waitForChildLine(child, lines, 'ready')
+    const childPid = child.pid
+    assert.ok(childPid && childPid > 0, 'The spawned regression child has no PID')
+    snapshot = readLinuxProcessSnapshot(childPid)
+    assert.ok(snapshot, `Regression child ${childPid} has no readable procfs identity`)
+    const initialCommandLine = snapshot.commandLine
+
+    const renamed = waitForChildLine(child, lines, 'renamed')
+    assert.equal(child.kill('SIGUSR1'), true, 'Could not signal the owned regression child')
+    await renamed
+
+    const changedTitleProcess = readLinuxProcessSnapshot(childPid)
+    assert.ok(changedTitleProcess && changedTitleProcess.state !== 'Z', 'Regression child exited during title change')
+    assert.equal(changedTitleProcess.pid, snapshot.pid)
+    assert.equal(changedTitleProcess.startTime, snapshot.startTime)
+    assert.notEqual(
+      changedTitleProcess.commandLine,
+      initialCommandLine,
+      'The controlled child title change did not update its procfs command line',
+    )
+
+    const trackedAfterTitleChange = isSameLiveProcess(snapshot)
+    const remainingWhileAlive = await waitForTrackedProcessesToExit([snapshot], 150)
+    const shutdownVerifiedWhileAlive = isTrackedProcessSetStopped(
+      childPid,
+      [snapshot],
+      remainingWhileAlive,
+    )
+    const dispositionWhileAlive = cleanupTemporaryProfile(
+      tempRoot,
+      shutdownVerifiedWhileAlive,
+      remainingWhileAlive.length > 0 ? remainingWhileAlive : [snapshot],
+    )
+    const processAfterCleanupDecision = readLinuxProcessSnapshot(childPid)
+    const observations = {
+      trackedAfterTitleChange,
+      remainingWhileAlive: remainingWhileAlive.map((process) => process.pid),
+      shutdownVerifiedWhileAlive,
+      dispositionWhileAlive,
+      profileRetainedWhileChildAlive: existsSync(tempRoot),
+      childStillAlive: Boolean(processAfterCleanupDecision && processAfterCleanupDecision.state !== 'Z'),
+      cleanupDiagnosticWritten: existsSync(join(tempRoot, 'ipc-smoke-cleanup-diagnostic.json')),
+    }
+    assert.deepEqual(observations, {
+      trackedAfterTitleChange: true,
+      remainingWhileAlive: [childPid],
+      shutdownVerifiedWhileAlive: false,
+      dispositionWhileAlive: 'retained',
+      profileRetainedWhileChildAlive: true,
+      childStillAlive: true,
+      cleanupDiagnosticWritten: true,
+    })
+
+    assert.equal(await stopOwnedChild(child), true, 'Owned regression child did not stop')
+    const remainingAfterExit = await waitForTrackedProcessesToExit([snapshot], 250)
+    const shutdownVerifiedAfterExit = isTrackedProcessSetStopped(
+      childPid,
+      [snapshot],
+      remainingAfterExit,
+    )
+    assert.equal(shutdownVerifiedAfterExit, true, 'Stopped child identity remained live')
+    assert.equal(cleanupTemporaryProfile(tempRoot, shutdownVerifiedAfterExit, []), 'removed')
+    assert.equal(existsSync(tempRoot), false, 'Temporary profile remained after the owned child exited')
+    t.diagnostic(
+      `Process identity regression passed: PID ${childPid} retained startTime after title change; profile retained until child exit.`,
+    )
+  } finally {
+    lines.close()
+    const childStopped = await stopOwnedChild(child)
+    cleanupTestProfileAfterOwnedChild(tempRoot, childStopped, snapshot)
+  }
+})
 
 test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC schemas', async (t) => {
   assert.equal(process.platform, 'linux', 'Renderer OS sandbox evidence requires Linux /proc')
@@ -590,15 +802,15 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
 
     const runtimePid = app.process().pid
     assert.ok(runtimePid && runtimePid > 0, 'Electron main process has no valid PID')
-    const ownedProcesses = collectOwnedProcessTree(runtimePid)
-    assert.ok(ownedProcesses.some((item) => item.pid === rendererPid), 'Renderer is outside the owned Electron process tree')
+    const trackedProcesses = collectTrackedProcessTree(runtimePid)
+    assert.ok(trackedProcesses.some((item) => item.pid === rendererPid), 'Renderer is outside the captured Electron process tree')
     assert.ok(
-      ownedProcesses.every((item) => !/(?:^|\s)--no-sandbox(?:=|\s|$)/.test(item.commandLine)),
-      'An owned Electron or daemon process has the --no-sandbox switch',
+      trackedProcesses.every((item) => !/(?:^|\s)--no-sandbox(?:=|\s|$)/.test(item.commandLine)),
+      'A captured Electron or daemon process has the --no-sandbox switch',
     )
     assert.ok(
-      ownedProcesses.some((item) => item.commandLine.includes(resolve('apps/daemon/src/index.ts'))),
-      'IPC smoke did not start an owned source daemon process',
+      trackedProcesses.some((item) => item.commandLine.includes(resolve('apps/daemon/src/index.ts'))),
+      'IPC smoke did not start a captured source daemon process',
     )
   } catch (error) {
     testError = error
@@ -607,13 +819,13 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
   let cleanupError: unknown
   if (app) {
     const runtimePid = app.process().pid
-    let ownedProcesses: LinuxProcessSnapshot[] = []
+    let trackedProcesses: LinuxProcessSnapshot[] = []
     let captureError: unknown
     if (!runtimePid || runtimePid <= 0) {
       captureError = new Error('Electron main process has no valid PID')
     } else {
       try {
-        ownedProcesses = collectOwnedProcessTree(runtimePid)
+        trackedProcesses = collectTrackedProcessTree(runtimePid)
       } catch (error) {
         captureError = error
       }
@@ -629,34 +841,35 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
     let remaining: LinuxProcessSnapshot[] = []
     let waitError: unknown
     try {
-      remaining = await waitForOwnedProcessTreeToExit(ownedProcesses)
+      remaining = await waitForTrackedProcessesToExit(trackedProcesses)
     } catch (error) {
       waitError = error
     }
-    const shutdownVerified =
-      !captureError &&
-      !waitError &&
-      Boolean(runtimePid && ownedProcesses.some((item) => item.pid === runtimePid)) &&
-      remaining.length === 0
+    const shutdownVerified = isTrackedProcessSetStopped(
+      runtimePid,
+      trackedProcesses,
+      remaining,
+      captureError,
+      waitError,
+    )
     if (!shutdownVerified) {
       let diagnosticError: unknown
       try {
-        writeCleanupDiagnostic(
+        cleanupTemporaryProfile(
           tempRoot,
-          'Electron/daemon shutdown was not confirmed; temporary profile retained',
-          remaining.length > 0 ? remaining : ownedProcesses,
+          false,
+          remaining.length > 0 ? remaining : trackedProcesses,
         )
       } catch (error) {
         diagnosticError = error
       }
-      cleanupError = new Error(`IPC smoke could not confirm owned-process shutdown; retained ${tempRoot}`, {
+      cleanupError = new Error(`IPC smoke could not confirm tracked-process shutdown; retained ${tempRoot}`, {
         cause: captureError ?? waitError ?? closeError ?? diagnosticError,
       })
     } else {
       try {
-        rmSync(tempRoot, { recursive: true, force: true })
-        if (existsSync(tempRoot)) throw new Error('Temporary IPC profile remains after removal')
-        t.diagnostic(`Cleanup verified: owned Electron and daemon processes exited; removed ${tempRoot}.`)
+        assert.equal(cleanupTemporaryProfile(tempRoot, true, []), 'removed')
+        t.diagnostic(`Cleanup verified: captured Electron and daemon process snapshots exited; removed ${tempRoot}.`)
       } catch (error) {
         cleanupError = error
       }
