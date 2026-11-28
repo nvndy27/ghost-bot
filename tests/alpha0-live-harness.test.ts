@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -360,33 +360,212 @@ test('HARNESS-01: Rejects account binding changes across restart, cancellation-b
   assert.equal(extractAssistantTextForRun([{ role: 'user', text: 'ALPHA0_OK', runId: 'r1' }], 'r1'), '')
 })
 
-test('Offline Electron/daemon IPC smoke check confirms SessionInspectionResponseSchema omits accountId and MessagesListResponseSchema includes accountId', async () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-harness-ipc-smoke-'))
-  chmodSync(tempRoot, 0o700)
-  const dataDir = join(tempRoot, 'data')
-  mkdirSync(dataDir, { recursive: true })
+type LinuxProcessSnapshot = {
+  pid: number
+  commandLine: string
+  state: string
+  startTime: string
+}
 
-  const app = await electron.launch({
-    args: [resolve('apps/desktop/dist-electron/main.js'), '--no-sandbox'],
-    env: {
-      ...process.env,
-      GHOST_BOT_DATA_DIR: dataDir,
-      GHOST_BOT_RUNTIME_MODE: 'mock',
-      GHOST_SECRET_NAMESPACE: `harness-ipc-${randomUUID().slice(0, 8)}`,
-    },
-  })
+function isMissingProcess(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error.code === 'ENOENT' || error.code === 'ESRCH')
+  )
+}
+
+function readLinuxProcessSnapshot(pid: number): LinuxProcessSnapshot | undefined {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, 'utf8')
+    const commandLine = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim()
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const statFields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)
+    const state = status.match(/^State:\s+([A-Z])/m)?.[1]
+    const startTime = statFields[19]
+    assert.ok(state && startTime, `Linux process ${pid} has incomplete identity data`)
+    return { pid, commandLine, state, startTime }
+  } catch (error) {
+    if (isMissingProcess(error)) return undefined
+    throw error
+  }
+}
+
+function readLinuxChildPids(pid: number): number[] {
+  try {
+    return readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+  } catch (error) {
+    if (isMissingProcess(error)) return []
+    throw error
+  }
+}
+
+function collectOwnedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
+  const pending = [rootPid]
+  const visited = new Set<number>()
+  const processes: LinuxProcessSnapshot[] = []
+
+  while (pending.length > 0) {
+    const pid = pending.pop()!
+    if (visited.has(pid)) continue
+    visited.add(pid)
+    const process = readLinuxProcessSnapshot(pid)
+    if (!process || process.state === 'Z') continue
+    processes.push(process)
+    pending.push(...readLinuxChildPids(pid))
+  }
+
+  return processes
+}
+
+function isSameLiveProcess(snapshot: LinuxProcessSnapshot): boolean {
+  const current = readLinuxProcessSnapshot(snapshot.pid)
+  return Boolean(
+    current &&
+      current.state !== 'Z' &&
+      current.commandLine === snapshot.commandLine &&
+      current.startTime === snapshot.startTime,
+  )
+}
+
+async function waitForOwnedProcessTreeToExit(
+  processes: LinuxProcessSnapshot[],
+  timeoutMs = 5000,
+): Promise<LinuxProcessSnapshot[]> {
+  const deadline = Date.now() + timeoutMs
+  let remaining = processes.filter(isSameLiveProcess)
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50))
+    remaining = processes.filter(isSameLiveProcess)
+  }
+  return remaining
+}
+
+function writeCleanupDiagnostic(
+  tempRoot: string,
+  reason: string,
+  processes: LinuxProcessSnapshot[],
+): void {
+  writeFileSync(
+    join(tempRoot, 'ipc-smoke-cleanup-diagnostic.json'),
+    JSON.stringify(
+      { reason, processes: processes.map(({ pid, state }) => ({ pid, state })) },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  )
+}
+
+test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC schemas', async (t) => {
+  assert.equal(process.platform, 'linux', 'Renderer OS sandbox evidence requires Linux /proc')
+  assert.ok(readFileSync('/proc/self/status', 'utf8'), 'Linux /proc status must be available')
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-harness-ipc-smoke-'))
+  const dataDir = join(tempRoot, 'data')
+  const profileDir = join(tempRoot, 'electron-profile')
+  const mainPath = resolve('apps/desktop/dist-electron/main.js')
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  let launchAttempted = false
+  let launchError: unknown
+  let rendererPid = 0
+  let testError: unknown
 
   try {
+    chmodSync(tempRoot, 0o700)
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    chmodSync(dataDir, 0o700)
+    mkdirSync(profileDir, { recursive: true, mode: 0o700 })
+    chmodSync(profileDir, 0o700)
+
+    const electronEnv = { ...process.env }
+    delete electronEnv.ELECTRON_RUN_AS_NODE
+    delete electronEnv.ELECTRON_DISABLE_SANDBOX
+    delete electronEnv.GHOST_BOT_DEV_URL
+    delete electronEnv.NODE_OPTIONS
+    delete electronEnv.NODE_PATH
+
+    launchAttempted = true
+    try {
+      app = await electron.launch({
+        args: [
+          ...(process.env.WAYLAND_DISPLAY ? ['--ozone-platform=wayland'] : []),
+          mainPath,
+          `--user-data-dir=${profileDir}`,
+        ],
+        chromiumSandbox: true,
+        timeout: 30_000,
+        env: {
+          ...electronEnv,
+          GHOST_BOT_DATA_DIR: dataDir,
+          GHOST_BOT_RUNTIME_MODE: 'mock',
+          GHOST_BOT_SMOKE_EXIT: '0',
+          GHOST_SECRET_NAMESPACE: `harness-ipc-${randomUUID()}`,
+        },
+      })
+    } catch (error) {
+      launchError = error
+      throw error
+    }
+
     const win = await app.firstWindow()
     await win.waitForLoadState('domcontentloaded')
+    assert.match(win.url(), /^file:/, 'IPC smoke must use the built renderer, not a development URL')
+    assert.equal(await win.evaluate(() => Boolean(window.ghostBot)), true, 'Built renderer preload bridge did not load')
+
+    const security = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+      const webContents = BrowserWindow.getAllWindows()[0]?.webContents
+      const preferences = webContents?.getLastWebPreferences()
+      return {
+        noSandbox: electronApp.commandLine.hasSwitch('no-sandbox'),
+        rendererPid: webContents?.getOSProcessId() ?? 0,
+        sandbox: preferences?.sandbox,
+        contextIsolation: preferences?.contextIsolation,
+        nodeIntegration: preferences?.nodeIntegration,
+      }
+    })
+    const { rendererPid: actualRendererPid, ...preferences } = security
+    assert.deepEqual(preferences, {
+      noSandbox: false,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    })
+    assert.ok(actualRendererPid > 0, 'Electron did not report a renderer OS process')
+    rendererPid = actualRendererPid
+
+    const rendererStatus = readFileSync(`/proc/${rendererPid}/status`, 'utf8')
+    const rendererProcess = readLinuxProcessSnapshot(rendererPid)
+    assert.ok(rendererProcess, `Renderer process ${rendererPid} does not exist in /proc`)
+    assert.doesNotMatch(rendererProcess.commandLine, /(?:^|\s)--no-sandbox(?:=|\s|$)/)
+    const seccomp = rendererStatus.match(/^Seccomp:\s+(\d+)$/m)?.[1]
+    const noNewPrivs = rendererStatus.match(/^NoNewPrivs:\s+(\d+)$/m)?.[1]
+    assert.equal(seccomp, '2', `Renderer ${rendererPid} is not under seccomp filtering`)
+    assert.equal(noNewPrivs, '1', `Renderer ${rendererPid} lacks NoNewPrivs`)
+    t.diagnostic(
+      `Sandbox evidence: renderer OS PID ${rendererPid}; Chromium sandbox=true; Seccomp=${seccomp}; NoNewPrivs=${noNewPrivs}; effective --no-sandbox absent.`,
+    )
+
+    const nodeGlobals = await win.evaluate(() => ({
+      require: typeof (window as unknown as { require?: unknown }).require,
+      process: typeof (window as unknown as { process?: unknown }).process,
+    }))
+    assert.deepEqual(nodeGlobals, { require: 'undefined', process: 'undefined' })
 
     const bots = (await win.evaluate(() => window.ghostBot.listBots())) as {
       bots: Array<{ id: string }>
     }
+    assert.ok(bots.bots.length > 0, 'IPC smoke requires a discovered bot')
     const created = (await win.evaluate(
       (id) => window.ghostBot.createSession({ agentId: id, title: 'IPC Smoke' }),
       bots.bots[0].id,
     )) as { id: string }
+    assert.ok(created.id.length > 0, 'IPC smoke requires a created session')
 
     const msgsPayload = await win.evaluate(
       (id) => window.ghostBot.listMessages({ sessionId: id }),
@@ -401,8 +580,109 @@ test('Offline Electron/daemon IPC smoke check confirms SessionInspectionResponse
     )
     const parsedInspect = SessionInspectionResponseSchema.parse(inspectPayload)
     assert.equal('accountId' in parsedInspect, false)
-  } finally {
-    await app.close()
-    rmSync(tempRoot, { recursive: true, force: true })
+
+    const runtimePid = app.process().pid
+    assert.ok(runtimePid && runtimePid > 0, 'Electron main process has no valid PID')
+    const ownedProcesses = collectOwnedProcessTree(runtimePid)
+    assert.ok(ownedProcesses.some((item) => item.pid === rendererPid), 'Renderer is outside the owned Electron process tree')
+    assert.ok(
+      ownedProcesses.every((item) => !/(?:^|\s)--no-sandbox(?:=|\s|$)/.test(item.commandLine)),
+      'An owned Electron or daemon process has the --no-sandbox switch',
+    )
+    assert.ok(
+      ownedProcesses.some((item) => item.commandLine.includes(resolve('apps/daemon/src/index.ts'))),
+      'IPC smoke did not start an owned source daemon process',
+    )
+  } catch (error) {
+    testError = error
   }
+
+  let cleanupError: unknown
+  if (app) {
+    const runtimePid = app.process().pid
+    let ownedProcesses: LinuxProcessSnapshot[] = []
+    let captureError: unknown
+    if (!runtimePid || runtimePid <= 0) {
+      captureError = new Error('Electron main process has no valid PID')
+    } else {
+      try {
+        ownedProcesses = collectOwnedProcessTree(runtimePid)
+      } catch (error) {
+        captureError = error
+      }
+    }
+
+    let closeError: unknown
+    try {
+      await app.close()
+    } catch (error) {
+      closeError = error
+    }
+
+    let remaining: LinuxProcessSnapshot[] = []
+    let waitError: unknown
+    try {
+      remaining = await waitForOwnedProcessTreeToExit(ownedProcesses)
+    } catch (error) {
+      waitError = error
+    }
+    const shutdownVerified =
+      !captureError &&
+      !waitError &&
+      Boolean(runtimePid && ownedProcesses.some((item) => item.pid === runtimePid)) &&
+      remaining.length === 0
+    if (!shutdownVerified) {
+      let diagnosticError: unknown
+      try {
+        writeCleanupDiagnostic(
+          tempRoot,
+          'Electron/daemon shutdown was not confirmed; temporary profile retained',
+          remaining.length > 0 ? remaining : ownedProcesses,
+        )
+      } catch (error) {
+        diagnosticError = error
+      }
+      cleanupError = new Error(`IPC smoke could not confirm owned-process shutdown; retained ${tempRoot}`, {
+        cause: captureError ?? waitError ?? closeError ?? diagnosticError,
+      })
+    } else {
+      try {
+        rmSync(tempRoot, { recursive: true, force: true })
+        if (existsSync(tempRoot)) throw new Error('Temporary IPC profile remains after removal')
+        t.diagnostic(`Cleanup verified: owned Electron and daemon processes exited; removed ${tempRoot}.`)
+      } catch (error) {
+        cleanupError = error
+      }
+      cleanupError ??= closeError
+    }
+  } else if (launchAttempted) {
+    const launchReason =
+      launchError instanceof Error ? launchError.message : String(launchError ?? 'unknown launch failure')
+    let diagnosticError: unknown
+    try {
+      writeCleanupDiagnostic(
+        tempRoot,
+        `Playwright launch returned no application handle; shutdown cannot be verified: ${launchReason}`,
+        [],
+      )
+    } catch (error) {
+      diagnosticError = error
+    }
+    cleanupError = new Error(`Electron launch cleanup is unconfirmed; retained ${tempRoot}`, {
+      cause: launchError ?? diagnosticError,
+    })
+  } else {
+    try {
+      rmSync(tempRoot, { recursive: true, force: true })
+      if (existsSync(tempRoot)) throw new Error('Temporary IPC profile remains after removal')
+    } catch (error) {
+      cleanupError = error
+    }
+  }
+
+  if (testError && cleanupError) {
+    throw new AggregateError([testError, cleanupError], 'IPC smoke failed and cleanup could not be fully verified')
+  }
+  if (testError) throw testError
+  if (cleanupError) throw cleanupError
 })
