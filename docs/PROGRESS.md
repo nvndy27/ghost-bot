@@ -478,6 +478,12 @@ Inspected Sidebar, bot/group creation, Workspace Files & Editor, Changes and Out
 
 `alpha4-final-ui-polish.test.ts` 1/1, `alpha2f-execution-output.test.ts` 2/2, `alpha4b-workspace-ui.test.ts` 1/1, `pnpm lint`, `pnpm typecheck`, `pnpm build` and `git diff --check` passed. Actual before/after synthetic Electron screenshots are stored outside Git in `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/alpha4-final-maintainer-polish/`. No live inference, package build, grant expansion or security-gate change. The published polish delta needs hosted CI and maintainer visual acceptance; packaged release checks remain separate.
 
+## Alpha.4 Output cancellation target correction — 2026-11-28
+
+**Tested** — Independent review `6096777632` of exact head `d34aaf164bb9f29e1424a266541de66518744c9d` found nullable terminal/build `taskId` values produced an empty command key and could dispatch whole-run cancellation. The renderer now creates command cancellation targets only for non-empty IDs and uses the same validated request builder at the click-handler boundary. Distinct command IDs remain distinct; duplicate events share one control; run summaries remain preferred with filtered-entry fallback; team contexts remain non-cancellable. No daemon or IPC contract change.
+
+Focused cancellation unit cases pass 4/4, existing Alpha.2F Output service/Electron regression passes 2/2, and the final UI polish Electron test passes 1/1. `pnpm lint`, `pnpm typecheck` and `pnpm build` pass. This is offline/mock evidence; it does not constitute live inference or package acceptance. The corrected exact head still requires hosted CI/CodeQL and independent delta acceptance. RC1 remains blocked until that acceptance is recorded.
+
 ## Alpha.3A release acceptance tooling — 2026-11-28
 
 **Implemented** — Branch `feat/release-acceptance-tooling` is based on Alpha.3C `5a8c69dc1b9a6d590273dcd05f0d54629127fb47`. Added `scripts/verify-release-upgrade.mjs`, which requires explicit previous/candidate executable artifacts and candidate source SHA, rejects identical artifact hashes, uses a private synthetic profile and mock runtime, verifies bot/avatar and conversation persistence, migration/data IDs/content, private-task identity/session isolation, idempotent retries, interrupted-run recovery, Workspace settings, optional native read/write grant expiry, workspace canary preservation and daemon exit. It emits a JSON evidence record with source and artifact hashes and unsupported checks.

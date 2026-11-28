@@ -3,14 +3,12 @@ import type {
   WorkspaceOutputEntry,
   WorkspaceOutputResponse,
 } from '@ghost-bot/shared-types/ipc'
+import {
+  cancellationTargetKey,
+  createWorkspaceOutputCancelInput,
+  selectCancellationActionEntries,
+} from './workspace-output-cancellation'
 import './workspace-output.css'
-
-function cancelTargetKey(entry: WorkspaceOutputEntry): string {
-  const command = entry.source === 'terminal' || entry.source === 'build'
-  return command
-    ? `command:${entry.runId}:${entry.taskId ?? ''}`
-    : `run:${entry.runId}`
-}
 
 export interface WorkspaceOutputTabProps {
   contextKey: string
@@ -108,19 +106,7 @@ export function WorkspaceOutputTab({
   }, [clearedAt, data, runFilter, searchQuery, severityFilter, sourceFilter])
 
   const cancellationActionEntryByTarget = useMemo(() => {
-    const latest = new Map<string, string>()
-    if (contextKind !== 'bot') return latest
-    for (const entry of filteredEntries) {
-      if (entry.cancellable && entry.id === `run-summary:${entry.runId}`) {
-        latest.set(cancelTargetKey(entry), entry.id)
-      }
-    }
-    for (const entry of filteredEntries) {
-      if (entry.cancellable && !latest.has(cancelTargetKey(entry))) {
-        latest.set(cancelTargetKey(entry), entry.id)
-      }
-    }
-    return latest
+    return selectCancellationActionEntries(filteredEntries, contextKind)
   }, [contextKind, filteredEntries])
 
   useEffect(() => {
@@ -163,18 +149,11 @@ export function WorkspaceOutputTab({
   }
 
   const handleCancel = async (entry: WorkspaceOutputEntry) => {
-    if (!ownerId || contextKind !== 'bot') return
+    const input = createWorkspaceOutputCancelInput(entry, contextKind, ownerId)
+    if (!input) return
     setError(null)
     try {
-      await bridge.cancelWorkspaceOutput({
-        botId: ownerId,
-        runId: entry.runId,
-        sessionId: entry.sessionId ?? undefined,
-        terminalCommandId:
-          entry.source === 'terminal' || entry.source === 'build'
-            ? entry.taskId ?? undefined
-            : undefined,
-      })
+      await bridge.cancelWorkspaceOutput(input)
       if (mountedRef.current) await loadOutput()
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Cancellation failed.')
@@ -313,8 +292,9 @@ export function WorkspaceOutputTab({
           </span>
         ) : (
           filteredEntries.map((entry) => {
-            const showCancel = entry.cancellable &&
-              cancellationActionEntryByTarget.get(cancelTargetKey(entry)) === entry.id
+            const targetKey = cancellationTargetKey(entry)
+            const showCancel = targetKey !== null &&
+              cancellationActionEntryByTarget.get(targetKey) === entry.id
             return <article
               key={entry.id}
               className="gb-output-entry"

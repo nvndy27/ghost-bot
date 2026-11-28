@@ -3,7 +3,7 @@
 ## Alpha.4 integrated release candidate
 
 - The runtime exposes one usage projection and no enumerable account identity catalog. The compact Usage surface reports other-account usage unavailable; Workspace no longer duplicates provider quota.
-- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The accepted source/release-tooling checkpoint is `22e704aa8b6d57a41cfa71a132bd8dd4fd41ad4b`; its hosted checks and focused independent acceptance are complete. Final local Electron inspection found and corrected the Group editor width and narrow Output controls/cancellation duplication. This new polish delta still needs publication, its own hosted checks and maintainer visual approval.
+- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` has hosted CI/CodeQL PASS and maintainer visual acceptance 21/21. Independent review found that a terminal/build Output row with null `taskId` could expose a whole-run Cancel action. The follow-up now suppresses that action and guards the handler; its exact published head needs hosted checks and focused independent acceptance before RC freeze.
 - Persisted widths remain compatible and are bounded only when rendered. New profiles use the approved 400px Workspace default; desktop and narrow effective bounds do not rewrite saved widths.
 
 
