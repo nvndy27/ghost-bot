@@ -459,11 +459,12 @@ test('buffers coalesced turn/start + notifications deterministically and filters
       } else if (msg.method === 'thread/start') {
         process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-coal' } } }) + '\\n');
       } else if (msg.method === 'turn/start') {
-        // Emit turn/start response, stale-turn delta, valid-turn delta, and completion in ONE coalesced write
+        // Emit a stale completion, valid deltas and completion in ONE coalesced write.
         process.stdout.write(
           JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-real' } } }) + '\\n' +
-          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-stale', itemId: 'i0', delta: 'stale' } }) + '\\n' +
-          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-real', itemId: 'i1', delta: 'fresh' } }) + '\\n' +
+          JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-coal', turn: { id: 'turn-stale', status: 'completed' } } }) + '\\n' +
+          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-real', itemId: 'i1', delta: 'fresh-1' } }) + '\\n' +
+          JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-coal', turnId: 'turn-real', itemId: 'i2', delta: 'fresh-2' } }) + '\\n' +
           JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-coal', turn: { id: 'turn-real', status: 'completed' } } }) + '\\n'
         );
       }
@@ -490,8 +491,124 @@ test('buffers coalesced turn/start + notifications deterministically and filters
       events.push(ev)
     }
     assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'stale'), false)
-    assert.equal(events.some((e) => e.type === 'message.delta' && e.text === 'fresh'), true)
-    assert.equal(events.at(-1)?.type, 'run.completed')
+    assert.deepEqual(
+      events.map((event) => event.type === 'message.delta' ? event.text : event.type),
+      ['fresh-1', 'fresh-2', 'run.completed'],
+    )
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('fails bounded pre-turn notification overflow and requests interruption', { timeout: 10_000 }, async () => {
+  const overflowScript = `
+    const readline = require('node:readline');
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-overflow' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        let output = JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-overflow' } } }) + '\\n';
+        for (let i = 0; i < 300; i++) {
+          output += JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-overflow', turnId: 'turn-overflow', itemId: 'i' + i, delta: 'burst-' + i } }) + '\\n';
+        }
+        output += JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-overflow', turn: { id: 'turn-overflow', status: 'completed' } } }) + '\\n';
+        process.stdout.write(output);
+      } else if (msg.method === 'turn/interrupt') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-overflow-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', overflowScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'read-only',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    for await (const event of adapter.run({ runId: 'run-overflow', session, text: 'burst' })) {
+      events.push(event)
+    }
+    assert.equal(events.length, 1)
+    assert.equal(events[0]?.type, 'run.failed')
+    if (events[0]?.type !== 'run.failed') assert.fail('expected explicit overflow failure')
+    assert.equal(events[0].code, 'NOTIFICATION_BUFFER_OVERFLOW')
+    assert.match(events[0].message, /interruption request was acknowledged/i)
+    assert.match(events[0].message, /execution outcome is uncertain/i)
+  } finally {
+    await adapter.close()
+    await rm(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('bounds the active run event queue and reports an incomplete burst', { timeout: 10_000 }, async () => {
+  const activeBurstScript = `
+    const readline = require('node:readline');
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { userAgent: 'codex-mock/0.172.0' } }) + '\\n');
+      } else if (msg.method === 'account/read') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { account: { type: 'chatgpt', email: 'u@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true } }) + '\\n');
+      } else if (msg.method === 'thread/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { thread: { id: 'thr-active-burst' } } }) + '\\n');
+      } else if (msg.method === 'turn/start') {
+        process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-active-burst' } } }) + '\\n');
+        setTimeout(() => {
+          let output = '';
+          for (let i = 0; i < 300; i++) {
+            output += JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: 'thr-active-burst', turnId: 'turn-active-burst', itemId: 'i' + i, delta: 'burst-' + i } }) + '\\n';
+          }
+          output += JSON.stringify({ method: 'turn/completed', params: { threadId: 'thr-active-burst', turn: { id: 'turn-active-burst', status: 'completed' } } }) + '\\n';
+          process.stdout.write(output);
+        }, 25);
+      }
+    });
+  `
+  const profileDir = await mkdtemp(join(tmpdir(), 'ghost-bot-test-active-burst-'))
+  const adapter = new CodexAppServerAdapter({
+    profileDir,
+    command: process.execPath,
+    args: ['-e', activeBurstScript],
+    permissionEvidence: verifiedEvidence,
+  })
+  try {
+    const session = await adapter.createSession({
+      agentId: 'a1',
+      accountId: 'acc1',
+      modelId: 'gpt-5-codex',
+      permission: 'read-only',
+      workspace: profileDir,
+      instructions: '',
+    })
+    const events: AgentEvent[] = []
+    for await (const event of adapter.run({ runId: 'run-active-burst', session, text: 'burst' })) {
+      events.push(event)
+    }
+    assert.equal(events.filter((event) => event.type === 'message.delta').length, 256)
+    assert.equal(events.length, 257)
+    assert.equal(events.at(-1)?.type, 'run.failed')
+    const failure = events.at(-1)
+    if (failure?.type !== 'run.failed') assert.fail('expected explicit queue overflow failure')
+    assert.equal(failure.code, 'EVENT_QUEUE_OVERFLOW')
+    assert.match(failure.message, /event stream is incomplete/i)
   } finally {
     await adapter.close()
     await rm(profileDir, { recursive: true, force: true })

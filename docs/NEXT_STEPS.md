@@ -208,3 +208,7 @@ Review actual Workspace screenshots against the approved V03.2 archive. Agent 1 
 ## Alpha.4C integration checkpoint
 
 **In Progress** — Unified Alpha.4A and Alpha.4B on `integration/alpha4-unified`; focused Electron acceptance and actual Dark/Light screenshots are recorded in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md). Publish/request exact-SHA independent review and hosted CI. Maintainer reviews the integrated screenshots and genuine V03.2 differences. Continue Alpha.3 readiness planning while those gates run. No package build or merge is authorized by this checkpoint.
+
+## RC2.R1 reliability checkpoint
+
+Review the focused Codex burst and RuntimeRegistry shutdown correction on `fix/rc2-r1-runtime-reliability` (base `25c669191ec2b84e16ab0a254dbc423a5c854da2`). Obtain hosted checks and independent review for its published head. Continue with a deterministic Electron daemon-child cleanup reproduction before changing `stopDaemon()`, then investigate session metadata retention and SQLite run-event capacity. Keep all provider inference offline and preserve the existing runtime execution policy.
