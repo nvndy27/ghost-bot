@@ -1,5 +1,9 @@
 # Next steps
 
+## Alpha.4C targeted CI closure
+
+**Tested** — PR #53 test-only corrections cover the approved 400px default, 65% desktop sizing at 900px, canonical Provider usage location, persisted-width bounds, and state-aware Explorer opening before PDF selection. Focused affected Electron and unit scenarios pass locally. Push the exact corrected head, wait for hosted CI to complete, and request Agent 2's focused delta review. Do not merge, integrate PR #52, freeze an RC, or package from this checkpoint.
+
 ## Alpha.4 integration handoff
 
 Alpha.3C PR #49 remains provisional until maintainer merge approval. Agent 2 accepted exact head `5a8c69d`, and required hosted CI passed. Alpha.4A PR #50 proceeds independently from that checkpoint. Agent 2 consumes the shared V03.2 contract and owns Workspace-specific UI. Reconcile the two feature histories before integrated visual acceptance. Final packages follow UI approval and candidate freeze.

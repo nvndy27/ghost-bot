@@ -83,3 +83,7 @@ Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM 
 ## Alpha.4B visual integration dependencies
 
 **Tested** — The Alpha.4C candidate now applies the V03.2 Workspace default/bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed on the combined worktree. Maintainer visual approval, Agent 2 exact-head independent review and hosted CI remain pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+
+## Alpha.4C hosted CI follow-up
+
+Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The 400px default, Provider usage location, 2048px persisted-width schema bound, 65% desktop width at 900px, and keyboard resize step assertions were updated in tests only. The PDF entry was present but hidden because the test toggled an already-open desktop Explorer closed; the corrected test checks its expanded state and visibility. Focused local tests pass. New pushed-head hosted CI and Agent 2's focused review remain pending; no production regression was demonstrated.

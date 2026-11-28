@@ -33,7 +33,7 @@ test('Alpha.2A workspace tab definitions and keyboard navigation contract', () =
 
 test('Alpha.2A preserves UiPreferences compatibility and 12 avatar presets', () => {
   assert.equal(avatarPresets.length, 12)
-  assert.equal(DEFAULT_PREFERENCES.rightWidth, 285)
+  assert.equal(DEFAULT_PREFERENCES.rightWidth, 400)
   assert.equal(DEFAULT_PREFERENCES.rightCollapsed, false)
 
   const parsed = UiPreferencesSchema.parse({
@@ -78,8 +78,12 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.waitForSelector('text=Connected tools')
     const runtimeDetails = page.locator('.gb-overview-runtime')
     await runtimeDetails.locator('summary').click()
-    await runtimeDetails.getByText('Account usage', { exact: true }).waitFor()
+    await runtimeDetails.getByText(/Connection:/).waitFor()
+    assert.equal(await runtimeDetails.getByText('Account usage', { exact: true }).count(), 0)
     await runtimeDetails.locator('summary').click()
+    await page.getByRole('button', { name: 'Provider usage' }).click()
+    await page.getByRole('dialog', { name: 'Provider usage' }).waitFor()
+    await page.getByRole('button', { name: 'Close provider usage' }).click()
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-overview-dark-1440x900.png') })
 
     // 2. Sidebar Bot Identity UI contract: avatar + bot name + provider label only (no model/effort)
@@ -122,7 +126,7 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await resizeHandle.focus()
     for (const steps of [1, 2]) {
       await resizeHandle.press('ArrowLeft')
-      const expectedWidth = Math.min(420, initialWidth + 16 * steps)
+      const expectedWidth = initialWidth + 16 * steps
       await page.waitForFunction((width) => {
         const panel = document.querySelector('[data-testid="workspace-panel-shell"]')
         return panel?.getBoundingClientRect().width === width
@@ -217,11 +221,11 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     })
     await page.keyboard.press('Escape')
 
-    // 9. Responsive narrow layout + maximize overlay
+    // 9. At 900px the desktop panel remains capped at 65% of the viewport.
     await page.setViewportSize({ width: 900, height: 700 })
     await page.getByTestId('workspace-maximize-btn').click()
     const narrowMaxWidth = await shell.evaluate((el) => el.getBoundingClientRect().width)
-    assert.ok(narrowMaxWidth >= 880, `Expected full-width overlay on narrow viewport, got ${narrowMaxWidth}`)
+    assert.equal(narrowMaxWidth, 585, `Expected the 65% desktop maximum at 900px, got ${narrowMaxWidth}`)
     await page.screenshot({ path: join(screenshotDir, 'alpha2a-narrow-maximized-900x700.png') })
     await page.getByTestId('workspace-maximize-btn').click()
 
