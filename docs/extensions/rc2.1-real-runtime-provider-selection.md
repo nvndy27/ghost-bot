@@ -5,6 +5,7 @@
 - Branch: `fix/rc2-real-world-usability`
 - Frozen source parent: `3af223e2f680df8facee143d6210aefd190ce0ef` (tree `e69e0e34ace901bf511612d0f83a115610dede5d`)
 - RC2.1 implementation commit: `011cdc1b7f1c9af4da08996f1a62220365a926e3`
+- Connected-but-gated Electron regression follow-up: `3414b2f`
 - Diagnosis was committed separately before this implementation. The RC1 worktree, source, artifacts and PR #53 were not modified.
 - Status: **Tested** offline and in source Electron. Hosted checks and independent review remain pending.
 
@@ -47,7 +48,7 @@ Routing changes are persisted through the existing bot record. Catalog generatio
 
 ## Focused evidence
 
-The actual Electron test uses a disposable HOME, XDG directories, data profiles and a synthetic workspace. It verifies the empty production first-run, absence of mock catalog models in real mode, installed-but-auth-required Codex, preserved existing mock bots and disabled Send. A private disposable executable then implements only fixture `initialize`, `account/read`, `model/list`, rate-limit metadata and session start/resume responses. It supplies a clearly synthetic ChatGPT account and model catalog, including `xhigh` and `max`; it does not implement `turn/start` and cannot contact a provider. The real Electron UI selects the fixture model and `max` effort, saves the compatible session, and restores the same bot/model/effort/permission and active session after app restart. Electron's actual window preferences reported sandbox and context isolation enabled and Node integration disabled. Screenshots are kept outside Git at `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/rc2/provider-acceptance/`.
+The actual Electron test uses a disposable HOME, XDG directories, data profiles and a synthetic workspace. It verifies the empty production first-run, absence of mock catalog models in real mode, installed-but-auth-required Codex, preserved existing mock bots and disabled Send. With a connected synthetic Codex fixture, the still-mock-configured bot remains gated in the header and sidebar and Send stays disabled until the user explicitly changes its configuration. A private disposable executable implements only fixture `initialize`, `account/read`, `model/list`, rate-limit metadata and session start/resume responses. It supplies a clearly synthetic ChatGPT account and model catalog, including `xhigh` and `max`; it does not implement `turn/start` and cannot contact a provider. The real Electron UI selects the fixture model and `max` effort, saves the compatible session, and restores the same bot/model/effort/permission and active session after app restart. Electron's actual window preferences reported sandbox and context isolation enabled and Node integration disabled. Screenshots are kept outside Git at `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/rc2/provider-acceptance/`.
 
 The tests exercise protocol fixtures and the source Electron application; they do not establish the maintainer's current subscription state, live model discovery against that account, live inference, API billing, or packaged behavior. No login, secret inspection, live inference, API request, package build, schema migration or dependency change was performed.
 
