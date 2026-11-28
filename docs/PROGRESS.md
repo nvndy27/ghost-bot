@@ -1,5 +1,11 @@
 # Progress log
 
+## RC2.K1 Kimi ACP authentication-state correction — 2026-11-28
+
+**Tested** — Isolated correction branch `fix/rc2-k1-kimi-auth-state` is based exactly on RC2 checkpoint `bef0372cd1bfa0d391f6dfad372bc56e7eaf7ac8`; it does not include later RC2.1B commits. ACP initialization no longer counts an undocumented `authenticated` field or advertised `authMethods` as proof. Authentication stays visibly unverified until a protected session operation succeeds; the specific Kimi `auth_required` JSON-RPC error marks it required and clears a prior confirmation. The transport preserves the RPC code, and disconnect/process closure clears negotiated authentication and model state. Existing provider authorization and containment gates are unchanged.
+
+The focused Kimi adapter suite passed 6/6, including standard/omitted/null/malformed/false/undocumented-true initialize values, successful protected session creation, session and prompt authentication rejection, stale-state clearing, unrelated RPC error classification, and a spawned synthetic stdio CLI exercising `auth_required`. Frozen-lockfile offline dependency installation, workspace lint, typecheck and source build passed. No actual Kimi CLI, credentials, account or inference was used; Kimi live authentication and execution remain unverified and gated. Independent review and hosted checks are pending publication of this correction.
+
 ## RC2.0 real-world diagnosis — 2026-11-28
 
 **Verified** — Isolated branch fix/rc2-real-world-usability at the exact frozen RC1 SHA 3af223e2f680df8facee143d6210aefd190ce0ef (tree e69e0e34ace901bf511612d0f83a115610dede5d). No production source, dependency manifest, lockfile or migration changed. The dedicated diagnosis and RC2.1–2.4 plan is in [rc2-real-world-usability-diagnosis.md](extensions/rc2-real-world-usability-diagnosis.md).

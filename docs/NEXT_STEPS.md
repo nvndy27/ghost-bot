@@ -6,6 +6,8 @@
 
 **Recommended next action:** allow hosted checks to finish on the corrected PR #54 head and obtain CA2/A2 focused independent acceptance. Do not infer live readiness from the synthetic protocol fixture. After those gates and CA1 authorization, begin RC2.2: correct fresh and legacy tilde workspace paths, add a Workspace Open Folder/switching flow, and verify native read/write consent, file save to disk and Ctrl+S on a synthetic project. A bounded live Codex inference still requires separate explicit maintainer authorization.
 
+**RC2.K1 handoff:** the focused Kimi authentication-state correction is tested on an isolated branch based on `bef0372cd1bfa0d391f6dfad372bc56e7eaf7ac8`. Publish it and obtain its own hosted checks and independent review before the separate PR #54 acceptance. Keep live Kimi login/inference and all Kimi execution gates unchanged; this source correction is not live account acceptance.
+
 ## Unified v0.1 release candidate — integration checkpoint
 
 **In Progress** — Draft PR #53 preserves the Alpha.3C, Alpha.4A, Alpha.4B, Alpha.4C and release-tooling histories. Candidate `d34aaf164bb9f29e1424a266541de66518744c9d` has passing hosted CI/CodeQL and maintainer visual acceptance 21/21. Independent review found a command-cancellation identity regression when terminal/build `taskId` is null. The follow-up guards command identities at action selection and request construction; its focused tests, Output Electron regression, lint, typecheck and source build pass locally. Verify hosted checks and exact-head independent acceptance on the resulting PR #53 head before RC freeze. Actual packaged acceptance remains open; no release or package build is authorized and v0.1 remains unreleased.

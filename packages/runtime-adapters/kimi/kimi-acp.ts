@@ -26,6 +26,7 @@ export const KIMI_ACP_MAX_DURATION_MS = 120_000
 export const KIMI_ACP_MAX_STREAM_BYTES = 2 * 1024 * 1024
 
 const KIMI_SECRET_PATTERN = /(bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{8,}|token=[a-z0-9._-]+)/gi
+type KimiAuthenticationState = 'unknown' | 'confirmed' | 'required'
 
 export function redactKimiSecrets(text: string): string {
   return text.replace(KIMI_SECRET_PATTERN, '[REDACTED]')
@@ -77,6 +78,24 @@ export interface KimiAcpRpcResponse {
   id: number | string
   result?: unknown
   error?: { code: number; message: string; data?: unknown }
+}
+
+export class KimiAcpRpcError extends Error {
+  readonly code: number
+
+  constructor(code: number, message: string) {
+    super(message)
+    this.name = 'KimiAcpRpcError'
+    this.code = code
+  }
+}
+
+export function isKimiAuthenticationRequiredError(error: unknown): error is KimiAcpRpcError {
+  return (
+    error instanceof KimiAcpRpcError &&
+    error.code === -32000 &&
+    /auth(?:entication)?[ _-]?required/i.test(error.message)
+  )
 }
 
 export interface KimiAcpTransport {
@@ -187,8 +206,10 @@ class StdioKimiAcpTransport implements KimiAcpTransport {
       this.pending.delete(id)
       clearTimeout(p.timer)
       if (msg.error && typeof msg.error === 'object') {
-        const e = msg.error as { message?: unknown }
-        p.reject(new Error(redactKimiSecrets(String(e.message ?? 'ACP RPC error'))))
+        const e = msg.error as { code?: unknown; message?: unknown }
+        const code = typeof e.code === 'number' && Number.isFinite(e.code) ? e.code : null
+        const message = redactKimiSecrets(String(e.message ?? 'ACP RPC error'))
+        p.reject(code === null ? new Error(message) : new KimiAcpRpcError(code, message))
       } else {
         p.resolve(msg.result)
       }
@@ -328,7 +349,7 @@ export class KimiAcpAdapter implements AgentRuntime {
   private negotiatedProtocolVersion: number | null = null
   private negotiatedLoadSession = false
   private negotiatedModels: ModelInfo[] = []
-  private authenticated = false
+  private authenticationState: KimiAuthenticationState = 'unknown'
   private readonly sessions = new Map<string, KimiSessionState>()
   private readonly pendingPermissions = new Map<string, PendingPermission>()
   private readonly cancelledRuns = new Set<string>()
@@ -347,6 +368,7 @@ export class KimiAcpAdapter implements AgentRuntime {
     protocolVersion: number | null
     acpProtocolSupported: boolean
     authenticated: boolean
+    authenticationState: KimiAuthenticationState
     loadSessionSupported: boolean
     models: ModelInfo[]
     detail: string
@@ -360,6 +382,7 @@ export class KimiAcpAdapter implements AgentRuntime {
           protocolVersion: null,
           acpProtocolSupported: false,
           authenticated: false,
+          authenticationState: 'unknown',
           loadSessionSupported: false,
           models: [],
           detail: cli.detail,
@@ -370,10 +393,11 @@ export class KimiAcpAdapter implements AgentRuntime {
         cliVersion: cli.version,
         protocolVersion: this.negotiatedProtocolVersion,
         acpProtocolSupported: this.negotiatedProtocolVersion === SUPPORTED_ACP_PROTOCOL_VERSION,
-        authenticated: this.authenticated,
+        authenticated: this.authenticationState === 'confirmed',
+        authenticationState: this.authenticationState,
         loadSessionSupported: this.negotiatedLoadSession,
         models: this.negotiatedModels,
-        detail: `${cli.detail} (ACP execution gated by default)`,
+        detail: this.authenticationDetail(cli.detail),
       }
     }
 
@@ -384,12 +408,11 @@ export class KimiAcpAdapter implements AgentRuntime {
         cliVersion: 'fixture',
         protocolVersion: this.negotiatedProtocolVersion,
         acpProtocolSupported: this.negotiatedProtocolVersion === SUPPORTED_ACP_PROTOCOL_VERSION,
-        authenticated: this.authenticated,
+        authenticated: this.authenticationState === 'confirmed',
+        authenticationState: this.authenticationState,
         loadSessionSupported: this.negotiatedLoadSession,
         models: this.negotiatedModels,
-        detail: this.authenticated
-          ? 'Kimi ACP initialized and authenticated'
-          : 'Kimi ACP initialized (run `kimi login` to authenticate)',
+        detail: this.authenticationDetail('Kimi ACP protocol initialized'),
       }
     } catch (err) {
       return {
@@ -398,6 +421,7 @@ export class KimiAcpAdapter implements AgentRuntime {
         protocolVersion: null,
         acpProtocolSupported: false,
         authenticated: false,
+          authenticationState: this.authenticationState,
         loadSessionSupported: false,
         models: [],
         detail: err instanceof Error ? redactKimiSecrets(err.message) : 'Kimi ACP unavailable',
@@ -434,7 +458,10 @@ export class KimiAcpAdapter implements AgentRuntime {
         : {}
     this.negotiatedProtocolVersion = proto
     this.negotiatedLoadSession = agentCaps.loadSession === true
-    this.authenticated = initRes?.authenticated !== false
+    // ACP v1 does not define this field, and the Kimi contract does not
+    // document it as an authentication proof. Ignore it until a protected
+    // session operation provides actual evidence.
+    this.authenticationState = 'unknown'
 
     const rawModels = Array.isArray(initRes?.models) ? initRes.models : []
     this.negotiatedModels = rawModels
@@ -461,6 +488,7 @@ export class KimiAcpAdapter implements AgentRuntime {
 
     transport.onClose(() => {
       this.transport = null
+      this.resetNegotiatedState()
       for (const sess of this.sessions.values()) {
         if (sess.activeRunId) {
           this.quarantinedSessions.add(sess.sessionId)
@@ -476,18 +504,49 @@ export class KimiAcpAdapter implements AgentRuntime {
     return this.getAuthStatus()
   }
 
+  private authenticationDetail(prefix: string): string {
+    if (this.authenticationState === 'confirmed') {
+      return `${prefix}; authentication confirmed by Kimi ACP`
+    }
+    if (this.authenticationState === 'required') {
+      return `${prefix}; Kimi ACP requires authentication. Run \`kimi login\` in your local terminal.`
+    }
+    return `${prefix}; authentication is unverified until a protected session operation succeeds. Execution remains gated by default.`
+  }
+
+  private resetNegotiatedState(): void {
+    this.authenticationState = 'unknown'
+    this.negotiatedProtocolVersion = null
+    this.negotiatedLoadSession = false
+    this.negotiatedModels = []
+  }
+
+  private async sendSessionRequest(
+    transport: KimiAcpTransport,
+    method: 'session/new' | 'session/load' | 'session/prompt',
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
+    try {
+      const result = await transport.sendRequest(method, params, timeoutMs)
+      return result
+    } catch (error) {
+      if (isKimiAuthenticationRequiredError(error)) {
+        this.authenticationState = 'required'
+      }
+      throw error
+    }
+  }
+
   async getAuthStatus(): Promise<AuthState> {
     const info = await this.inspectRuntime()
     if (!info.cliAvailable) {
       return { status: 'disconnected', detail: info.detail }
     }
-    if (!info.authenticated) {
-      return {
-        status: 'pending',
-        detail: 'Kimi CLI not authenticated; run `kimi login` in your terminal',
-      }
+    if (info.authenticationState === 'confirmed') {
+      return { status: 'connected', detail: info.detail }
     }
-    return { status: 'connected', detail: info.detail }
+    return { status: 'pending', detail: info.detail }
   }
 
   async disconnect(): Promise<void> {
@@ -496,13 +555,17 @@ export class KimiAcpAdapter implements AgentRuntime {
       this.pendingPermissions.delete(id)
     }
     if (this.transport) {
-      const res = await this.transport.close()
+      const transport = this.transport
       this.transport = null
+      this.resetNegotiatedState()
+      const res = await transport.close()
       if (!res.confirmed) {
         for (const sess of this.sessions.values()) {
           this.quarantinedSessions.add(sess.sessionId)
         }
       }
+    } else {
+      this.resetNegotiatedState()
     }
   }
 
@@ -540,18 +603,27 @@ export class KimiAcpAdapter implements AgentRuntime {
       throw new Error('Valid canonical workspace is required for Kimi ACP session')
     }
     const transport = await this.ensureInitialized()
-    if (!this.authenticated) {
+    if (this.authenticationState === 'required') {
       throw new Error('Kimi ACP requires `kimi login` authentication before creating sessions')
     }
-    const res = (await transport.sendRequest('session/new', {
-      cwd: config.workspace,
-      mcpServers: [],
-      ...(config.modelId ? { model: config.modelId } : {}),
-    })) as { sessionId?: unknown }
+    let res: { sessionId?: unknown }
+    try {
+      res = (await this.sendSessionRequest(transport, 'session/new', {
+        cwd: config.workspace,
+        mcpServers: [],
+        ...(config.modelId ? { model: config.modelId } : {}),
+      })) as { sessionId?: unknown }
+    } catch (error) {
+      if (isKimiAuthenticationRequiredError(error)) {
+        throw new Error('Kimi ACP requires `kimi login` authentication before creating sessions')
+      }
+      throw error
+    }
     const sessionId = typeof res?.sessionId === 'string' ? res.sessionId.trim() : ''
     if (!sessionId) {
       throw new Error('Kimi ACP session/new did not return a valid sessionId')
     }
+    this.authenticationState = 'confirmed'
     this.sessions.set(sessionId, {
       sessionId,
       config,
@@ -569,11 +641,12 @@ export class KimiAcpAdapter implements AgentRuntime {
     if (!this.negotiatedLoadSession) {
       throw new Error('Kimi ACP agent did not negotiate loadSession capability')
     }
-    await transport.sendRequest('session/load', {
+    await this.sendSessionRequest(transport, 'session/load', {
       sessionId: externalId,
       cwd: config?.workspace ?? '/tmp',
       mcpServers: [],
     })
+    this.authenticationState = 'confirmed'
     const existing = this.sessions.get(externalId)
     if (!existing && config) {
       this.sessions.set(externalId, {
@@ -796,8 +869,8 @@ export class KimiAcpAdapter implements AgentRuntime {
       })
     })
 
-    const promptPromise = transport
-      .sendRequest(
+    const promptPromise = this.sendSessionRequest(
+        transport,
         'session/prompt',
         {
           sessionId: state.sessionId,
@@ -807,6 +880,7 @@ export class KimiAcpAdapter implements AgentRuntime {
       )
       .then((res) => {
         if (finished) return
+        this.authenticationState = 'confirmed'
         finished = true
         const rec = res && typeof res === 'object' ? (res as Record<string, unknown>) : {}
         if (rec.stopReason === 'cancelled' || this.cancelledRuns.has(request.runId)) {
@@ -836,10 +910,13 @@ export class KimiAcpAdapter implements AgentRuntime {
           return
         }
         this.quarantinedSessions.add(state.sessionId)
+        const authenticationRequired = isKimiAuthenticationRequiredError(err)
         pushEvent({
           type: 'run.failed',
-          code: 'KIMI_PROMPT_ERROR',
-          message: err instanceof Error ? redactKimiSecrets(err.message) : 'Kimi ACP prompt failed',
+          code: authenticationRequired ? 'KIMI_AUTH_REQUIRED' : 'KIMI_PROMPT_ERROR',
+          message: authenticationRequired
+            ? 'Kimi ACP requires authentication. Run `kimi login` in your local terminal.'
+            : err instanceof Error ? redactKimiSecrets(err.message) : 'Kimi ACP prompt failed',
         })
       })
 
