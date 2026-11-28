@@ -1,11 +1,10 @@
 ## Licensing and public source distribution
 
-## Alpha.4A integration limits
+## Alpha.4 integrated release candidate
 
-- The existing runtime snapshot contains one runtime usage projection and no enumerable account identity catalog. The compact Usage popover explicitly reports other-account usage unavailable.
-- Workspace V03.2 implementation belongs to Agent 2. Alpha.4A screenshots retain the prior Workspace layout until convergence, including its old Overview usage section. No Workspace-specific API was replaced.
-- Existing persisted sidebar/Workspace widths remain valid, so legacy profiles can differ from the prototype defaults. The 65-percent Workspace resize bound requires coordinated work with Agent 2.
-- The V03.2 visual handoff is approved. Production visual acceptance and convergence remain pending.
+- The runtime exposes one usage projection and no enumerable account identity catalog. The compact Usage surface reports other-account usage unavailable; Workspace no longer duplicates provider quota.
+- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The targeted Alpha.4C test correction delta is independently accepted. Maintainer visual approval and combined hosted CI on the final converged SHA remain pending.
+- Persisted widths remain compatible and are bounded only when rendered. New profiles use the approved 400px Workspace default; desktop and narrow effective bounds do not rewrite saved widths.
 
 
 ## Accepted release baseline — 2026-11-28
@@ -73,7 +72,7 @@ CI, CodeQL, Scorecard, Dependabot and dependency-graph SBOM export are configure
 
 ## Alpha.3A remaining package acceptance
 
-**Blocked** pending final artifacts after UI refinement and provisioned target hosts. Clean Fedora RPM dependency completeness and launcher, AppImage FUSE, Ubuntu desktop policies, and same-profile upgrade/restart remain open. Native and electron-builder RPM dependency declarations differ. Existing extracted artifacts do not close these gaps. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
+**Blocked** pending final artifacts and candidate-specific host acceptance. Fedora 45 read-only preflight found the declared runtime dependencies, FUSE device/helper, Bubblewrap namespace, Poppler and Chrome sandbox prerequisites available, but the Ghost Bot RPM/desktop launcher is not installed and candidate launch remains unverified. AppImage native launch remains unverified despite present FUSE prerequisites. Ubuntu desktop policy/session checks and two-distinct-artifact upgrade/restart remain open. Native and electron-builder RPM dependency declarations differ. Existing artifacts have no established source SHA and do not close these gaps. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
 
 The new upgrade runner has not been exercised with two distinct release artifacts because only prior-evidence artifacts are present locally. Its full evidence remains **Blocked** until a candidate artifact exists. `--interactive-write-grant` also requires an operator to approve the native prompt for a temporary folder. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
 
@@ -84,8 +83,8 @@ Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM 
 
 ## Alpha.4B visual integration dependencies
 
-**Tested** — The Alpha.4C candidate now applies the V03.2 Workspace default/bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed on the combined worktree. Maintainer visual approval, Agent 2 exact-head independent review and hosted CI remain pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+**Tested** — The integrated PR #53 candidate applies V03.2 Workspace bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed. Maintainer visual approval and full hosted CI for the newly converged head remain pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
 
 ## Alpha.4C hosted CI follow-up
 
-Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The 400px default, Provider usage location, 2048px persisted-width schema bound, 65% desktop width at 900px, and keyboard resize step assertions were updated in tests only. The PDF entry was present but hidden because the test toggled an already-open desktop Explorer closed; the corrected test checks its expanded state and visibility. Focused local tests pass. New pushed-head hosted CI and Agent 2's focused review remain pending; no production regression was demonstrated.
+Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The test-only corrections were independently accepted at `63992bb9f8544fae8205e36f8ceafce333991bb7`; the PDF entry had been hidden by closing an already-open desktop Explorer. Focused local tests pass and no production regression was demonstrated. The new converged PR #53 head requires its own hosted CI; its complete result remains pending.

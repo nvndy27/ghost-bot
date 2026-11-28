@@ -48,7 +48,7 @@ Ghost Bot is a desktop AI workspace for personal agents, multi-model collaborati
 - **Workspace Panel:** review and edit files, inspect Git changes, preview a running website and view execution output beside the chat.
 - **Agent foundation:** scoped Memory, Knowledge, MCP, Skills, Routines and Computer Use, subject to runtime capabilities and acceptance gates.
 
-Group collaboration and the new Workspace Panel are planned for the first personal/friends release, not features claimed to be complete today.
+Group Bot and Workspace implementations are integrated and offline-verified within their documented capability boundaries. Live Teams, restricted Workspace mutations, unsupported provider paths and packaged release behavior remain gated or unverified; see the [release capability plan](docs/extensions/alpha3b-release-readiness.md).
 
 ## Current development status
 
@@ -59,11 +59,11 @@ Group collaboration and the new Workspace Panel are planned for the first person
 | Additional provider adapters | Implemented / offline protocol-tested on stacked development branches; live integration and acceptance pending |
 | Memory, Knowledge, MCP | Integrated and offline-tested; capabilities and consent vary by runtime |
 | Teams, Routines, Computer Use, Scoped Terminal | Existing foundations and offline acceptance evidence; live execution remains gated where unverified |
-| Group Bot, member model selection and visible Private Task Chat summaries | Planned — Alpha.1 |
-| Files/Editor, Git Diff, Browser/Live Demo and Output | Planned — Alpha.2 |
-| Full Personal & Friends Alpha release | Pending integrated acceptance — Alpha.3 |
+| Group Bot, member routing, private delegation and summaries | Integrated and offline-verified within accepted boundaries; live Teams remain gated |
+| Workspace Files, read-only Git, Browser and Output | Integrated with accepted authorization and capability restrictions; some mutations/platform paths remain gated |
+| Full Personal & Friends Alpha release | Pending Alpha.4 visual approval and Alpha.3 packaged/platform acceptance; v0.1 is not released |
 
-The integrated offline release-candidate baseline is Alpha.0B (`integration/alpha0-native-chat-rc`, stacked on PRs #6–#14); stacked development work is not equivalent to a merged or publicly released build. Consult [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) for the latest accepted checkpoints.
+Accepted main is `bae63048978ea0188d784a4d53910f3fb31cd552`. Draft PR #53 contains the converged Alpha.4 UI and release-tooling candidate; it is not merged, frozen, or released. See [progress](docs/PROGRESS.md) and [next steps](docs/NEXT_STEPS.md) for the current checkpoint.
 
 ## Providers and runtimes
 

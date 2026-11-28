@@ -72,10 +72,15 @@ const evidence = {
 let app
 let seed
 async function launch(executable) {
+  const launchEnv = { ...process.env }
+  delete launchEnv.ELECTRON_RUN_AS_NODE
+  delete launchEnv.ELECTRON_DISABLE_SANDBOX
+  delete launchEnv.NODE_OPTIONS
   const instance = await electron.launch({
     executablePath: executable, args: [], cwd: dirname(executable), timeout: 60_000,
+    chromiumSandbox: true,
     env: {
-      ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
+      ...launchEnv, HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
       XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),
       GHOST_BOT_DATA_DIR: dataDir, GHOST_BOT_RUNTIME_MODE: 'mock', GHOST_BOT_SMOKE_EXIT: '0',
     },
@@ -83,6 +88,18 @@ async function launch(executable) {
   const page = await instance.firstWindow()
   await page.waitForLoadState('domcontentloaded', { timeout: 30_000 })
   await page.getByText('Chief of Staff', { exact: true }).first().waitFor({ timeout: 30_000 })
+  const security = await instance.evaluate(({ app, BrowserWindow }) => {
+    const web = BrowserWindow.getAllWindows()[0]?.webContents
+    const preferences = web?.getLastWebPreferences()
+    return {
+      packaged: app.isPackaged,
+      noSandbox: app.commandLine.hasSwitch('no-sandbox'),
+      sandbox: preferences?.sandbox,
+      contextIsolation: preferences?.contextIsolation,
+      nodeIntegration: preferences?.nodeIntegration,
+    }
+  })
+  assert.deepEqual(security, { packaged: true, noSandbox: false, sandbox: true, contextIsolation: true, nodeIntegration: false })
   const health = await page.evaluate(() => window.ghostBot.getDaemonHealth())
   assert.equal(health.ok, true)
   assert.equal(health.runtimeMode, 'mock')
@@ -312,6 +329,11 @@ try {
   for (const message of before.messages) assert(after.messages.some((value) => value.id === message.id && value.content_json === message.content_json), `Migration lost or changed message ${message.id}`)
   for (const team of before.teams) assert(after.teams.some((value) => value.id === team.id && value.name === team.name), `Migration lost team ${team.id}`)
   assert(after.migrations.length >= before.migrations.length, 'Migration history regressed')
+  assert.deepEqual(
+    after.migrations.slice(0, before.migrations.length),
+    before.migrations,
+    'Existing migration versions and names must remain unchanged and ordered',
+  )
   evidence.checks.migrationAndDataPreservation = {
     status: 'passed', previousLatest: before.migrations.at(-1)?.version,
     candidateLatest: after.migrations.at(-1)?.version, previousMigrationCount: before.migrations.length,

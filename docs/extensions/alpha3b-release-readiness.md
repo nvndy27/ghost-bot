@@ -112,7 +112,8 @@ PDF/Git require compatible Linux isolation and host utilities. Browser acceptanc
 - [x] Historical package evidence retains its exact build SHA and hashes.
 - [ ] Agent 2 completes Alpha.3A readiness, including Linux dependencies, Issue #3/CU4-PKG-02 disposition and explicit platform support/gaps.
 - [ ] Maintainer approves Alpha.3 readiness and any provider test budgets. Optional unavailable providers may remain unavailable with accurate capability labels.
-- [ ] Maintainer approves Alpha.4 UI acceptance scope, then records visual/accessibility acceptance and any concrete corrections.
+- [x] Maintainer approved the V03.2 Alpha.4 UI acceptance scope.
+- [ ] Maintainer records final visual/accessibility acceptance of the converged candidate and any concrete corrections.
 - [ ] Freeze the final source SHA, release version, lockfile, migration history and supported capability matrix after approved corrections.
 - [ ] Agent 2 builds and verifies final artifacts once from the frozen SHA using the existing packaging harness. Record hashes, environment, dependency preflights, exact scenarios and installed/extracted/FUSE distinctions. Any source correction requires a new candidate and corresponding affected evidence.
 - [ ] Confirm internal alpha instructions, backup/recovery guidance, known limitations and audience against Alpha.3A evidence.
@@ -122,6 +123,6 @@ PDF/Git require compatible Linux isolation and host utilities. Browser acceptanc
 
 Agent 1 supplies this readiness plan. Agent 2 owns Alpha.3A, package dependencies, the harness and platform evidence. Final package acceptance follows Alpha.3 readiness, approved Alpha.4 UI acceptance and candidate freeze. Existing package tests are reused for readiness planning. Their prior results do not certify newly built release artifacts. [Distribution requirements](../OPEN_SOURCE_READINESS.md), [packaging harness](alpha2g-workspace-convergence.md#executable-alpha3-packaging-acceptance).
 
-## Alpha.4C integration checkpoint — 2026-11-28
+## Unified Alpha.4C and release-tooling checkpoint — 2026-11-28
 
-**In Progress** — Draft unified UI candidate PR #53 is `1de440f01e3478399e8cd0c1d77791a9aad5ce19`; required CI/CodeQL and Agent 2 focused review are pending. Actual integrated Dark/Light Electron screenshots and focused acceptance are linked from [Alpha.4C convergence](alpha4c-ui-convergence.md). This is not the frozen release candidate and does not certify new package artifacts. Continue only the existing Alpha.3A readiness planning while review runs. After Alpha.4 visual approval, resolve the Alpha.3 readiness/platform checklist, obtain maintainer candidate-freeze approval, then have Agent 2 build and verify final packages once. v0.1 remains unreleased; no package build was run for Alpha.4C.
+**In Progress** — Draft PR #53 converges the independently accepted Alpha.4C correction head `63992bb9f8544fae8205e36f8ceafce333991bb7` with release tooling PR #52 at `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05`, preserving both histories. The correction delta is independently accepted; final combined CI and maintainer visual approval remain pending. Focused offline evidence and actual integrated UI screenshots are linked from [Alpha.4C convergence](alpha4c-ui-convergence.md). This is not the frozen release candidate and does not certify a new package. The current tooling checks migration-history identity and packaged sandbox configuration; artifact-to-artifact upgrade acceptance remains unrun because no distinct final candidate pair is available. Complete Alpha.3A host/platform acceptance and obtain explicit maintainer candidate-freeze approval before Agent 2's single final package build/verification. v0.1 remains unreleased.

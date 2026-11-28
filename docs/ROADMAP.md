@@ -4,7 +4,7 @@
 
 PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. Agent 2 independently accepted final head `c08c4a7344b03658f23d9d9a0b61bcbd5b1ea6f0`. Final offline CI and CodeQL passed on that head. Alpha.1 and Alpha.2 are **Verified** within the accepted offline and authorized personal Workspace capability boundaries. Live Teams and additional provider execution require separate acceptance. v0.1 is **not released**. [PR #46 acceptance](https://github.com/nvndy27/ghost-bot/pull/46#issuecomment-7224652321), [CI](https://github.com/nvndy27/ghost-bot/actions/runs/46042628210), [CodeQL](https://github.com/nvndy27/ghost-bot/actions/runs/46042628175).
 
-[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. Alpha.4 UI acceptance requires maintainer scope approval before final candidate freeze and a single final package build and verification cycle.
+[Release capabilities, provider plans and release checklist](extensions/alpha3b-release-readiness.md) govern the next handoff. Agent 2 owns Alpha.3A packaging readiness and platform gaps. V03.2 implementation scope is approved; maintainer visual acceptance and integrated CI remain gates before candidate freeze and the single final package build/verification cycle.
 
 
 States are Not Started, In Progress, Implemented, Tested, Verified and Blocked. See [progress](PROGRESS.md) for test evidence.
@@ -52,9 +52,9 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 
 ### Alpha.3 — Personal & Friends Alpha release acceptance
 - **Tested** — PR #47 corrects the save Electron wait to require acknowledged completion. The exact empty-content CI failure was reproduced with a paused daemon. Corrected focused save/watch/conflict/revocation acceptance passed using an existing artifact. Complete-suite verification is delegated to hosted CI.
-- **In Progress** — Alpha.3A packaging readiness on merged baseline `bae63048978ea0188d784a4d53910f3fb31cd552`. Integration is accepted within scope. Stabilize package CSP readiness and prepare final Fedora/Ubuntu installation, FUSE and upgrade checks after UI refinement. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
-- **In Progress** — Alpha.3A packaging readiness belongs to Agent 2. Alpha.3B documents release capabilities and bounded provider acceptance plans. Hosted unified acceptance passed. Final release artifacts require their own frozen-source evidence.
-- **Implemented** — Added artifact-to-artifact upgrade/restart runner and read-only Linux prerequisite evidence checker on the Alpha.3C baseline. Full upgrade execution needs distinct final previous/candidate artifacts; Fedora launcher, AppImage FUSE and Ubuntu desktop checks remain open. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
+- **In Progress** — Alpha.3A package and platform readiness belongs to Agent 2. Fedora launcher, AppImage native FUSE, Ubuntu sessions and final artifact upgrade acceptance remain open. See [Alpha.3A packaging readiness](extensions/alpha3a-packaging-readiness.md).
+- **Implemented** — Alpha.3B documents the capability matrix, nine bounded provider acceptance plans and v0.1 checklist. These plans are not live provider acceptance.
+- **Tested** — Release upgrade/restart runner and read-only Linux prerequisite checker are integrated on the Alpha.4 candidate. Syntax and safe identical-artifact refusal checks passed; the checker passed read-only Fedora host probes. Artifact-pair upgrade acceptance remains unrun until distinct release artifacts exist. See [release acceptance tooling](extensions/release-acceptance-tooling.md).
 - **Verified** — Alpha.0–2 are integrated on the accepted baseline. Existing migrations `0001–0014` are preserved; any schema change must use a coordinated forward migration, tested fresh/upgrade/restart/rollback. Do not bypass the existing policy broker, authenticated daemon, sandbox, approvals, or provider-specific gates.
 - Follow the parallel development policy in AGENTS.md. Coordinate reconciliation and migrations while preserving separate worktrees and maintainer merge authority.
 - Gate: lint, typecheck, build, regression and real Electron E2E evidence, secrets/permissions review, data preservation, independent acceptance; install/launch/update/restart checks on Fedora GNOME and Ubuntu where available, Windows only when actually supported/tested (not a required first-alpha release platform). Verify packages and document supported platforms and known limitations. Prepare simple installation/usage instructions; no public repository visibility or license change as part of this roadmap decision.
@@ -62,8 +62,8 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 
 ### Alpha.4 — Approved V03.2 UI implementation
 
-- **In Progress** — The maintainer approved V03.2 design and assigned shared shell/Chat/Settings/Usage to Alpha.4A and Workspace UI to Agent 2 Alpha.4B. See [shared UI contract](extensions/alpha4-shared-ui-contract.md). Implementation proceeds on provisional Alpha.3C while required review and CI gate merging.
-- Production visual acceptance, two-agent reconciliation, final candidate freeze and the final Agent 2 package build/verification remain open.
+- **Implemented** — V03.2 shared shell/Chat/Settings/Usage and Workspace UI are converged in Draft PR #53 with Alpha.3C, Alpha.4A and Alpha.4B histories preserved. The targeted Alpha.4C correction delta was independently accepted; see [shared UI contract](extensions/alpha4-shared-ui-contract.md).
+- **In Progress** — Final combined hosted CI and maintainer visual acceptance remain pending. Do not freeze an RC or build packages until those gates and Alpha.3A platform requirements are satisfied.
 
 ### Post-alpha roadmap (deferred, not current assignments)
 - **Not Started** — v0.2 Dual-Mode Workspace: Chat / Terminal switch in upper-left of both layouts; Orca-style project/worktree sidebar, interactive user PTY, CLI registry (including supported agy/Codex/Claude flows), tabs and nested splits, reconnect, usage from official sources. Reuse Alpha.2 workspace tools; retain existing scoped sandbox separately.
@@ -128,5 +128,5 @@ Gate: threat model, consent, privacy and platform-specific tests reviewed.
 
 ## Alpha.4 — Approved V03.2 UI implementation
 
-- **Tested** — Alpha.4B Workspace presentation and responsive Explorer, with actual Electron screenshots and seven affected scenarios passing. Shared token checkpoint and Alpha.3C ancestry are preserved. Global App width settings, Usage Center and Tools settings wiring require Agent 1 convergence. Maintainer visual approval and final integrated acceptance remain pending. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
-- **In Progress** — Alpha.4C converges Alpha.4A and Alpha.4B histories and completes the shared Workspace bounds, Tools navigation, Usage ownership and Browser overlap integration. Focused combined offline Electron checks passed and actual integrated screenshots are published in the candidate. Exact-head independent review, hosted CI and maintainer visual approval remain open. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+- **Tested** — Alpha.4B Workspace UI retains responsive Explorer, five tabs, and its focused offline Electron evidence. Shared tokens and Alpha.3C ancestry are preserved. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
+- **In Progress** — Alpha.4C integrates Workspace bounds, Tools navigation, canonical Usage, Browser overlap and the approved shared design. The targeted correction delta is independently accepted; combined hosted CI and maintainer visual review remain pending. Actual integrated screenshots and focused evidence are in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).

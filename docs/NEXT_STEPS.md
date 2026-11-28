@@ -1,8 +1,8 @@
 # Next steps
 
-## Alpha.4C targeted CI closure
+## Unified v0.1 release candidate — integration checkpoint
 
-**Tested** — PR #53 test-only corrections cover the approved 400px default, 65% desktop sizing at 900px, canonical Provider usage location, persisted-width bounds, and state-aware Explorer opening before PDF selection. Focused affected Electron and unit scenarios pass locally. Push the exact corrected head, wait for hosted CI to complete, and request Agent 2's focused delta review. Do not merge, integrate PR #52, freeze an RC, or package from this checkpoint.
+**In Progress** — Draft PR #53 now converges the accepted Alpha.4C head `63992bb9f8544fae8205e36f8ceafce333991bb7` with release tooling PR #52 at `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05`, preserving both histories. The Alpha.4C test correction delta is independently accepted. Combined hosted CI and maintainer visual approval remain pending. Next, resolve those gates, then complete Agent 2's Alpha.3A platform/package acceptance on an explicitly frozen candidate. No release or package build is authorized by this checkpoint; v0.1 remains unreleased.
 
 ## Alpha.4 integration handoff
 
@@ -25,7 +25,7 @@ PR #46 merged to main `bae63048978ea0188d784a4d53910f3fb31cd552` on 2026-11-27. 
 ## Release sequence
 
 1. Complete Alpha.3 readiness using Agent 2's Alpha.3A dependency and platform assessment and the Alpha.3B capability and provider plans.
-2. Obtain maintainer approval of Alpha.4 UI acceptance scope, then record its actual verdict.
+2. Obtain and record maintainer visual/accessibility acceptance of the converged V03.2 UI.
 3. Freeze one final release candidate SHA and its supported platforms, capabilities and limitations.
 4. Agent 2 builds and verifies the final packages once from that SHA, recording checksums, dependencies, artifact-specific results and remaining platform gaps.
 5. The maintainer approves the release and distribution audience after reviewing the checklist. v0.1 remains unreleased until that decision.
