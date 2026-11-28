@@ -1,5 +1,13 @@
 # Progress log
 
+## RC2.2B Workspace conflict integrity — 2026-11-29
+
+**Tested** — CA1's hosted finding on `25c669191ec2b84e16ab0a254dbc423a5c854da2` was caused by synchronization gaps in `tests/rc2-workspace-real-electron.test.ts`, not a demonstrated save/revision integrity defect. The first-save check observed disk content before waiting for the renderer's acknowledged clean state; the subsequent generic conflict-banner wait could also match the banner that was already visible before Save and therefore did not prove the rejection had completed. No production Workspace code changed.
+
+The Electron regression now waits for Ctrl+S acknowledgement, verifies the disk content, waits for the clean-tab watcher to reconcile an external clean edit, then creates an external modification while a distinct draft is dirty. It asserts the draft stays in the editor, waits for the specific daemon revision-conflict message after Save, and verifies the external disk content both before and after the rejected save. A focused store test verifies edits made during an in-flight save are preserved, overlapping Save calls do not dispatch twice, and the follow-up save uses the acknowledged revision. Actual source-Electron and store tests passed 2/2. Existing atomic file revision, staged external edit, and competing daemon save tests passed 2/2. No authorization, daemon, database, dependency, or migration changes.
+
+This correction is a separate checkpoint before RC2.3. The exact updated PR #54 head requires its own hosted checks; Agent 2's unrelated Codex/runtime ownership remains separate.
+
 ## RC2.1B routing regression-evidence correction — 2026-11-29
 
 **Tested** — CA2 identified that equal mock model IDs in the Team Routing and Group Discussion fixtures could conceal inheritance, team-override, and cross-team leakage regressions. Updated only `tests/alpha1b-member-routing.test.ts` and `tests/alpha1c-group-discussion.test.ts`: routing coverage now distinguishes inherited `mock-model`, team A `codex-mock`, and team B `gpt-6.2-mock`; it asserts persisted per-team values, global bot configuration isolation, dispatch snapshots after override reset, and session identity. Discussion coverage uses distinct supported global mock selections, verifies each member's model/effort in both rounds, then verifies a team-scoped override does not affect another team or the global bot. The explicit mock catalog and authorization behavior are unchanged. Focused result: 3/3 tests passed; `git diff --check` passed. No live inference or package build. This correction is a separate commit before RC2.2.

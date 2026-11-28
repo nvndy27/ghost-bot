@@ -1,3 +1,8 @@
+## RC2.2B Workspace conflict test synchronization — 2026-11-29
+
+- Hosted CI at `25c669191ec2b84e16ab0a254dbc423a5c854da2` reported a disk assertion containing the dirty editor draft after the conflict-save sequence. The Electron test observed the initial save's disk write without waiting for renderer acknowledgement, then used a generic conflict-banner locator that could match before the second Save had returned. The regression did not establish an overwrite defect. The corrected test synchronizes on save acknowledgement, clean-tab revision reconciliation, and the specific daemon conflict response, then retains exact disk-content assertions. Existing daemon atomic revision and concurrent-save tests plus focused source Electron checks pass. See [RC2.2 evidence](extensions/rc2.2-real-workspace.md).
+- Production conflict checks, native consent, and capability gates remain unchanged. The updated exact-head CI result is pending.
+
 ## RC2.1B routing regression evidence — 2026-11-29
 
 - **Tested:** CA2 found that identical mock model IDs masked routing regressions in the Team Routing and Group Discussion fixtures. The tests now use distinct supported selections and assert inherited configuration, explicit overrides, team isolation, global bot isolation, and immutable dispatch snapshots. No production catalog, permission, or runtime behavior changed. The focused local tests passed 3/3. Full hosted CI and independent acceptance remain separate exact-checkpoint gates.

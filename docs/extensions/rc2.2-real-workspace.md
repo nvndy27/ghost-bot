@@ -40,3 +40,9 @@ The affected layout assertions now allow less than 0.5 CSS px error for target w
 - Exact published PR #54 hosted CI and focused independent acceptance remain separate gates.
 - No authenticated real provider, live inference, package, or target-host acceptance was performed.
 - Group task workspace access, AI-mediated filesystem operations, terminal access, rename/delete, and other previously gated capabilities remain gated.
+
+## RC2.2B conflict-integrity CI correction
+
+At `25c669191ec2b84e16ab0a254dbc423a5c854da2`, hosted CI reported that the synthetic external modification appeared to be overwritten by the draft. The inspected production path had two revision validations (before staging and immediately before atomic replacement), with per-file save serialization. The Electron test had not synchronized on the first Ctrl+S acknowledgement, and its post-save generic conflict-banner wait could match the pre-existing banner instead of the daemon rejection. This was a test synchronization defect; no production integrity regression was demonstrated.
+
+The revised actual Electron scenario waits for the clean save acknowledgement, verifies the saved bytes on disk, waits for a clean external edit to reconcile into the editor (thereby establishing the new base revision), then edits a distinct draft and changes the disk externally. It checks that the editor retains the draft, waits for the daemon's exact revision-conflict error after attempting Save, and verifies the external bytes remain on disk. `tests/rc2-workspace-save-concurrency.test.ts` adds deterministic in-flight store coverage for preserving edits and refusing duplicate concurrent saves. Focused Electron/store and daemon revision/concurrency tests passed. No production source, permissions, schema, dependency or migration changed. Exact-head hosted checks remain pending.

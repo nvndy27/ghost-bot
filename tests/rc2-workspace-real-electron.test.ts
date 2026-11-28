@@ -5,17 +5,6 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { launchWorkspaceElectron } from './helpers/workspace-electron.ts'
 
-async function waitForFileContent(path: string, expected: string): Promise<void> {
-  const deadline = Date.now() + 5000
-  let actual = ''
-  while (Date.now() < deadline) {
-    actual = await readFile(path, 'utf8')
-    if (actual === expected) return
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  assert.equal(actual, expected, `Timed out waiting for ${path} to contain the saved editor content`)
-}
-
 test('RC2.2 Electron: recover legacy root, authorize, edit, save, protect conflicts and switch workspaces', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ghost-bot-rc2-workspace-'))
   const firstWorkspace = join(dataDir, 'project-one')
@@ -82,17 +71,38 @@ test('RC2.2 Electron: recover legacy root, authorize, edit, save, protect confli
     await page.getByTestId('workspace-files-permission-badge').getByText('Writable').waitFor()
     await editor.fill('Saved using Ctrl+S\n')
     await editor.press('Control+s')
-    await waitForFileContent(firstFile, 'Saved using Ctrl+S\n')
+    await page.waitForFunction(() => {
+      const save = document.querySelector<HTMLButtonElement>('[data-testid="editor-save-btn"]')
+      return save?.disabled === true && save.textContent?.trim() === 'Save'
+    })
+    assert.equal(await readFile(firstFile, 'utf8'), 'Saved using Ctrl+S\n')
+
+    // Wait until the clean editor has polled and reconciled the saved revision before introducing
+    // the external writer. This separates save completion from the subsequent conflict scenario.
+    await writeFile(firstFile, 'External clean change\n')
+    await page.waitForFunction((expected) =>
+      document.querySelector<HTMLTextAreaElement>('[data-testid="workspace-editor-textarea"]')?.value === expected,
+    'External clean change\n')
+    assert.equal(await readFile(firstFile, 'utf8'), 'External clean change\n')
 
     await editor.fill('Uncommitted editor draft\n')
     await writeFile(firstFile, 'Changed by an external process\n')
-    await page.getByTestId('editor-conflict-banner').waitFor()
+    await page.waitForFunction((draft) => {
+      const editor = document.querySelector<HTMLTextAreaElement>('[data-testid="workspace-editor-textarea"]')
+      const conflict = document.querySelector('[data-testid="editor-conflict-banner"]')
+      return editor?.value === draft && conflict?.textContent?.includes('This file changed on disk') === true
+    }, 'Uncommitted editor draft\n')
+    assert.equal(await editor.inputValue(), 'Uncommitted editor draft\n')
+    assert.equal(await readFile(firstFile, 'utf8'), 'Changed by an external process\n')
     await page.getByTestId('editor-save-btn').click()
-    await page.getByTestId('editor-conflict-banner').waitFor()
+    await page.getByText(/File was modified on disk since it was opened\. Reload before saving\./).waitFor()
+    assert.equal(await editor.inputValue(), 'Uncommitted editor draft\n')
     assert.equal(await readFile(firstFile, 'utf8'), 'Changed by an external process\n')
 
     await page.getByTestId('editor-conflict-reload-btn').click()
-    assert.equal(await editor.inputValue(), 'Changed by an external process\n')
+    await page.waitForFunction((expected) =>
+      document.querySelector<HTMLTextAreaElement>('[data-testid="workspace-editor-textarea"]')?.value === expected,
+    'Changed by an external process\n')
     await app.evaluate(({ dialog }, selectedPath) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
     }, secondWorkspace)
