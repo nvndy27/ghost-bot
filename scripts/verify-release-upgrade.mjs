@@ -6,6 +6,21 @@ import { constants } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { pathToFileURL } from 'node:url'
+import {
+  assertCandidateStartupExecutionStable,
+  assertInterruptedRunNotReplayed,
+  assertPackagedRendererIdentity,
+  assertWriteGrantDenial,
+  WRITE_GRANT_EXPIRED_MESSAGE,
+  cleanupOwnedApplication,
+  createReleaseLaunchEnv,
+  launchOwnedApplication,
+  profileMayBeRemoved,
+  recordCleanupResult,
+  recordValidationError,
+  snapshotOwnedDescendants,
+} from './release-upgrade-support.mjs'
 
 function usage() {
   console.error('Usage: node scripts/verify-release-upgrade.mjs --previous <executable> --candidate <executable> --source-sha <40-char-sha> --evidence <directory> [--interactive-write-grant]')
@@ -69,41 +84,62 @@ const evidence = {
   startedAt: new Date().toISOString(), status: 'failed',
 }
 
-let app
 let seed
-async function launch(executable) {
-  const launchEnv = { ...process.env }
-  delete launchEnv.ELECTRON_RUN_AS_NODE
-  delete launchEnv.ELECTRON_DISABLE_SANDBOX
-  delete launchEnv.NODE_OPTIONS
-  const instance = await electron.launch({
-    executablePath: executable, args: [], cwd: dirname(executable), timeout: 60_000,
-    chromiumSandbox: true,
-    env: {
-      ...launchEnv, HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
-      XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),
-      GHOST_BOT_DATA_DIR: dataDir, GHOST_BOT_RUNTIME_MODE: 'mock', GHOST_BOT_SMOKE_EXIT: '0',
+const ownedApplications = []
+async function launch(executable, phase) {
+  return launchOwnedApplication({
+    launch: () => electron.launch({
+      executablePath: executable, args: [], cwd: dirname(executable), timeout: 60_000,
+      chromiumSandbox: true,
+      env: {
+        ...createReleaseLaunchEnv(process.env),
+        HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
+        XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),
+        GHOST_BOT_DATA_DIR: dataDir, GHOST_BOT_RUNTIME_MODE: 'mock', GHOST_BOT_SMOKE_EXIT: '0',
+      },
+    }),
+    owners: ownedApplications,
+    phase,
+    validate: async (owner) => {
+      const instance = owner.instance
+      owner.page = await instance.firstWindow()
+      await owner.page.waitForLoadState('domcontentloaded', { timeout: 30_000 })
+      const security = await instance.evaluate(({ app, BrowserWindow }) => {
+        const web = BrowserWindow.getAllWindows()[0]?.webContents
+        const preferences = web?.getLastWebPreferences()
+        return {
+          packaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          noSandbox: app.commandLine.hasSwitch('no-sandbox'),
+          sandbox: preferences?.sandbox,
+          contextIsolation: preferences?.contextIsolation,
+          nodeIntegration: preferences?.nodeIntegration,
+        }
+      })
+      assertPackagedRendererIdentity({
+        packaged: security.packaged,
+        mainFrameUrl: owner.page.mainFrame().url(),
+        expectedRendererUrl: pathToFileURL(join(security.appPath, 'dist', 'index.html')).href,
+      })
+      assert.deepEqual({
+        packaged: security.packaged,
+        noSandbox: security.noSandbox,
+        sandbox: security.sandbox,
+        contextIsolation: security.contextIsolation,
+        nodeIntegration: security.nodeIntegration,
+      }, { packaged: true, noSandbox: false, sandbox: true, contextIsolation: true, nodeIntegration: false })
+      await owner.page.getByText('Chief of Staff', { exact: true }).first().waitFor({ timeout: 30_000 })
+      const health = await owner.page.evaluate(() => window.ghostBot.getDaemonHealth())
+      if (health && Number.isInteger(health.pid)) {
+        owner.daemonPid = health.pid
+        const ownedChildren = await snapshotOwnedDescendants(owner.processHandle.pid)
+        owner.daemonIdentity = ownedChildren.find(({ pid }) => pid === health.pid) ?? null
+      }
+      assert.equal(health.ok, true)
+      assert.equal(health.runtimeMode, 'mock')
+      return owner
     },
   })
-  const page = await instance.firstWindow()
-  await page.waitForLoadState('domcontentloaded', { timeout: 30_000 })
-  await page.getByText('Chief of Staff', { exact: true }).first().waitFor({ timeout: 30_000 })
-  const security = await instance.evaluate(({ app, BrowserWindow }) => {
-    const web = BrowserWindow.getAllWindows()[0]?.webContents
-    const preferences = web?.getLastWebPreferences()
-    return {
-      packaged: app.isPackaged,
-      noSandbox: app.commandLine.hasSwitch('no-sandbox'),
-      sandbox: preferences?.sandbox,
-      contextIsolation: preferences?.contextIsolation,
-      nodeIntegration: preferences?.nodeIntegration,
-    }
-  })
-  assert.deepEqual(security, { packaged: true, noSandbox: false, sandbox: true, contextIsolation: true, nodeIntegration: false })
-  const health = await page.evaluate(() => window.ghostBot.getDaemonHealth())
-  assert.equal(health.ok, true)
-  assert.equal(health.runtimeMode, 'mock')
-  return { instance, page, daemonPid: health.pid }
 }
 async function awaitRun(page, runId, expected) {
   const end = Date.now() + 20_000
@@ -121,25 +157,61 @@ async function profileSnapshot() {
       migrations: db.prepare('SELECT version, name FROM schema_migrations ORDER BY version').all(),
       bots: db.prepare('SELECT id, name, avatar_json FROM agents WHERE archived_at IS NULL ORDER BY id').all(),
       sessions: db.prepare('SELECT id, agent_id, title FROM sessions ORDER BY id').all(),
-      messages: db.prepare('SELECT id, session_id, content_json FROM messages ORDER BY id').all(),
+      messages: db.prepare('SELECT id, session_id, run_id, content_json FROM messages ORDER BY id').all(),
       teams: db.prepare('SELECT id, name FROM teams ORDER BY id').all(),
-      runCount: Number(db.prepare('SELECT COUNT(*) AS n FROM runs').get().n),
+      runs: db.prepare('SELECT id, session_id, agent_id, idempotency_key, runtime_id, model_id, effort, permission_mode, status FROM runs ORDER BY id').all(),
+      teamRuns: db.prepare('SELECT id, team_id, owner_id, lead_bot_id, conversation_id, idempotency_key, root_task_id, status, tasks_created FROM team_runs ORDER BY id').all(),
+      teamTasks: db.prepare('SELECT id, team_run_id, team_id, owner_id, root_task_id, assigned_bot_id, idempotency_key, attempt, status FROM team_tasks ORDER BY id').all(),
+      teamExecutionLinks: db.prepare('SELECT id, team_run_id, team_task_id, agent_id, session_id, daemon_run_id, runtime_id, account_id, attempt, role FROM team_execution_links ORDER BY id').all(),
+      teamMessages: db.prepare('SELECT id, team_id, team_run_id, originating_task_id, seq FROM team_messages ORDER BY id').all(),
+      approvals: db.prepare('SELECT id, run_id, session_id FROM approvals ORDER BY id').all(),
+      usageRecords: db.prepare('SELECT id, run_id FROM usage_records ORDER BY id').all(),
+      runEvents: db.prepare('SELECT run_id, seq, event_key, type FROM run_events ORDER BY run_id, seq').all(),
     }
   } finally { db.close() }
 }
-async function assertDaemonExited(pid, phase) {
-  const until = Date.now() + 8_000
-  while (Date.now() < until) {
-    try { process.kill(pid, 0) } catch { return }
-    await new Promise((done) => setTimeout(done, 100))
+function executionCounts(snapshot) {
+  return {
+    sessions: snapshot.sessions.length,
+    messages: snapshot.messages.length,
+    runs: snapshot.runs.length,
+    teamRuns: snapshot.teamRuns.length,
+    teamTasks: snapshot.teamTasks.length,
+    teamExecutionLinks: snapshot.teamExecutionLinks.length,
+    teamMessages: snapshot.teamMessages.length,
+    approvals: snapshot.approvals.length,
+    usageRecords: snapshot.usageRecords.length,
+    runEvents: snapshot.runEvents.length,
   }
-  throw new Error(`${phase} daemon process ${pid} remained after application close`)
+}
+async function shutdownOwnedApplication(owner) {
+  const result = await cleanupOwnedApplication(owner)
+  recordCleanupResult(evidence, result)
+  assert.equal(result.profileSafeToRemove, true, `${owner.phase} app and owned process cleanup failed: ${result.errors.join('; ')}`)
+}
+async function cleanupAllOwnedApplications() {
+  for (const owner of [...ownedApplications].reverse()) {
+    if (owner.cleanupResult) continue
+    try {
+      const result = await cleanupOwnedApplication(owner)
+      recordCleanupResult(evidence, result)
+    } catch (error) {
+      evidence.cleanupErrors ??= []
+      evidence.cleanupErrors.push(`${owner.phase} cleanup threw: ${error?.message ?? String(error)}`)
+      owner.cleanupResult = { phase: owner.phase, profileSafeToRemove: false, errors: [String(error)] }
+      evidence.checks.processCleanup ??= []
+      evidence.checks.processCleanup.push(owner.cleanupResult)
+    }
+  }
+}
+async function fileExists(path) {
+  try { await access(path); return true }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error }
 }
 
 try {
   // Seed durable state exclusively through the previous packaged application's real Electron bridge.
-  const old = await launch(previous)
-  app = old.instance
+  const old = await launch(previous, 'previous')
   seed = await old.page.evaluate(async ({ markerValue, workspacePath, taskOperationId }) => {
     const api = window.ghostBot
     const bots = (await api.listBots()).bots
@@ -226,19 +298,28 @@ try {
 
   const oldInfo = await old.page.evaluate(() => window.ghostBot.getAppInfo())
   evidence.checks.previousArtifact = { status: 'passed', appInfo: oldInfo, idempotency: 'verified duplicate run and private task deduplicated' }
-  await old.instance.close()
-  app = null
-  await assertDaemonExited(old.daemonPid, 'previous')
+  await shutdownOwnedApplication(old)
   const before = await profileSnapshot()
   evidence.checks.preUpgradeProfile = {
     status: 'passed', latestMigration: before.migrations.at(-1)?.version,
     migrationCount: before.migrations.length, botCount: before.bots.length,
-    sessionCount: before.sessions.length, messageCount: before.messages.length, runCount: before.runCount,
+    sessionCount: before.sessions.length, messageCount: before.messages.length,
+    runCount: before.runs.length, teamRunCount: before.teamRuns.length,
+    teamTaskCount: before.teamTasks.length, runEventCount: before.runEvents.length,
+    executionCounts: executionCounts(before),
+    fixtureInterruptedRunId: seed.interruptedRunId, fixtureTeamRunId: seed.taskRunId, fixtureTaskId: seed.taskId,
   }
 
   // Candidate starts from the same isolated HOME and SQLite profile.
-  const next = await launch(candidate)
-  app = next.instance
+  const next = await launch(candidate, 'candidate')
+  const afterCandidateStartup = await profileSnapshot()
+  assertCandidateStartupExecutionStable(before, afterCandidateStartup, seed.interruptedRunId)
+  assertInterruptedRunNotReplayed(afterCandidateStartup, seed.interruptedRunId)
+  evidence.checks.candidateStartupExecution = {
+    status: 'passed', before: executionCounts(before), after: executionCounts(afterCandidateStartup),
+    interruptedRunId: seed.interruptedRunId,
+    interruptedRunStatus: afterCandidateStartup.runs.find((run) => run.id === seed.interruptedRunId)?.status,
+  }
   if (interactiveGrant && seed.grant) {
     console.log(`Select this same temporary folder in the candidate native read-consent chooser: ${workspace}`)
     const readAllowed = await Promise.race([
@@ -247,7 +328,8 @@ try {
     ])
     assert.equal(readAllowed, true, 'Candidate native workspace read consent was not granted')
   }
-  const verified = await next.page.evaluate(async ({ fixture, grant }) => {
+  const beforeCandidateRetries = await profileSnapshot()
+  const verified = await next.page.evaluate(async ({ fixture }) => {
     const api = window.ghostBot
     const bot = (await api.listBots()).bots.find((value) => value.id === fixture.botId)
     const sessions = await api.listSessions({ agentId: fixture.botId })
@@ -262,15 +344,6 @@ try {
     const settings = await api.getSettings()
     const interrupted = await api.getRun(fixture.interruptedRunId)
     const health = await api.getDaemonHealth()
-    let grantCheck = null
-    if (grant) {
-      const freshContext = await api.resolveWorkspaceContext({ botId: grant.botId })
-      let denied = false
-      try {
-        await api.createWorkspaceEntry({ botId: grant.botId, workspaceId: freshContext.workspaceId, authGeneration: freshContext.authGeneration, relativePath: 'grant-after-restart.txt', kind: 'file', content: 'must be denied\n' })
-      } catch { denied = true }
-      grantCheck = { readAuthorized: freshContext.authorized, writeAuthorized: freshContext.writeAuthorized, denied }
-    }
     return {
       bot, sessionFound: sessions.sessions.some((value) => value.id === fixture.sessionId),
       messageFound: messages.messages.some((value) => JSON.stringify(value).includes('preserved conversation')),
@@ -278,10 +351,19 @@ try {
       runStatus: originalRun.status, duplicateRunId: duplicate.run.id, duplicateReported: duplicate.deduplicated,
       privateTask, repeatedTaskId: repeatedTask.taskId, workspaceSettings: settings.appearance,
       privateMessages: privateMessages.messages,
-      interruptedStatus: interrupted.status, health, grantCheck,
+      interruptedStatus: interrupted.status, health,
     }
-  }, { fixture: seed, grant: seed.grant ?? null })
-  void grantBot
+  }, { fixture: seed })
+  const afterCandidateRetries = await profileSnapshot()
+  assertExecutionRowsUnchanged(beforeCandidateRetries, afterCandidateRetries, 'candidate idempotency retries')
+  evidence.checks.candidateIdempotency = {
+    status: 'passed',
+    before: executionCounts(beforeCandidateRetries),
+    after: executionCounts(afterCandidateRetries),
+    duplicateRunReturnedExistingId: verified.duplicateRunId === seed.runId,
+    duplicateTaskReturnedExistingId: verified.repeatedTaskId === seed.taskId,
+    noDurableExecutionRowsAddedOrChanged: true,
+  }
   assert(verified.bot, 'Bot identity was lost')
   assert.equal(verified.bot.name, seed.botName)
   assert.deepEqual(verified.bot.avatar, seed.avatar)
@@ -300,12 +382,38 @@ try {
   assert.equal(verified.workspaceSettings.rightWidth, 360)
   assert.equal(verified.workspaceSettings.workspaceTab, 'files')
   assert.equal(verified.interruptedStatus, 'interrupted', 'Interrupted execution must recover without automatic replay')
+  assertInterruptedRunNotReplayed(afterCandidateRetries, seed.interruptedRunId)
   assert.equal(verified.health.ok, true)
   if (seed.grant) {
-    assert.equal(verified.grantCheck.readAuthorized, true, 'Read consent was not reissued for the candidate')
-    assert.equal(verified.grantCheck.writeAuthorized, false)
-    assert.equal(verified.grantCheck.denied, true)
-    evidence.checks.writeGrantExpiration = { status: 'passed', writeAuthorizedAfterRestart: false, unapprovedCreateDenied: true }
+    const relativePath = 'grant-after-restart.txt'
+    const grantTarget = join(workspace, relativePath)
+    const grantContext = await next.page.evaluate((botId) => window.ghostBot.resolveWorkspaceContext({ botId }), seed.grant.botId)
+    assert.equal(grantContext.authorized, true, 'Read consent was not reissued for the candidate')
+    assert.equal(grantContext.writeAuthorized, false)
+    const targetExistedBefore = await fileExists(grantTarget)
+    let errorMessage = null
+    try {
+      await next.page.evaluate(async ({ botId, workspaceId, authGeneration, path }) => window.ghostBot.createWorkspaceEntry({
+        botId, workspaceId, authGeneration, relativePath: path, kind: 'file', content: 'must be denied\n',
+      }), {
+        botId: seed.grant.botId,
+        workspaceId: grantContext.workspaceId,
+        authGeneration: grantContext.authGeneration,
+        path: relativePath,
+      })
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error)
+    }
+    const targetExistsAfter = await fileExists(grantTarget)
+    assertWriteGrantDenial({
+      error: errorMessage === null ? null : new Error(errorMessage),
+      targetExistedBefore,
+      targetExistsAfter,
+    })
+    evidence.checks.writeGrantExpiration = {
+      status: 'passed', writeAuthorizedAfterRestart: false,
+      expectedDenial: WRITE_GRANT_EXPIRED_MESSAGE, targetExistedBefore, targetExistsAfter,
+    }
   } else {
     evidence.checks.writeGrantExpiration = { status: 'not-run', reason: 'Use --interactive-write-grant and approve the temporary-folder native prompt to include this check.' }
   }
@@ -319,9 +427,7 @@ try {
     settings: verified.workspaceSettings,
     interruptedRunStatus: verified.interruptedStatus, daemonHealthy: verified.health.ok,
   }
-  await next.instance.close()
-  app = null
-  await assertDaemonExited(next.daemonPid, 'candidate')
+  await shutdownOwnedApplication(next)
 
   const after = await profileSnapshot()
   for (const bot of before.bots) assert(after.bots.some((value) => value.id === bot.id), `Migration lost bot ${bot.id}`)
@@ -352,14 +458,21 @@ try {
     evidence.status = 'passed'
   }
 } catch (error) {
-  evidence.error = { name: error?.name ?? 'Error', message: error?.message ?? String(error) }
-  if (app) {
-    try { await app.close() } catch (closeError) { evidence.checks.daemonCleanup = { status: 'failed', error: String(closeError) } }
-  }
+  recordValidationError(evidence, error)
 } finally {
+  await cleanupAllOwnedApplications()
+  const cleanupResults = evidence.checks.processCleanup ?? []
+  const mayRemoveProfile = profileMayBeRemoved(cleanupResults)
   evidence.finishedAt = new Date().toISOString()
-  try { await rm(root, { recursive: true, force: true }) }
-  catch (error) { evidence.status = 'failed'; evidence.profileCleanup = String(error) }
+  if (mayRemoveProfile) {
+    try { await rm(root, { recursive: true, force: true }) }
+    catch (error) { evidence.status = 'failed'; evidence.profileCleanup = String(error) }
+  } else {
+    evidence.status = 'failed'
+    evidence.retainedProfile = root
+    evidence.profileCleanup = 'Retained because owned Electron or daemon processes may still use this synthetic profile.'
+  }
+  if ((evidence.cleanupErrors?.length ?? 0) > 0) evidence.status = 'failed'
   await mkdir(evidenceDir, { recursive: true })
   const evidencePath = join(evidenceDir, `upgrade-${new Date().toISOString().replaceAll(':', '-')}.json`)
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 })

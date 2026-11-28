@@ -63,7 +63,7 @@ This release track supplements, not replaces or renumbers, Phases 0–6 and the 
 ### Alpha.4 — Approved V03.2 UI implementation
 
 - **Implemented** — V03.2 shared shell/Chat/Settings/Usage and Workspace UI are converged in Draft PR #53 with Alpha.3C, Alpha.4A and Alpha.4B histories preserved. The targeted Alpha.4C correction delta was independently accepted; see [shared UI contract](extensions/alpha4-shared-ui-contract.md).
-- **In Progress** — Final combined hosted CI and maintainer visual acceptance remain pending. Do not freeze an RC or build packages until those gates and Alpha.3A platform requirements are satisfied.
+- **In Progress** — Hosted CI and CodeQL passed on convergence SHA `117a0c208247439f47442404e0cbdace92477806`, but independent review blocked that exact SHA on four release-runner findings. The corrected head needs its own required checks and focused delta review. Maintainer visual acceptance and Alpha.3A platform requirements also remain open; do not freeze an RC or build packages until all gates are satisfied.
 
 ### Post-alpha roadmap (deferred, not current assignments)
 - **Not Started** — v0.2 Dual-Mode Workspace: Chat / Terminal switch in upper-left of both layouts; Orca-style project/worktree sidebar, interactive user PTY, CLI registry (including supported agy/Codex/Claude flows), tabs and nested splits, reconnect, usage from official sources. Reuse Alpha.2 workspace tools; retain existing scoped sandbox separately.
@@ -129,4 +129,4 @@ Gate: threat model, consent, privacy and platform-specific tests reviewed.
 ## Alpha.4 — Approved V03.2 UI implementation
 
 - **Tested** — Alpha.4B Workspace UI retains responsive Explorer, five tabs, and its focused offline Electron evidence. Shared tokens and Alpha.3C ancestry are preserved. See [Alpha.4B Workspace UI review](extensions/alpha4b-workspace-ui.md).
-- **In Progress** — Alpha.4C integrates Workspace bounds, Tools navigation, canonical Usage, Browser overlap and the approved shared design. The targeted correction delta is independently accepted; combined hosted CI and maintainer visual review remain pending. Actual integrated screenshots and focused evidence are in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+- **In Progress** — Alpha.4C integrates Workspace bounds, Tools navigation, canonical Usage, Browser overlap and the approved shared design. The targeted correction delta is independently accepted. Hosted CI and CodeQL passed on unified SHA `117a0c208247439f47442404e0cbdace92477806`; a later focused review blocked that head on release-tooling findings, so the corrected head needs fresh checks. Maintainer visual review remains pending. Actual integrated screenshots and focused evidence are in [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).

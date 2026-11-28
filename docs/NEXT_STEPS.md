@@ -2,7 +2,7 @@
 
 ## Unified v0.1 release candidate — integration checkpoint
 
-**In Progress** — Draft PR #53 now converges the accepted Alpha.4C head `63992bb9f8544fae8205e36f8ceafce333991bb7` with release tooling PR #52 at `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05`, preserving both histories. The Alpha.4C test correction delta is independently accepted. Combined hosted CI and maintainer visual approval remain pending. Next, resolve those gates, then complete Agent 2's Alpha.3A platform/package acceptance on an explicitly frozen candidate. No release or package build is authorized by this checkpoint; v0.1 remains unreleased.
+**In Progress** — Draft PR #53 converges the accepted Alpha.4C head `63992bb9f8544fae8205e36f8ceafce333991bb7` with release tooling PR #52 at `9067aa4eb9dec411d70121c4aa6b84bcb2b91f05`, preserving both histories. Hosted CI and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`; independent review then blocked that exact head on four release-tooling findings. The focused runner correction now passes 7/7 offline tests and is ready to publish on the same PR. The corrected head then needs its own required checks and exact-head delta review. Maintainer visual approval and actual packaged acceptance remain open. No release or package build is authorized; v0.1 remains unreleased.
 
 ## Alpha.4 integration handoff
 

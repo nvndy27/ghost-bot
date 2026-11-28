@@ -1,6 +1,6 @@
 # Alpha.4C — Shared UI convergence
 
-Status: **Tested** on isolated integration branch `integration/alpha4-unified`; independent review and maintainer visual acceptance are pending.
+Status: **Tested** on isolated integration branch `integration/alpha4-unified`; hosted CI and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`. Independent review blocked that exact head on four release-tooling findings, now addressed by a focused correction that requires fresh checks and delta acceptance. Maintainer visual acceptance remains pending.
 
 ## Inputs and history
 
@@ -50,4 +50,4 @@ The integrated shell follows V03.2's 224/56 px sidebar, 58 px headers, 400 px ne
 
 The prototype's sample quota, activity and repository content are intentionally absent; actual provider snapshot and runtime diagnostics are shown. Account-level quota beyond the existing runtime snapshot remains unavailable. Existing saved widths may display below the new default by design. Group Workspace Files remains unavailable without its authorized task scope. These are capability/data differences, not substituted UI fixture content.
 
-Maintainer visual approval, Agent 2's independent review of the exact combined commit, and required hosted CI remain open. No PR was merged.
+Hosted CI and CodeQL passed on the original unified SHA `117a0c208247439f47442404e0cbdace92477806`; independent review then blocked it on release-tooling findings. The corrected head must pass its own hosted checks and focused independent delta review. Maintainer visual approval also remains open. No PR was merged.

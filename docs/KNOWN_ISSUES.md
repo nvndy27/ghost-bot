@@ -3,7 +3,7 @@
 ## Alpha.4 integrated release candidate
 
 - The runtime exposes one usage projection and no enumerable account identity catalog. The compact Usage surface reports other-account usage unavailable; Workspace no longer duplicates provider quota.
-- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The targeted Alpha.4C test correction delta is independently accepted. Maintainer visual approval and combined hosted CI on the final converged SHA remain pending.
+- V03.2 shell and Workspace UI, width compatibility, Tools navigation and Browser occlusion are converged in Draft PR #53. The targeted Alpha.4C test correction delta is independently accepted. Hosted CI and CodeQL passed on `117a0c2`; independent review blocked that exact SHA on four release-runner findings. The corrected SHA needs fresh checks and focused delta review. Maintainer visual approval remains pending.
 - Persisted widths remain compatible and are bounded only when rendered. New profiles use the approved 400px Workspace default; desktop and narrow effective bounds do not rewrite saved widths.
 
 
@@ -83,8 +83,8 @@ Final PR #46 CI and CodeQL passed. Scorecard, Dependabot, dependency-graph SBOM 
 
 ## Alpha.4B visual integration dependencies
 
-**Tested** — The integrated PR #53 candidate applies V03.2 Workspace bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed. Maintainer visual approval and full hosted CI for the newly converged head remain pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
+**Tested** — The integrated PR #53 candidate applies V03.2 Workspace bounds while preserving saved widths, routes Tools to Settings, removes duplicate Workspace quota, and hides the native Browser view beneath shared dialogs/popovers. Focused offline Electron checks passed. Hosted CI and CodeQL passed at `117a0c2`; the later independent review blocked that SHA on release-tooling findings. The corrected head requires its own CI. Maintainer visual approval remains pending. See [Alpha.4C convergence](extensions/alpha4c-ui-convergence.md).
 
 ## Alpha.4C hosted CI follow-up
 
-Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The test-only corrections were independently accepted at `63992bb9f8544fae8205e36f8ceafce333991bb7`; the PDF entry had been hidden by closing an already-open desktop Explorer. Focused local tests pass and no production regression was demonstrated. The new converged PR #53 head requires its own hosted CI; its complete result remains pending.
+Hosted run `46055026055` reported stale assertions and an outdated Explorer interaction. The test-only corrections were independently accepted at `63992bb9f8544fae8205e36f8ceafce333991bb7`; the PDF entry had been hidden by closing an already-open desktop Explorer. Focused local tests pass and no production regression was demonstrated. Hosted run `46115138761` and CodeQL passed on `117a0c208247439f47442404e0cbdace92477806`. A later focused review identified four release-tooling blockers now being corrected; that new head must obtain its own hosted CI and delta acceptance.
