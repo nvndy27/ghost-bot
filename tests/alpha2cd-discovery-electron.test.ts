@@ -39,9 +39,9 @@ test('combined Electron discovery uses real grant, search, preview, cancel and t
       return activeBotId
     }, workspace)
     await page.getByTestId('workspace-tab-files').click()
-    await app.evaluate(({ dialog }, root) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
-    }, workspace)
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+    })
     await page.getByRole('button', { name: 'Allow read access' }).click()
     const search = page.getByRole('searchbox', { name: 'Search workspace' })
     await search.fill('notes')

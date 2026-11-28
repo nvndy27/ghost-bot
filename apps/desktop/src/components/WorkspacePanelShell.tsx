@@ -38,6 +38,7 @@ export interface WorkspacePanelShellProps {
   overviewContent: ReactNode
   filesTransport?: WorkspaceFilesTransport | null
   onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
+  onOpenFolder?: (botId: string) => Promise<boolean>
 }
 
 export function WorkspacePanelShell({
@@ -55,6 +56,7 @@ export function WorkspacePanelShell({
   overviewContent,
   filesTransport,
   onAddSelectionToDraft,
+  onOpenFolder,
 }: WorkspacePanelShellProps) {
   const [uncontrolledTab, setUncontrolledTab] = useState<WorkspaceTabId>('overview')
   const [maximized, setMaximized] = useState(false)
@@ -242,6 +244,7 @@ export function WorkspacePanelShell({
             transport={filesTransport}
             visible={activeTabDef.id === 'files'}
             onAddSelectionToDraft={onAddSelectionToDraft}
+            onOpenFolder={onOpenFolder}
           />
         </div>
       )}

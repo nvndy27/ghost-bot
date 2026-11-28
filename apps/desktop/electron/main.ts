@@ -580,17 +580,22 @@ function registerIpcHandlers(): void {
       throw new Error(context.reason ?? 'Configure a bot workspace before authorizing access')
     }
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Allow read access to the bot workspace',
-      defaultPath: context.canonicalRoot,
-      properties: ['openDirectory'],
-      buttonLabel: 'Allow read access',
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+    if (!win) return false
+    const result = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Authorize workspace read access',
+      message: `Allow ${context.ownerName || botId} to read files in ${context.canonicalRoot}?`,
+      detail: 'This grants read access to the configured folder for this bot. You can change the folder or revoke access at any time.',
+      buttons: ['Allow read access', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
     })
-    if (result.canceled || !result.filePaths[0]) return false
+    if (result.response !== 0) return false
     if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
     return queryDaemon('/workspace/authorize-read', z.literal(true), {
       method: 'POST',
-      body: { botId, workspaceId: context.workspaceId, selectedRoot: result.filePaths[0] },
+      body: { botId, workspaceId: context.workspaceId, selectedRoot: context.canonicalRoot },
     })
   })
 

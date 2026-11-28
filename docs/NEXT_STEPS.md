@@ -2,9 +2,9 @@
 
 ## RC2 real-world usability — current handoff
 
-**Tested** — RC2.1 and the RC2.1B regression correction are on `fix/rc2-real-world-usability` from frozen parent `3af223e2f680df8facee143d6210aefd190ce0ef`; see [RC2.1 implementation](extensions/rc2.1-real-runtime-provider-selection.md) and [RC2.1B failure classification](extensions/rc2.1b-ci-stabilization.md). The affected regressions/readiness tests pass 31/31 in serialized mode, with lint, typecheck, source build and actual Workspace disclosure E2E passing. PR #54 needs its own exact-head hosted checks and focused independent acceptance. RC1 remains preserved, on hold and unreleased.
+**Tested** — RC2.1, the separate RC2.1B routing-evidence correction, and RC2.2 Real Workspace are on `fix/rc2-real-world-usability` from frozen parent `3af223e2f680df8facee143d6210aefd190ce0ef`; see [RC2.1 implementation](extensions/rc2.1-real-runtime-provider-selection.md), [RC2.1B failure classification](extensions/rc2.1b-ci-stabilization.md), and [RC2.2 evidence](extensions/rc2.2-real-workspace.md). Focused tests cover provider readiness and Team routing, plus actual offline Workspace Electron flows. The correction commits are separate. PR #54 requires exact-head hosted checks and focused independent acceptance. RC1 remains preserved, on hold and unreleased.
 
-**Recommended next action:** allow hosted checks to finish on the corrected PR #54 head and obtain CA2/A2 focused independent acceptance. Do not infer live readiness from the synthetic protocol fixture. After those gates and CA1 authorization, begin RC2.2: correct fresh and legacy tilde workspace paths, add a Workspace Open Folder/switching flow, and verify native read/write consent, file save to disk and Ctrl+S on a synthetic project. A bounded live Codex inference still requires separate explicit maintainer authorization.
+**Recommended next action:** allow hosted checks to complete on the published PR #54 head and obtain CA2/A2 focused acceptance of the routing-fixture and Workspace deltas. Do not infer live readiness from synthetic provider fixtures. After acceptance and CA1 authorization, proceed to RC2.3 Product UI Refinement. A bounded live Codex inference still requires separate explicit maintainer authorization.
 
 ## Unified v0.1 release candidate — integration checkpoint
 

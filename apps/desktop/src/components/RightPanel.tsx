@@ -31,6 +31,7 @@ export interface RightPanelProps {
   onOpenComputerUse?: () => void
   onOpenTools?: () => void
   onOpenTerminal?: () => void
+  onOpenFolder?: (botId: string) => Promise<boolean>
   onReconnectRuntime?: () => void
   onCollapse: () => void
 }
@@ -52,6 +53,7 @@ export function RightPanel({
   onOpenTerminal,
   onOpenTools,
   onReconnectRuntime,
+  onOpenFolder,
   onCollapse,
 }: RightPanelProps) {
   const overviewContent = (
@@ -122,6 +124,7 @@ export function RightPanel({
       overviewContent={overviewContent}
       filesTransport={filesTransport}
       onAddSelectionToDraft={onAddSelectionToDraft}
+      onOpenFolder={onOpenFolder}
     />
   )
 }

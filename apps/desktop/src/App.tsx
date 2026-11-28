@@ -1216,6 +1216,15 @@ export function App() {
     return res.canceled ? null : res.path
   }
 
+  const handleOpenWorkspaceFolder = async (botId: string): Promise<boolean> => {
+    const bridge = window.ghostBot
+    if (!bridge) return false
+    const picked = await bridge.pickWorkspace()
+    if (picked.canceled || !picked.path) return false
+    await handleEditBot({ id: botId, patch: { workspacePath: picked.path } })
+    return true
+  }
+
   const handleReconnectRuntime = async () => {
     const bridge = window.ghostBot
     if (!bridge) return
@@ -2039,6 +2048,7 @@ export function App() {
               }
               onOpenTerminal={hasBridge ? () => setTerminalOpen(true) : undefined}
               onOpenTools={hasBridge ? () => { setSettingsInitialSection('tools'); setSettingsOpen(true) } : undefined}
+              onOpenFolder={hasBridge ? handleOpenWorkspaceFolder : undefined}
               onReconnectRuntime={() => void handleReconnectRuntime()}
               onCollapse={() => updateAppearance({ rightCollapsed: true })}
             />

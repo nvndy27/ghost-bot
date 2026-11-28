@@ -169,9 +169,9 @@ test('Electron Changes tab renders native-granted status, file diffs and commit 
           operationId: crypto.randomUUID(), kind: 'status',
         })
       }, botId), /authorization changed|read access has not been granted/i)
-      await app.evaluate(({ dialog }, selected) => {
-        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
-      }, root)
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 0 })
+      })
       await consent.click()
       await panel.getByText(/review-fixture|isolated Git runtime/).waitFor()
       if (await panel.getByText(/isolated Git runtime/).count()) {

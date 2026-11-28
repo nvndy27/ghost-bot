@@ -29,6 +29,7 @@ export interface WorkspaceFilesTabProps {
   visible?: boolean
   discoveryTransport?: WorkspaceDiscoveryTransport | null
   onAddSelectionToDraft?: (selection: WorkspaceDraftSelection) => Promise<void>
+  onOpenFolder?: (botId: string) => Promise<boolean>
 }
 
 export function WorkspaceFilesTab({
@@ -43,6 +44,7 @@ export function WorkspaceFilesTab({
   visible = true,
   discoveryTransport: injectedDiscovery,
   onAddSelectionToDraft,
+  onOpenFolder,
 }: WorkspaceFilesTabProps) {
   const transport = useMemo(
     () => (injectedTransport !== undefined ? injectedTransport : getDefaultWorkspaceFilesTransport()),
@@ -64,6 +66,7 @@ export function WorkspaceFilesTab({
   const [, setVersion] = useState(0)
   const [contextLoading, setContextLoading] = useState(true)
   const [authorizing, setAuthorizing] = useState(false)
+  const [openingFolder, setOpeningFolder] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
   const [loadingFilePath, setLoadingFilePath] = useState<string | null>(null)
   const [loadFileError, setLoadFileError] = useState<string | null>(null)
@@ -333,6 +336,32 @@ export function WorkspaceFilesTab({
     }
   }
 
+  const handleOpenFolder = async () => {
+    if (contextKind !== 'bot' || !ownerId || !onOpenFolder || openingFolder) return
+    const active = store.getActiveWorkspaceState(contextKey)
+    const hasUnsavedChanges = active?.tabs.some((tab) => tab.draftContent !== tab.savedContent) ?? false
+    if (hasUnsavedChanges && !window.confirm('Switching folders will discard unsaved editor changes. Continue?')) {
+      return
+    }
+    setOpeningFolder(true)
+    setContextError(null)
+    setLoadFileError(null)
+    try {
+      const opened = await onOpenFolder(ownerId)
+      if (opened && activeKeyRef.current === contextKey) {
+        setPreviewTarget(null)
+        setJumpTo(null)
+        await refreshContextAndRoot()
+      }
+    } catch (err) {
+      if (activeKeyRef.current === contextKey) {
+        setContextError(err instanceof Error ? err.message : 'Could not open workspace folder')
+      }
+    } finally {
+      if (activeKeyRef.current === contextKey) setOpeningFolder(false)
+    }
+  }
+
   useEffect(() => {
     const element = layoutRef.current
     if (!element) return
@@ -393,6 +422,17 @@ export function WorkspaceFilesTab({
             currentState?.contextInfo.reason ??
             'No authorized workspace is configured for this context.'}
         </p>
+        {contextKind === 'bot' && ownerId && onOpenFolder && (
+          <button
+            type="button"
+            className="gb-workspace-icon-btn"
+            onClick={() => void handleOpenFolder()}
+            disabled={openingFolder}
+            data-testid="workspace-open-folder-unavailable-btn"
+          >
+            {openingFolder ? 'Opening folder…' : 'Open folder'}
+          </button>
+        )}
         {contextKind === 'bot' && ownerId && workspacePath && window.ghostBot?.authorizeWorkspaceRead && (
           <button
             type="button"
@@ -563,6 +603,9 @@ export function WorkspaceFilesTab({
           onToggleDir={handleToggleDir}
           onSelectFile={(path) => { selectFile(path); if (narrow) setExplorer('auto') }}
           onRefresh={() => void refreshContextAndRoot()}
+          onOpenFolder={contextKind === 'bot' && ownerId && onOpenFolder
+            ? () => void handleOpenFolder()
+            : undefined}
           onCreateEntry={
             selector && transport.createEntry && currentState.contextInfo.authGeneration
               ? (kind, relativePath) => {

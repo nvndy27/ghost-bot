@@ -7,8 +7,13 @@
 - The ten hosted root-suite failures at starting SHA `bef0372` are corrected locally: one mock-only legacy catalog compatibility issue, stale model/runtime fixture values, two downstream missing-bot setup failures, and one readiness/disclosure synchronization race. The full affected serialized run passed 31/31. Exact corrected-head hosted CI and independent review remain pending; see [RC2.1B](extensions/rc2.1b-ci-stabilization.md).
 - **Tested offline/source Electron:** real provider catalogs and per-bot readiness now come from the daemon adapters; ordinary production first run no longer seeds mock bots. Existing mock bots remain unchanged and visibly gated until the user explicitly selects a discovered real configuration. Stale/unavailable catalogs and policy blocks remain fail-closed.
 - **Unverified:** The actual Electron check used a fresh no-credential Codex profile and showed auth-required. A separate disposable App Server fixture exercised catalog/effort selection and restart persistence but did not contact a provider or run inference. The maintainer's authenticated Codex account, live `model/list` on that account, live inference, paid API discovery/execution and packaged RC2 behavior still need their own acceptance.
-- **Unchanged RC2.2 blocker:** fresh and legacy seeded tilde paths are not repaired by RC2.1. Native Workspace tree/open/save was not accepted here; the chooser, grant and disk-save workflow remain assigned to RC2.2. Workspace/group/terminal authorization is unchanged.
+- **RC2.2 limitation:** a legacy or inaccessible bot root is not rewritten automatically. The user must select a valid folder from Explorer; read and write consent remain explicit. Group workspace access still requires an authorized task scope, and Private Task Chat has no Workspace. These are intentional authorization boundaries.
 - RC1 remains on hold and v0.1.0 remains unreleased.
+
+## RC2.2 Workspace verification — 2026-11-29
+
+- Actual source-Electron offline coverage now verifies direct folder selection, explicit read/write consent, real synthetic disk save through Ctrl+S, external-change conflict denial, and workspace-switch grant invalidation. No live provider, package or target-host acceptance was performed. See [RC2.2 evidence](extensions/rc2.2-real-workspace.md).
+- Read consent names the canonical root resolved by the daemon. Selecting a folder persists configuration but does not grant read access. Existing Group and Private Task isolation and filesystem capability gates remain unchanged.
 
 ## RC2.0 real-world diagnosis — 2026-11-28
 

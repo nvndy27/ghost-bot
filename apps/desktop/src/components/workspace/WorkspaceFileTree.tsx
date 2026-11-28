@@ -18,6 +18,7 @@ export interface WorkspaceFileTreeProps {
   onToggleDir: (relativePath: string) => void
   onSelectFile: (relativePath: string) => void
   onRefresh: () => void
+  onOpenFolder?: () => void
   onCreateEntry?: (kind: 'file' | 'directory', relativePath: string) => void
 }
 
@@ -30,6 +31,7 @@ export function WorkspaceFileTree({
   onToggleDir,
   onSelectFile,
   onRefresh,
+  onOpenFolder,
   onCreateEntry,
 }: WorkspaceFileTreeProps) {
   const [creatingKind, setCreatingKind] = useState<'file' | 'directory' | null>(null)
@@ -126,6 +128,18 @@ export function WorkspaceFileTree({
           Explorer
         </span>
         <div style={{ display: 'flex', gap: 4 }}>
+          {onOpenFolder && (
+            <button
+              type="button"
+              className="gb-icon-btn"
+              onClick={onOpenFolder}
+              aria-label="Open workspace folder"
+              title="Open folder"
+              data-testid="workspace-open-folder-btn"
+            >
+              <FolderOpen size={16} aria-hidden="true" />
+            </button>
+          )}
           {canWrite && onCreateEntry && (
             <>
               <button

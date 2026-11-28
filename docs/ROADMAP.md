@@ -6,7 +6,7 @@
 - **Blocked** — RC1 release is on hold pending real-world corrections and acceptance. The immutable RC1 source and package evidence remain preserved; v0.1.0 is not released.
 - **Tested** — RC2.1 Real Runtime & Provider Selection implements daemon-owned provider capability/readiness, adapter-backed catalogs, model-specific effort choices, explicit configuration, and non-destructive mock-profile recovery. Offline regression and source Electron acceptance passed with synthetic Codex protocol fixtures and no inference. Hosted CI and independent acceptance remain pending; see [RC2.1 evidence](extensions/rc2.1-real-runtime-provider-selection.md).
 - **Tested** — RC2.1B corrects ten hosted root-suite failures with explicit mock-only legacy catalog compatibility and corrected stale fixture setup/expectations. Ten affected regressions plus provider readiness pass 31/31 serialized; hosted exact-head CI and independent review remain pending. See [RC2.1B stabilization](extensions/rc2.1b-ci-stabilization.md).
-- **Not Started** — RC2.2 Real Workspace.
+- **Tested** — RC2.2 Real Workspace adds direct Explorer Open Folder, explicit canonical-root read consent, invalid legacy-path recovery, workspace switching, file open, separate write consent, Ctrl+S disk save, external-change conflict protection and grant revocation. Actual offline source-Electron and focused regression checks passed; exact PR checks/review remain required. No migration or permission expansion. See [RC2.2 evidence](extensions/rc2.2-real-workspace.md).
 - **Not Started** — RC2.3 Product UI Refinement.
 - **Not Started** — RC2.4 Integrated Real-World Acceptance.
 

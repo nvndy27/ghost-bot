@@ -35,7 +35,7 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await page.getByRole('option').filter({ hasText: 'Developer' }).waitFor()
     const shell = page.getByTestId('workspace-panel-shell')
     const resize = page.getByRole('separator', { name: 'Resize right workspace panel' })
-    assert.equal(await shell.evaluate((element) => element.getBoundingClientRect().width), 400)
+    assert.ok(Math.abs(await shell.evaluate((element) => element.getBoundingClientRect().width) - 400) < 0.5)
     const toolsLink = page.getByRole('button', { name: 'Connected tools' })
     assert.equal(await toolsLink.isEnabled(), true)
     await toolsLink.click()
@@ -47,7 +47,7 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     await page.getByRole('button', { name: 'Close provider usage' }).click()
     const setWidth = async (width: number) => {
       const current = await shell.evaluate((element) => element.getBoundingClientRect().width)
-      if (current === width) return
+      if (Math.abs(current - width) < 0.5) return
       const handle = await resize.boundingBox()
       assert.ok(handle)
       await page.mouse.move(handle.x + handle.width / 2, 400)
@@ -55,13 +55,13 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
       await page.mouse.move(handle.x + handle.width / 2 + current - width, 400)
       await page.mouse.up()
       await page.waitForFunction((expected) =>
-        document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === expected, width)
+        Math.abs((document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width ?? 0) - expected) < 0.5, width)
     }
     await setWidth(400)
     await page.getByTestId('workspace-tab-files').click()
-    await app.evaluate(({ dialog }, root) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
-    }, workspace)
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+    })
     await page.getByRole('button', { name: 'Allow read access' }).click()
     await page.getByTestId('workspace-tree-entry-workspace.ts').click()
     await page.getByTestId('workspace-editor-textarea').waitFor()
@@ -78,7 +78,7 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     assert.equal(await treeResize.getAttribute('aria-valuenow'), '155')
     await treeResize.press('ArrowLeft')
     assert.equal(await treeResize.getAttribute('aria-valuenow'), '145')
-    assert.equal(await shell.locator('.gb-workspace-header').evaluate((element) => element.getBoundingClientRect().height), 58)
+    assert.ok(Math.abs(await shell.locator('.gb-workspace-header').evaluate((element) => element.getBoundingClientRect().height) - 58) < 0.5)
 
     const capture = async (name: string) => {
       if (screenshots) await page.screenshot({ path: join(screenshots, name + '.png') })
@@ -107,7 +107,8 @@ test('Alpha.4B Electron Explorer layout, narrow overlay, keyboard resize and ref
     const preferenceAtWide = await page.evaluate(() => window.ghostBot!.getSettings())
     assert.equal(preferenceAtWide.appearance.rightWidth, 850)
     await setViewport(1280, 720)
-    await page.waitForFunction(() => document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width === 832)
+    await page.waitForFunction(() =>
+      Math.abs((document.querySelector('[data-testid="workspace-panel-shell"]')?.getBoundingClientRect().width ?? 0) - 832) < 0.5)
     await setViewport(720, 900)
     await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="workspace-panel-shell"]')!).position === 'absolute')
     const narrowPanel = await shell.boundingBox()

@@ -216,10 +216,9 @@ test('Alpha.2C.2 Electron E2E: native consent, create, save, watch, dirty draft 
     }, ws)
 
     await page.getByTestId('workspace-tab-files').click()
-    await app.evaluate(({ dialog }, wsPath) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [wsPath] })
+    await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
-    }, ws)
+    })
 
     // Read grant alone keeps panel Read-only
     await page.getByRole('button', { name: 'Allow read access' }).click()
