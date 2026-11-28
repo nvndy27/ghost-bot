@@ -1,3 +1,7 @@
+## RC2.1B routing regression evidence — 2026-11-29
+
+- **Tested:** CA2 found that identical mock model IDs masked routing regressions in the Team Routing and Group Discussion fixtures. The tests now use distinct supported selections and assert inherited configuration, explicit overrides, team isolation, global bot isolation, and immutable dispatch snapshots. No production catalog, permission, or runtime behavior changed. The focused local tests passed 3/3. Full hosted CI and independent acceptance remain separate exact-checkpoint gates.
+
 ## RC2.1 provider selection — 2026-11-28
 
 - The ten hosted root-suite failures at starting SHA `bef0372` are corrected locally: one mock-only legacy catalog compatibility issue, stale model/runtime fixture values, two downstream missing-bot setup failures, and one readiness/disclosure synchronization race. The full affected serialized run passed 31/31. Exact corrected-head hosted CI and independent review remain pending; see [RC2.1B](extensions/rc2.1b-ci-stabilization.md).

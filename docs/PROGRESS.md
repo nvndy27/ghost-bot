@@ -1,5 +1,9 @@
 # Progress log
 
+## RC2.1B routing regression-evidence correction — 2026-11-29
+
+**Tested** — CA2 identified that equal mock model IDs in the Team Routing and Group Discussion fixtures could conceal inheritance, team-override, and cross-team leakage regressions. Updated only `tests/alpha1b-member-routing.test.ts` and `tests/alpha1c-group-discussion.test.ts`: routing coverage now distinguishes inherited `mock-model`, team A `codex-mock`, and team B `gpt-6.2-mock`; it asserts persisted per-team values, global bot configuration isolation, dispatch snapshots after override reset, and session identity. Discussion coverage uses distinct supported global mock selections, verifies each member's model/effort in both rounds, then verifies a team-scoped override does not affect another team or the global bot. The explicit mock catalog and authorization behavior are unchanged. Focused result: 3/3 tests passed; `git diff --check` passed. No live inference or package build. This correction is a separate commit before RC2.2.
+
 ## RC2.0 real-world diagnosis — 2026-11-28
 
 **Verified** — Isolated branch fix/rc2-real-world-usability at the exact frozen RC1 SHA 3af223e2f680df8facee143d6210aefd190ce0ef (tree e69e0e34ace901bf511612d0f83a115610dede5d). No production source, dependency manifest, lockfile or migration changed. The dedicated diagnosis and RC2.1–2.4 plan is in [rc2-real-world-usability-diagnosis.md](extensions/rc2-real-world-usability-diagnosis.md).

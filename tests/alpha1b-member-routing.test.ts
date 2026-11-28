@@ -41,12 +41,31 @@ test('team member overrides persist in isolation and scoped dispatch freezes mod
     assert.equal(inherited.override, null)
     assert.equal(inherited.effective.modelId, 'mock-model')
     assert.ok(inherited.supported)
+    const mockCatalog = inherited.catalogs.find((catalog) => catalog.runtimeId === 'mock-offline')
+    assert.ok(mockCatalog)
+    assert.deepEqual(
+      mockCatalog.models.map((model) => model.id).sort(),
+      ['codex-mock', 'gpt-6.2-mock', 'mock-model'],
+    )
     await assert.rejects(routing.set({ ...key, override: { modelId: 'made-up' } }), /compatible/)
-    const changed = await routing.set({ ...key, override: { modelId: 'mock-model', effort: 'low' } })
+    const changed = await routing.set({ ...key, override: { modelId: 'codex-mock', effort: 'high' } })
+    assert.equal(changed.effective.modelId, 'codex-mock')
+    assert.equal(changed.effective.effort, 'high')
     assert.equal(changed.effective.accountId, 'mock-account')
     assert.notEqual(changed.revision, inherited.revision)
     assert.throws(() => routing.revalidate(key, inherited), /changed/)
-    assert.equal((await routing.get({ ...key, teamId: other.id })).effective.modelId, 'mock-model')
+    const otherKey = { teamId: other.id, botId: 'developer' }
+    const otherInherited = await routing.get(otherKey)
+    assert.equal(otherInherited.override, null)
+    assert.equal(otherInherited.effective.modelId, 'mock-model')
+    assert.equal(otherInherited.effective.effort, 'medium')
+    const otherOverride = await routing.set({
+      ...otherKey,
+      override: { modelId: 'gpt-6.2-mock', effort: 'low' },
+    })
+    assert.equal(otherOverride.effective.modelId, 'gpt-6.2-mock')
+    assert.equal(otherOverride.effective.effort, 'low')
+    assert.equal((await routing.get(key)).effective.modelId, 'codex-mock')
     assert.equal(bots.getBot('developer')?.modelId, 'mock-model')
 
     db.close()
@@ -55,6 +74,9 @@ test('team member overrides persist in isolation and scoped dispatch freezes mod
     sessions = new SessionRepository(db)
     routing = new TeamMemberRoutingService(db, bots, () => registry.getTeamRoutingCatalogs())
     assert.equal((await routing.get(key)).revision, changed.revision)
+    assert.equal((await routing.get(key)).effective.modelId, 'codex-mock')
+    assert.equal((await routing.get(otherKey)).effective.modelId, 'gpt-6.2-mock')
+    assert.equal(bots.getBot('developer')?.modelId, 'mock-model')
     const { teams: restarted, orchestrator } = buildTeamService()
     const personal = sessions.createSession({ agentId: 'developer', title: 'Personal fixture' })
     const run = await restarted.startTeamRun({
@@ -73,9 +95,14 @@ test('team member overrides persist in isolation and scoped dispatch freezes mod
     assert.equal(links[0].account_id, 'mock-account')
     assert.deepEqual(sessions.listSessions('developer').sessions.map((session) => session.id), [personal.id])
     await assert.rejects(orchestrator.startRun({ sessionId: links[0].session_id, idempotencyKey: 'unscoped', text: 'Denied' }), /different execution scope/)
-    assert.equal(orchestrator.getRun(links[0].daemon_run_id).configSnapshot.modelId, 'mock-model')
+    assert.equal(orchestrator.getRun(links[0].daemon_run_id).configSnapshot.modelId, 'codex-mock')
+    assert.equal(orchestrator.getRun(links[1].daemon_run_id).configSnapshot.modelId, 'codex-mock')
+    assert.equal(orchestrator.getRun(links[0].daemon_run_id).configSnapshot.effort, 'high')
     await routing.set({ ...key, override: null })
-    assert.equal(orchestrator.getRun(links[0].daemon_run_id).configSnapshot.modelId, 'mock-model')
+    assert.equal(orchestrator.getRun(links[0].daemon_run_id).configSnapshot.modelId, 'codex-mock')
+    assert.equal((await routing.get(key)).effective.modelId, 'mock-model')
+    assert.equal((await routing.get(otherKey)).effective.modelId, 'gpt-6.2-mock')
+    assert.equal(bots.getBot('developer')?.modelId, 'mock-model')
 
     const fixture = { identity: 'binding-compatibility-fixture', agentId: 'developer', runtimeId: 'mock-offline', accountId: 'mock-account' }
     const bound = sessions.getOrCreateTeamSession(fixture)
