@@ -394,6 +394,18 @@ function readLinuxProcessSnapshot(pid: number): LinuxProcessSnapshot | undefined
   }
 }
 
+function readLinuxParentPid(pid: number): number | undefined {
+  try {
+    const status = readFileSync('/proc/' + pid + '/status', 'utf8')
+    const parentPid = status.match(/^PPid:\s+(\d+)$/m)?.[1]
+    assert.ok(parentPid, 'Linux process ' + pid + ' has no parent PID')
+    return Number(parentPid)
+  } catch (error) {
+    if (isMissingProcess(error)) return undefined
+    throw error
+  }
+}
+
 function readLinuxChildPids(pid: number): number[] {
   let threadIds: string[]
   try {
@@ -421,7 +433,8 @@ function readLinuxChildPids(pid: number): number[] {
 /**
  * Captures currently parented descendants, including children forked by non-leader
  * threads. A process already detached or reparented before this scan is not
- * discoverable from rootPid; this is not an exhaustive ownership inventory.
+ * discoverable from rootPid; this is a point-in-time capture. Successful captures
+ * are merged into a persistent inventory so later scans cannot forget observed PIDs.
  */
 function collectTrackedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
   const pending = [rootPid]
@@ -439,6 +452,30 @@ function collectTrackedProcessTree(rootPid: number): LinuxProcessSnapshot[] {
   }
 
   return processes
+}
+
+type TrackedProcessInventory = Map<string, LinuxProcessSnapshot>
+
+function processIdentityKey(processSnapshot: LinuxProcessSnapshot): string {
+  return processSnapshot.pid + ':' + processSnapshot.startTime
+}
+
+function mergeTrackedProcessInventory(
+  inventory: TrackedProcessInventory,
+  capturedProcesses: LinuxProcessSnapshot[],
+): void {
+  for (const processSnapshot of capturedProcesses) {
+    inventory.set(processIdentityKey(processSnapshot), processSnapshot)
+  }
+}
+
+function captureAndMergeTrackedProcessTree(
+  inventory: TrackedProcessInventory,
+  rootPid: number,
+): LinuxProcessSnapshot[] {
+  const capturedProcesses = collectTrackedProcessTree(rootPid)
+  mergeTrackedProcessInventory(inventory, capturedProcesses)
+  return capturedProcesses
 }
 
 function isSameLiveProcess(snapshot: LinuxProcessSnapshot): boolean {
@@ -467,7 +504,7 @@ function writeCleanupDiagnostic(
   writeFileSync(
     join(tempRoot, 'ipc-smoke-cleanup-diagnostic.json'),
     JSON.stringify(
-      { reason, processes: processes.map(({ pid, state }) => ({ pid, state })) },
+      { reason, processes: processes.map(({ pid, state, startTime }) => ({ pid, state, startTime })) },
       null,
       2,
     ),
@@ -580,6 +617,390 @@ function cleanupTestProfileAfterOwnedChild(
   }
 }
 
+type ParentDescendantFixture = {
+  parent: ChildProcess
+  lines: Interface
+  parentPid: number
+  intermediate: LinuxProcessSnapshot
+  descendant: LinuxProcessSnapshot
+  inventory: TrackedProcessInventory
+}
+
+async function startParentDescendantFixture(tempRoot: string): Promise<ParentDescendantFixture> {
+  const descendantScript = [
+    "const readline = require('node:readline')",
+    'const lines = readline.createInterface({ input: process.stdin })',
+    "lines.on('line', (line) => { if (line === 'shutdown') { process.stdout.write('descendant-stopping\\n'); process.exit(0) } })",
+    "process.stdout.write('descendant-ready\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const intermediateScript = [
+    "const { spawn } = require('node:child_process')",
+    "process.on('SIGUSR1', () => process.exit(0))",
+    "spawn(process.execPath, ['-e', " + JSON.stringify(descendantScript) + "], { stdio: ['inherit', 'inherit', 'ignore'] })",
+    "process.stdout.write('intermediate-ready\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const parentScript = [
+    "const { spawn } = require('node:child_process')",
+    "process.on('SIGUSR1', () => process.exit(0))",
+    "spawn(process.execPath, ['-e', " + JSON.stringify(intermediateScript) + "], { stdio: ['inherit', 'inherit', 'ignore'] })",
+    "process.stdout.write('parent-ready\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const parent = spawn(process.execPath, ['-e', parentScript], {
+    cwd: tempRoot,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    stdio: ['pipe', 'pipe', 'ignore'],
+  })
+  const lines = createInterface({ input: parent.stdout! })
+  const inventory: TrackedProcessInventory = new Map()
+
+  try {
+    await Promise.all([
+      waitForChildLine(parent, lines, 'parent-ready'),
+      waitForChildLine(parent, lines, 'intermediate-ready'),
+      waitForChildLine(parent, lines, 'descendant-ready'),
+    ])
+    const parentPid = parent.pid
+    assert.ok(parentPid && parentPid > 0, 'The fixture parent has no PID')
+    const capturedProcesses = captureAndMergeTrackedProcessTree(inventory, parentPid)
+    const descendants = capturedProcesses.filter((processSnapshot) => processSnapshot.pid !== parentPid)
+    assert.equal(descendants.length, 2, 'The fixture did not capture its intermediate and descendant')
+    const intermediate = descendants.find(
+      (processSnapshot) => readLinuxParentPid(processSnapshot.pid) === parentPid,
+    )
+    assert.ok(intermediate, 'The fixture intermediate process was not parented to the fixture root')
+    const descendant = descendants.find(
+      (processSnapshot) => readLinuxParentPid(processSnapshot.pid) === intermediate.pid,
+    )
+    assert.ok(descendant, 'The fixture descendant was not parented to the fixture intermediate')
+    return { parent, lines, parentPid, intermediate, descendant, inventory }
+  } catch (error) {
+    const parentPid = parent.pid
+    const rootSnapshot = [...inventory.values()].find(
+      (processSnapshot) => processSnapshot.pid === parentPid,
+    )
+    const rootStillOwned = rootSnapshot
+      ? isSameLiveProcess(rootSnapshot)
+      : parent.exitCode === null && parent.signalCode === null
+    if (parentPid && parentPid > 0 && rootStillOwned) {
+      try {
+        captureAndMergeTrackedProcessTree(inventory, parentPid)
+      } catch {
+        // Preserve the original fixture setup error; prior observations remain available.
+      }
+    }
+    const cleanupSucceeded = await stopParentDescendantFixture(
+      parent,
+      lines,
+      inventory,
+      tempRoot,
+      [...inventory.values()],
+    )
+    if (!cleanupSucceeded) {
+      throw new AggregateError(
+        [error, new Error('Fixture setup failed and an observed process could not be stopped; profile retained at ' + tempRoot)],
+        'Parent/descendant fixture setup and cleanup failed',
+      )
+    }
+    throw error
+  }
+}
+
+async function stopParentDescendantFixture(
+  parent: ChildProcess,
+  lines: Interface,
+  inventory: TrackedProcessInventory,
+  tempRoot: string,
+  knownIdentities: LinuxProcessSnapshot[],
+): Promise<boolean> {
+  let captureError: unknown
+  const rootSnapshot = [...inventory.values()].find(
+    (processSnapshot) => processSnapshot.pid === parent.pid,
+  )
+  const rootStillOwned = rootSnapshot
+    ? isSameLiveProcess(rootSnapshot)
+    : parent.exitCode === null && parent.signalCode === null
+  if (parent.pid && parent.pid > 0 && rootStillOwned) {
+    try {
+      captureAndMergeTrackedProcessTree(inventory, parent.pid)
+    } catch (error) {
+      captureError = error
+    }
+  }
+  mergeTrackedProcessInventory(inventory, knownIdentities)
+  await stopOwnedChild(parent)
+
+  const trackedProcesses = [...inventory.values()]
+  let remaining: LinuxProcessSnapshot[] = []
+  let waitError: unknown
+  try {
+    remaining = await waitForTrackedProcessesToExit(trackedProcesses, 300)
+  } catch (error) {
+    waitError = error
+  }
+  for (const trackedProcess of remaining) {
+    if (!isSameLiveProcess(trackedProcess)) continue
+    try {
+      process.kill(trackedProcess.pid, 'SIGTERM')
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error
+    }
+  }
+  try {
+    remaining = await waitForTrackedProcessesToExit(remaining, 1000)
+  } catch (error) {
+    waitError ??= error
+  }
+  for (const trackedProcess of remaining) {
+    if (!isSameLiveProcess(trackedProcess)) continue
+    try {
+      process.kill(trackedProcess.pid, 'SIGKILL')
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error
+    }
+  }
+  try {
+    remaining = await waitForTrackedProcessesToExit(remaining, 1000)
+  } catch (error) {
+    waitError ??= error
+  }
+
+  const shutdownVerified = isTrackedProcessSetStopped(
+    parent.pid,
+    trackedProcesses,
+    remaining,
+    captureError,
+    waitError,
+  )
+  lines.close()
+  if (shutdownVerified) {
+    rmSync(tempRoot, { recursive: true, force: true })
+    return !existsSync(tempRoot)
+  }
+
+  writeCleanupDiagnostic(
+    tempRoot,
+    'Fixture process shutdown was not confirmed; profile retained',
+    remaining.length > 0 ? remaining : trackedProcesses,
+  )
+  return false
+}
+
+test('Observed descendant remains in cleanup inventory after reparenting', async (t) => {
+  assert.equal(process.platform, 'linux', 'The reparenting regression requires Linux /proc')
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-reparented-process-regression-'))
+  chmodSync(tempRoot, 0o700)
+  const profileDir = join(tempRoot, 'profile')
+  mkdirSync(profileDir, { mode: 0o700 })
+  const fixture = await startParentDescendantFixture(tempRoot)
+  const initiallyObserved = [...fixture.inventory.values()]
+
+  try {
+    const originalDescendant = fixture.inventory.get(processIdentityKey(fixture.descendant))
+    assert.ok(originalDescendant, 'Initial tree capture did not record the descendant identity')
+    const rootSnapshot = initiallyObserved.find(
+      (processSnapshot) => processSnapshot.pid === fixture.parentPid,
+    )
+    assert.ok(rootSnapshot, 'Initial tree capture omitted the fixture root identity')
+    assert.ok(
+      initiallyObserved.some((processSnapshot) => processSnapshot.pid === fixture.intermediate.pid),
+      'Initial tree capture omitted the fixture intermediate identity',
+    )
+
+    const intermediateExit = waitForTrackedProcessesToExit([fixture.intermediate], 1500)
+    assert.equal(isSameLiveProcess(fixture.intermediate), true, 'Fixture intermediate identity changed before signaling')
+    assert.equal(process.kill(fixture.intermediate.pid, 'SIGUSR1'), true, 'Could not release the descendant')
+    assert.equal((await intermediateExit).length, 0, 'Fixture intermediate did not exit')
+    assert.equal(isSameLiveProcess(rootSnapshot), true, 'Fixture root exited with its intermediate')
+
+    const descendantAfterReparent = readLinuxProcessSnapshot(fixture.descendant.pid)
+    assert.ok(descendantAfterReparent && descendantAfterReparent.state !== 'Z', 'Descendant did not remain alive')
+    assert.equal(descendantAfterReparent.pid, fixture.descendant.pid)
+    assert.equal(descendantAfterReparent.startTime, fixture.descendant.startTime)
+    const newParentPid = readLinuxParentPid(fixture.descendant.pid)
+    assert.ok(
+      newParentPid !== undefined && newParentPid !== fixture.intermediate.pid,
+      'Descendant was not reparented away from the intermediate process',
+    )
+
+    const finalTree = captureAndMergeTrackedProcessTree(fixture.inventory, fixture.parentPid)
+    const rootInFinalTree = finalTree.some(
+      (processSnapshot) => processSnapshot.pid === fixture.parentPid,
+    )
+    const descendantInFinalTree = finalTree.some(
+      (processSnapshot) => processSnapshot.pid === fixture.descendant.pid,
+    )
+
+    const rootExit = waitForChildExit(fixture.parent, 1500)
+    assert.equal(fixture.parent.kill('SIGUSR1'), true, 'Could not close the fixture root')
+    assert.equal(await rootExit, true, 'Fixture root did not close')
+    const descendantAfterRootExit = readLinuxProcessSnapshot(fixture.descendant.pid)
+    assert.ok(descendantAfterRootExit && descendantAfterRootExit.state !== 'Z')
+    assert.equal(descendantAfterRootExit.startTime, fixture.descendant.startTime)
+
+    const descendantRetainedInInventory = fixture.inventory.has(processIdentityKey(fixture.descendant))
+    const trackedProcesses = [...fixture.inventory.values()]
+    const remainingWhileAlive = await waitForTrackedProcessesToExit(trackedProcesses, 150)
+    const shutdownVerifiedWhileAlive = isTrackedProcessSetStopped(
+      fixture.parentPid,
+      trackedProcesses,
+      remainingWhileAlive,
+    )
+    const dispositionWhileAlive = cleanupTemporaryProfile(
+      tempRoot,
+      shutdownVerifiedWhileAlive,
+      remainingWhileAlive.length > 0 ? remainingWhileAlive : trackedProcesses,
+    )
+    const descendantAfterDecision = readLinuxProcessSnapshot(fixture.descendant.pid)
+    const descendantStillAlive = Boolean(
+      descendantAfterDecision &&
+        descendantAfterDecision.state !== 'Z' &&
+        descendantAfterDecision.startTime === fixture.descendant.startTime,
+    )
+    const observations = {
+      initiallyCaptured: Boolean(originalDescendant),
+      reparented: newParentPid !== undefined && newParentPid !== fixture.intermediate.pid,
+      pidUnchanged: descendantAfterReparent.pid === fixture.descendant.pid,
+      startTimeUnchanged: descendantAfterReparent.startTime === fixture.descendant.startTime,
+      rootInFinalTree,
+      absentFromFinalTree: !descendantInFinalTree,
+      retainedInMergedInventory: descendantRetainedInInventory,
+      rootClosed: fixture.parent.exitCode !== null || fixture.parent.signalCode !== null,
+      descendantStillAlive,
+      shutdownVerifiedWhileAlive,
+      profileRetainedWhileAlive: dispositionWhileAlive === 'retained' && existsSync(profileDir),
+      cleanupDiagnosticWritten: existsSync(join(tempRoot, 'ipc-smoke-cleanup-diagnostic.json')),
+    }
+    assert.deepEqual(observations, {
+      initiallyCaptured: true,
+      reparented: true,
+      pidUnchanged: true,
+      startTimeUnchanged: true,
+      rootInFinalTree: true,
+      absentFromFinalTree: true,
+      retainedInMergedInventory: true,
+      rootClosed: true,
+      descendantStillAlive: true,
+      shutdownVerifiedWhileAlive: false,
+      profileRetainedWhileAlive: true,
+      cleanupDiagnosticWritten: true,
+    })
+
+    if (fixture.parent.stdin && !fixture.parent.stdin.destroyed) fixture.parent.stdin.write('shutdown\n')
+    let remainingAfterShutdown = await waitForTrackedProcessesToExit([fixture.descendant], 1000)
+    if (remainingAfterShutdown.length > 0 && isSameLiveProcess(fixture.descendant)) {
+      process.kill(fixture.descendant.pid, 'SIGTERM')
+      remainingAfterShutdown = await waitForTrackedProcessesToExit([fixture.descendant], 1000)
+    }
+    assert.equal(remainingAfterShutdown.length, 0, 'Owned reparented descendant did not stop')
+    const remainingAfterAllExit = await waitForTrackedProcessesToExit(trackedProcesses, 250)
+    const shutdownVerifiedAfterExit = isTrackedProcessSetStopped(
+      fixture.parentPid,
+      trackedProcesses,
+      remainingAfterAllExit,
+    )
+    assert.equal(shutdownVerifiedAfterExit, true, 'Cleanup did not verify all captured identities stopped')
+    assert.equal(cleanupTemporaryProfile(tempRoot, shutdownVerifiedAfterExit, []), 'removed')
+    assert.equal(existsSync(tempRoot), false, 'Profile remained after all observed identities stopped')
+    t.diagnostic(
+      'Reparenting regression passed: descendant PID ' + fixture.descendant.pid +
+        ' remained in the merged inventory and blocked profile removal until shutdown.',
+    )
+  } finally {
+    assert.equal(
+      await stopParentDescendantFixture(
+        fixture.parent,
+        fixture.lines,
+        fixture.inventory,
+        tempRoot,
+        initiallyObserved,
+      ),
+      true,
+      'Test-owned parent/descendant fixture cleanup could not be confirmed',
+    )
+  }
+})
+
+test('Validation assertion failure preserves captured identities for cleanup', async (t) => {
+  assert.equal(process.platform, 'linux', 'The validation inventory regression requires Linux /proc')
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-validation-inventory-regression-'))
+  chmodSync(tempRoot, 0o700)
+  mkdirSync(join(tempRoot, 'profile'), { mode: 0o700 })
+  const fixture = await startParentDescendantFixture(tempRoot)
+  const initiallyObserved = [...fixture.inventory.values()]
+  const validationInventory: TrackedProcessInventory = new Map()
+
+  try {
+    let validationError: unknown
+    try {
+      const validationCapture = captureAndMergeTrackedProcessTree(validationInventory, fixture.parentPid)
+      assert.ok(
+        validationCapture.some((processSnapshot) => processIdentityKey(processSnapshot) === processIdentityKey(fixture.descendant)),
+        'Validation capture omitted the live descendant',
+      )
+      throw new Error('controlled validation assertion failure')
+    } catch (error) {
+      validationError = error
+    }
+    assert.ok(validationError instanceof Error)
+    assert.match(validationError.message, /controlled validation assertion failure/)
+    assert.ok(
+      validationInventory.has(processIdentityKey(fixture.descendant)),
+      'Validation failure discarded an identity captured before the assertion',
+    )
+
+    const intermediateExit = waitForTrackedProcessesToExit([fixture.intermediate], 1500)
+    assert.equal(isSameLiveProcess(fixture.intermediate), true, 'Fixture intermediate identity changed before signaling')
+    assert.equal(process.kill(fixture.intermediate.pid, 'SIGUSR1'), true)
+    assert.equal((await intermediateExit).length, 0)
+    const finalCapture = captureAndMergeTrackedProcessTree(validationInventory, fixture.parentPid)
+    assert.equal(finalCapture.some((processSnapshot) => processSnapshot.pid === fixture.descendant.pid), false)
+    assert.ok(
+      validationInventory.has(processIdentityKey(fixture.descendant)),
+      'Cleanup capture replaced identities preserved across validation failure',
+    )
+    const remaining = await waitForTrackedProcessesToExit([...validationInventory.values()], 150)
+    assert.equal(remaining.some((processSnapshot) => processIdentityKey(processSnapshot) === processIdentityKey(fixture.descendant)), true)
+    const shutdownVerified = isTrackedProcessSetStopped(
+      fixture.parentPid,
+      [...validationInventory.values()],
+      remaining,
+    )
+    assert.equal(shutdownVerified, false)
+    assert.equal(cleanupTemporaryProfile(tempRoot, shutdownVerified, remaining), 'retained')
+    assert.equal(existsSync(join(tempRoot, 'profile')), true)
+
+    if (fixture.parent.stdin && !fixture.parent.stdin.destroyed) fixture.parent.stdin.write('shutdown\n')
+    assert.equal((await waitForTrackedProcessesToExit([fixture.descendant], 1000)).length, 0)
+    const rootExit = waitForChildExit(fixture.parent, 1500)
+    assert.equal(fixture.parent.kill('SIGUSR1'), true)
+    assert.equal(await rootExit, true)
+    const remainingAfterExit = await waitForTrackedProcessesToExit([...validationInventory.values()], 250)
+    const shutdownVerifiedAfterExit = isTrackedProcessSetStopped(
+      fixture.parentPid,
+      [...validationInventory.values()],
+      remainingAfterExit,
+    )
+    assert.equal(shutdownVerifiedAfterExit, true)
+    assert.equal(cleanupTemporaryProfile(tempRoot, shutdownVerifiedAfterExit, []), 'removed')
+    t.diagnostic('Validation-failure inventory regression preserved descendant PID ' + fixture.descendant.pid + '.')
+  } finally {
+    assert.equal(
+      await stopParentDescendantFixture(
+        fixture.parent,
+        fixture.lines,
+        validationInventory,
+        tempRoot,
+        initiallyObserved,
+      ),
+      true,
+      'Test-owned validation fixture cleanup could not be confirmed',
+    )
+  }
+})
+
 test('Cleanup retains the profile when a live process changes its title without changing identity', async (t) => {
   assert.equal(process.platform, 'linux', 'The controlled process identity regression requires Linux /proc')
   const tempRoot = mkdtempSync(join(tmpdir(), 'ghost-process-identity-regression-'))
@@ -687,6 +1108,7 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
   let launchError: unknown
   let rendererPid = 0
   let testError: unknown
+  const trackedProcessInventory: TrackedProcessInventory = new Map()
 
   try {
     chmodSync(tempRoot, 0o700)
@@ -802,7 +1224,7 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
 
     const runtimePid = app.process().pid
     assert.ok(runtimePid && runtimePid > 0, 'Electron main process has no valid PID')
-    const trackedProcesses = collectTrackedProcessTree(runtimePid)
+    const trackedProcesses = captureAndMergeTrackedProcessTree(trackedProcessInventory, runtimePid)
     assert.ok(trackedProcesses.some((item) => item.pid === rendererPid), 'Renderer is outside the captured Electron process tree')
     assert.ok(
       trackedProcesses.every((item) => !/(?:^|\s)--no-sandbox(?:=|\s|$)/.test(item.commandLine)),
@@ -819,17 +1241,17 @@ test('Offline Electron/daemon IPC smoke check verifies Chromium sandbox and IPC 
   let cleanupError: unknown
   if (app) {
     const runtimePid = app.process().pid
-    let trackedProcesses: LinuxProcessSnapshot[] = []
     let captureError: unknown
     if (!runtimePid || runtimePid <= 0) {
       captureError = new Error('Electron main process has no valid PID')
     } else {
       try {
-        trackedProcesses = collectTrackedProcessTree(runtimePid)
+        captureAndMergeTrackedProcessTree(trackedProcessInventory, runtimePid)
       } catch (error) {
         captureError = error
       }
     }
+    const trackedProcesses = [...trackedProcessInventory.values()]
 
     let closeError: unknown
     try {
