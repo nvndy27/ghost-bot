@@ -8,9 +8,17 @@ Installed dependencies with the frozen lockfile, verified Electron 36.9.5, and c
 
 A synthetic Workspace reproduction confirmed fresh seed paths contain literal tilde values while WorkspaceFilesService requires an absolute path. The Files tab reported “No authorized workspace root configured.” Setting an absolute synthetic path through existing validated updateBot IPC changed the UI to the explicit native read-consent state. Consent was not granted, so tree/open/save/disk verification was not performed. Actual screenshots remain local at /tmp/ghost-rc2-workspace-ungranted.png and /tmp/ghost-rc2-workspace-synthetic-consent.png. No automated suite was run; accepted evidence for unchanged behavior was reused.
 
+## RC2.1 Real Runtime & Provider Selection — 2026-11-28
+
+**Tested** — Implementation commit `011cdc1b7f1c9af4da08996f1a62220365a926e3` on `fix/rc2-real-world-usability`, based on frozen RC1 `3af223e2f680df8facee143d6210aefd190ce0ef`. The daemon now projects actual provider installation, configuration, authentication, model discovery, per-model efforts, supported permissions/capabilities, policy readiness and bounded diagnostics over validated Electron IPC. Bot Editor and Composer use that same provider-bound catalog; no real-mode `MOCK_MODELS`, provider/model substitution, automatic API discovery, or silent configuration rewrite remains. Fresh production profiles start without seeded mock bots. Existing mock bots and conversation/avatar identity are preserved and have an explicit recovery path. Routing changes require a current catalog generation, and compatible new conversations preserve existing session/config snapshots. No database migration or dependency change.
+
+Focused runtime/provider persistence regressions (`rc2-provider-readiness`, `alpha0a-native-chat-closure`, `provider7-unified-execution`, and `db-persistence`) passed 10/10. The additional Codex adapter, daemon IPC and Settings/Runtime policy batch passed 24/24. Lint, full workspace typecheck and source build passed. Actual source Electron acceptance passed with sandbox/context isolation on and Node integration off: fresh production setup, no-credential Codex auth-required state, preserved mock-profile recovery with Send disabled, plus a disposable Codex App Server protocol fixture that displayed its reported model and `low/high/xhigh/max` efforts, saved `max`, and restored bot/model/effort/permission and active compatible session after restart. The fixture did not implement inference. Seven accepted screenshots are stored outside Git under `/home/nguyenduy/Documents/Projects/ghost-bot-coordination/rc2/provider-acceptance/`. Zero live inference or API requests. Exact test commands and provider limits are recorded in [RC2.1 evidence](extensions/rc2.1-real-runtime-provider-selection.md).
+
+**In Progress** — The implementation and evidence require a focused review and exact-candidate hosted CI. Live discovery using the maintainer's authenticated Codex profile, real Codex inference, API-billed provider acceptance, package behavior and RC2.2 Workspace acceptance are not established.
+
 ## RC2 handoff
 
-RC2.1–2.4 remain **Not Started** pending CA1 implementation authorization. CA2/A2 owns independent acceptance after a candidate is available. A bounded live Codex request needs separate explicit maintainer authorization.
+CA2/A2 owns independent acceptance of the published RC2.1 candidate. A bounded live Codex request needs separate explicit maintainer authorization. After RC2.1 review and hosted checks, RC2.2 covers default/legacy tilde-path recovery, Workspace Open Folder/switching, native read/write consent, disk-save verification and Ctrl+S. RC2.3 and RC2.4 remain **Not Started**.
 
 ## Alpha.4A V03.2 shared UI and Chat
 

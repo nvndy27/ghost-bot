@@ -1,5 +1,11 @@
 # Provider integration matrix
 
+## RC2.1 daemon capability projection — 2026-11-28
+
+**Tested offline and in source Electron.** The renderer now consumes one daemon-owned projection for the nine adapters and explicit Mock Offline runtime. It keeps installed/available, configuration, authentication, actual model catalog, model-specific effort, permission/capability, execution readiness, and diagnostics separate. Codex selection accepts the full `model/list` effort list; model/effort support does not itself imply a permission grant or readiness. API model discovery only runs after an explicit user action and the existing credential/authorization checks. No live provider request, credential access, or inference occurred in this RC2.1 assignment. A disposable fixture demonstrated UI catalog/effort/persistence behavior but is not live evidence. See [RC2.1 evidence](extensions/rc2.1-real-runtime-provider-selection.md).
+
+Provider rows below retain historical adapter and live-verification evidence. The RC2.1 projection changes its presentation, not those underlying capability or acceptance gates.
+
 ## RC2.0 UI/runtime diagnosis — 2026-11-28
 
 The adapter-level discovery, effort and execution boundaries were inspected without new inference or paid provider requests. The actual Electron Codex metadata check used a fresh temporary profile with no credentials and returned auth-required. The key issue is selection/readiness wiring: runtime statuses and model catalogs are not consistently consumed by BotEditor, ChatComposer or ChatHeader. See the [RC2.0 diagnosis and architecture plan](extensions/rc2-real-world-usability-diagnosis.md#provider-runtime-capability-and-readiness-matrix) for the per-adapter breakdown. This note does not change or replace historical provider acceptance evidence below.

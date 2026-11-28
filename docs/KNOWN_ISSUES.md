@@ -1,3 +1,10 @@
+## RC2.1 provider selection — 2026-11-28
+
+- **Tested offline/source Electron:** real provider catalogs and per-bot readiness now come from the daemon adapters; ordinary production first run no longer seeds mock bots. Existing mock bots remain unchanged and visibly gated until the user explicitly selects a discovered real configuration. Stale/unavailable catalogs and policy blocks remain fail-closed.
+- **Unverified:** The actual Electron check used a fresh no-credential Codex profile and showed auth-required. A separate disposable App Server fixture exercised catalog/effort selection and restart persistence but did not contact a provider or run inference. The maintainer's authenticated Codex account, live `model/list` on that account, live inference, paid API discovery/execution and packaged RC2 behavior still need their own acceptance.
+- **Unchanged RC2.2 blocker:** fresh and legacy seeded tilde paths are not repaired by RC2.1. Native Workspace tree/open/save was not accepted here; the chooser, grant and disk-save workflow remain assigned to RC2.2. Workspace/group/terminal authorization is unchanged.
+- RC1 remains on hold and v0.1.0 remains unreleased.
+
 ## RC2.0 real-world diagnosis — 2026-11-28
 
 - **Confirmed:** New default bots are persisted with runtime mock-offline and mock model IDs. BotEditor and ChatComposer use mock catalogs for Codex and most non-Codex providers; ChatHeader’s “Codex Ready” represents global mode, not account or selected-bot readiness. Actual source Electron with a fresh temporary Codex profile showed auth-required/disconnected while still displaying “Codex Ready” and a gpt-6.2-mock model. No credentials or inference were used.

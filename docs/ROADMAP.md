@@ -4,7 +4,7 @@
 
 - **Verified** — RC2.0 source diagnosis and actual source-Electron mock/no-auth metadata inspection are recorded in [the diagnosis and architecture plan](extensions/rc2-real-world-usability-diagnosis.md). Confirmed blockers include mock-configured seeded bots, mock model fallbacks in real-provider controls, global rather than selected-bot readiness labels, and seeded tilde workspace paths rejected by daemon authorization.
 - **Blocked** — RC1 release is on hold pending real-world corrections and acceptance. The immutable RC1 source and package evidence remain preserved; v0.1.0 is not released.
-- **Not Started** — RC2.1 Real Runtime & Provider Selection.
+- **Tested** — RC2.1 Real Runtime & Provider Selection implements daemon-owned provider capability/readiness, adapter-backed catalogs, model-specific effort choices, explicit configuration, and non-destructive mock-profile recovery. Offline regression and source Electron acceptance passed with synthetic Codex protocol fixtures and no inference. Hosted CI and independent acceptance remain pending; see [RC2.1 evidence](extensions/rc2.1-real-runtime-provider-selection.md).
 - **Not Started** — RC2.2 Real Workspace.
 - **Not Started** — RC2.3 Product UI Refinement.
 - **Not Started** — RC2.4 Integrated Real-World Acceptance.

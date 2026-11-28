@@ -2,9 +2,9 @@
 
 ## RC2 real-world usability — current handoff
 
-**Verified** — RC2.0 diagnosis is complete at the exact frozen RC1 parent SHA 3af223e2f680df8facee143d6210aefd190ce0ef; see [diagnosis and implementation plan](extensions/rc2-real-world-usability-diagnosis.md). RC1 remains on hold and unreleased. Source Electron mock and no-credential Codex metadata checks ran with no inference. Native read/write consent was not granted.
+**Tested** — RC2.1 is implemented on `fix/rc2-real-world-usability` from frozen parent `3af223e2f680df8facee143d6210aefd190ce0ef`; see [implementation and focused evidence](extensions/rc2.1-real-runtime-provider-selection.md). The daemon capability projection, explicit catalogs, shared Bot Editor/Composer selectors, readiness, mock recovery, persistence and offline Electron restart acceptance pass. Exact candidate hosted checks and independent review remain pending. RC1 remains preserved, on hold and unreleased.
 
-**Recommended next action:** maintainer authorizes CA1 implementation of RC2.1 Real Runtime & Provider Selection on fix/rc2-real-world-usability, including actual daemon catalogs in Bot Editor/composer, truthful per-bot readiness, explicit non-destructive migration from mock configuration, and regression coverage. Correct new seeded workspace paths to absolute values and show existing tilde-seeded users a recovery chooser. Continue RC2.2 and RC2.3 as independent work permits. CA2/A2 performs focused acceptance on the integrated candidate. A bounded Codex request requires separate explicit authorization.
+**Recommended next action:** review the exact published RC2.1 Draft PR and run its required hosted checks; CA2/A2 should provide focused independent acceptance of this candidate. Do not infer live readiness from the synthetic protocol fixture. After those gates, begin RC2.2: correct fresh and legacy tilde workspace paths, add a Workspace Open Folder/switching flow, and verify native read/write consent, file save to disk and Ctrl+S on a synthetic project. A bounded live Codex inference still requires separate explicit maintainer authorization.
 
 ## Unified v0.1 release candidate — integration checkpoint
 
