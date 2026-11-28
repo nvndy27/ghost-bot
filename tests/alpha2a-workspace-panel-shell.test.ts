@@ -76,8 +76,16 @@ test('Alpha.2A Electron E2E: Workspace Panel Shell, themes, resize, collapse, ma
     await page.waitForSelector('text=Current activity')
     await page.waitForSelector('text=Routines')
     await page.waitForSelector('text=Connected tools')
+    await page.waitForFunction(() =>
+      document.querySelector('[role="listbox"][aria-label="Bots"] [aria-selected="true"] .gb-bot-readiness')
+        ?.textContent?.trim() === 'Offline Demo',
+    )
     const runtimeDetails = page.locator('.gb-overview-runtime')
     await runtimeDetails.locator('summary').click()
+    await page.waitForFunction(() => {
+      const details = document.querySelector('.gb-overview-runtime')
+      return details instanceof HTMLDetailsElement && details.open
+    })
     await runtimeDetails.getByText(/Connection:/).waitFor()
     assert.equal(await runtimeDetails.getByText('Account usage', { exact: true }).count(), 0)
     await runtimeDetails.locator('summary').click()

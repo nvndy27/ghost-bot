@@ -39,15 +39,15 @@ test('team member overrides persist in isolation and scoped dispatch freezes mod
     const key = { teamId: team.id, botId: 'developer' }
     const inherited = await routing.get(key)
     assert.equal(inherited.override, null)
-    assert.equal(inherited.effective.modelId, 'codex-mock')
+    assert.equal(inherited.effective.modelId, 'mock-model')
     assert.ok(inherited.supported)
     await assert.rejects(routing.set({ ...key, override: { modelId: 'made-up' } }), /compatible/)
     const changed = await routing.set({ ...key, override: { modelId: 'mock-model', effort: 'low' } })
     assert.equal(changed.effective.accountId, 'mock-account')
     assert.notEqual(changed.revision, inherited.revision)
     assert.throws(() => routing.revalidate(key, inherited), /changed/)
-    assert.equal((await routing.get({ ...key, teamId: other.id })).effective.modelId, 'codex-mock')
-    assert.equal(bots.getBot('developer')?.modelId, 'codex-mock')
+    assert.equal((await routing.get({ ...key, teamId: other.id })).effective.modelId, 'mock-model')
+    assert.equal(bots.getBot('developer')?.modelId, 'mock-model')
 
     db.close()
     db = await openGhostBotDatabase(dir)
@@ -83,7 +83,7 @@ test('team member overrides persist in isolation and scoped dispatch freezes mod
     assert.notEqual(sessions.getOrCreateTeamSession({ ...fixture, runtimeId: 'mock' }), bound)
     assert.equal(sessions.getActiveSessionId('developer'), personal.id)
 
-    await routing.set({ ...key, override: { effort: 'high' } })
+    await routing.set({ ...key, override: { modelId: 'codex-mock', effort: 'high' } })
     assert.throws(() => restarted.updateTeamMembers(team.id, ['developer']), /replacement lead/)
     restarted.updateTeamMembers(team.id, ['chief'])
     await assert.rejects(routing.get(key), /not an active team member/)

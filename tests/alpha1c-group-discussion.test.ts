@@ -65,8 +65,8 @@ test('Alpha.1C supports 2-round bounded discussion, inherited routing, and leave
         ['developer', 2],
       ],
     )
-    assert.equal(turn.replies[0].routing.modelId, 'gpt-6.2-mock')
-    assert.equal(turn.replies[1].routing.modelId, 'codex-mock')
+    assert.equal(turn.replies[0].routing.modelId, 'mock-model')
+    assert.equal(turn.replies[1].routing.modelId, 'mock-model')
     assert.equal(fx.sessionRepo.getSessionMessages(personalSess.id).total, 0)
   } finally {
     fx.db.close()

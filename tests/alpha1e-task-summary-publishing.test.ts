@@ -156,7 +156,7 @@ test('original TASK-01 and TASK-02 bind a delegation before dispatch and roll ba
     assert.equal((await fx.privateTasks.delegate(input)).sessionId, clean.sessionId)
     assert.equal(launchCount, 1)
 
-    await fx.routing.set({ teamId: fx.team.id, botId: 'developer', override: { effort: 'high' } })
+    await fx.routing.set({ teamId: fx.team.id, botId: 'developer', override: { modelId: 'codex-mock', effort: 'high' } })
     await execute(clean.teamRunId)
     const result = fx.privateTasks.list({ teamId: fx.team.id }).tasks[0]
     assert.equal(result.status, 'failed')
