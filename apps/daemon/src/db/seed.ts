@@ -30,7 +30,7 @@ const INITIAL_BOTS: readonly SeedBotDef[] = [
       animation: true,
     },
     runtimeId: 'mock-offline',
-    modelId: 'gpt-6.2-mock',
+    modelId: 'mock-model',
     effort: 'medium',
     workspacePath: '~/Projects/ghost-bot',
     permissionMode: 'ask-approval',
@@ -49,7 +49,7 @@ const INITIAL_BOTS: readonly SeedBotDef[] = [
       animation: true,
     },
     runtimeId: 'mock-offline',
-    modelId: 'codex-mock',
+    modelId: 'mock-model',
     effort: 'medium',
     workspacePath: '~/Projects/ghost-bot',
     permissionMode: 'ask-approval',
@@ -68,8 +68,8 @@ const INITIAL_BOTS: readonly SeedBotDef[] = [
       animation: true,
     },
     runtimeId: 'mock-offline',
-    modelId: 'gpt-6.2-mock',
-    effort: 'high',
+    modelId: 'mock-model',
+    effort: 'medium',
     workspacePath: '~/Projects/ghost-bot',
     permissionMode: 'read-only',
   },
@@ -87,7 +87,7 @@ const INITIAL_BOTS: readonly SeedBotDef[] = [
       animation: true,
     },
     runtimeId: 'mock-offline',
-    modelId: 'gpt-6.2-mock',
+    modelId: 'mock-model',
     effort: 'low',
     workspacePath: '~/Documents',
     permissionMode: 'read-only',
@@ -106,14 +106,17 @@ const INITIAL_BOTS: readonly SeedBotDef[] = [
       animation: true,
     },
     runtimeId: 'mock-offline',
-    modelId: 'gpt-6.2-mock',
+    modelId: 'mock-model',
     effort: 'low',
     workspacePath: '~/Notes',
     permissionMode: 'read-only',
   },
 ]
 
-export function seedInitialBotsIfNeeded(handle: DatabaseHandle): boolean {
+export function seedInitialBotsIfNeeded(
+  handle: DatabaseHandle,
+  runtimeMode: 'codex' | 'mock' = 'mock',
+): boolean {
   const alreadySeeded = handle.sqlite
     .prepare('SELECT key FROM settings WHERE key = ?')
     .get(SEED_SETTING_KEY)
@@ -125,7 +128,9 @@ export function seedInitialBotsIfNeeded(handle: DatabaseHandle): boolean {
   const now = new Date().toISOString()
 
   return handle.transaction(() => {
-    if (existingCount.cnt === 0) {
+    // The sample bots are explicitly mock-configured. Production profiles must
+    // start empty until the user selects a discovered provider/model.
+    if (existingCount.cnt === 0 && runtimeMode === 'mock') {
       const insert = handle.sqlite.prepare(`
         INSERT INTO agents (
           id, name, description, instructions, avatar_json,

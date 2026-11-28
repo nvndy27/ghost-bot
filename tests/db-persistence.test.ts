@@ -107,7 +107,7 @@ test('BotRepository supports CRUD, duplicate, transaction rollback, workspace va
         animation: true,
       },
       runtimeId: 'mock-offline',
-      modelId: 'gpt-6.2-mock',
+      modelId: 'mock-model',
       effort: 'high',
       workspacePath: dataDir,
       permission: 'read-only',
@@ -225,6 +225,10 @@ test('daemon persists bots across restart and rejects malicious SVG or full-acce
     const res = await requestDaemon(socketPath, 'POST', '/bots', token, {
       name: 'Persisted Bot',
       avatar: { kind: 'preset', shape: 'analyst', color: '#49ABAD', eyes: 'round', rotation: -5, animation: true },
+      runtimeId: 'mock-offline',
+      modelId: 'mock-model',
+      effort: 'low',
+      workspacePath: dir,
       permission: 'read-only',
     })
     assert.equal(res.status, 201)

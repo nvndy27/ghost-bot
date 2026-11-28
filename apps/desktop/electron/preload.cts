@@ -56,6 +56,8 @@ const bridge: GhostBotBridge = {
   migrateLocalSettings: (legacy) => ipcRenderer.invoke('ghost:settings:migrate-local', legacy),
   getRuntimeSnapshot: (refresh) =>
     ipcRenderer.invoke('ghost:runtime:snapshot', refresh !== undefined ? { refresh } : {}),
+  getRuntimeProviderCapabilities: (input) =>
+    ipcRenderer.invoke('ghost:runtime:provider-capabilities', input ?? {}),
   listSessions: (params) => ipcRenderer.invoke('ghost:sessions:list', params),
   createSession: (input) => ipcRenderer.invoke('ghost:sessions:create', input),
   renameSession: (input) => ipcRenderer.invoke('ghost:sessions:rename', input),

@@ -114,6 +114,10 @@ export class RuntimeRegistry {
   private lifecycleState: RuntimeLifecycleState = 'disconnected'
   private stopped = false
   private readonly persistentAdapters = new Map<string, AgentRuntime>()
+  private readonly providerModelCatalogs = new Map<
+    string,
+    { binding: string; models: ModelInfo[]; observedAt: string }
+  >()
 
   constructor(options: RuntimeRegistryOptions) {
     this.options = options
@@ -129,6 +133,28 @@ export class RuntimeRegistry {
 
   getLifecycleState(): RuntimeLifecycleState {
     return this.lifecycleState
+  }
+
+  rememberProviderModels(runtimeId: string, binding: string, models: ModelInfo[]): string {
+    const observedAt = new Date().toISOString()
+    this.providerModelCatalogs.set(runtimeId, {
+      binding,
+      models: models.map((model) => ({ ...model, efforts: [...model.efforts], permissionModes: [...model.permissionModes] })),
+      observedAt,
+    })
+    return observedAt
+  }
+
+  getRememberedProviderModels(runtimeId: string, binding: string): {
+    models: ModelInfo[]
+    observedAt: string
+  } | null {
+    const entry = this.providerModelCatalogs.get(runtimeId)
+    if (!entry || entry.binding !== binding) return null
+    return {
+      models: entry.models.map((model) => ({ ...model, efforts: [...model.efforts], permissionModes: [...model.permissionModes] })),
+      observedAt: entry.observedAt,
+    }
   }
 
   /**
@@ -919,6 +945,7 @@ export class RuntimeRegistry {
       await adapter.disconnect().catch(() => {})
     }
     this.persistentAdapters.clear()
+    this.providerModelCatalogs.clear()
     if (this.codexClient) {
       const client = this.codexClient
       this.codexClient = null

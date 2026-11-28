@@ -201,6 +201,8 @@ import {
   RunIdParamsSchema,
   RunRecordSchema,
   RuntimeSnapshotParamsSchema,
+  RuntimeProviderCapabilitiesParamsSchema,
+  RuntimeProviderCapabilitiesResponseSchema,
   SetMcpServerEnabledInputSchema,
   UpdateMcpServerIpcInputSchema,
   RuntimeSnapshotSchema,
@@ -799,6 +801,16 @@ function registerIpcHandlers(): void {
     const parsed = RuntimeSnapshotParamsSchema.parse(params)
     const path = parsed?.refresh ? '/runtime/snapshot?refresh=1' : '/runtime/snapshot'
     return queryDaemon(path, RuntimeSnapshotSchema, parsed?.refresh ? { timeoutMs: 25_000 } : undefined)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.RUNTIME_PROVIDER_CAPABILITIES, async (event, rawInput) => {
+    if (!isAuthorizedSender(event)) throw new Error('Unauthorized IPC sender')
+    const parsed = RuntimeProviderCapabilitiesParamsSchema.parse(rawInput ?? {})
+    return queryDaemon('/runtime/provider-capabilities', RuntimeProviderCapabilitiesResponseSchema, {
+      method: 'POST',
+      body: parsed,
+      timeoutMs: 35_000,
+    })
   })
 
   ipcMain.handle(IPC_CHANNELS.SESSIONS_LIST, async (event, params) => {

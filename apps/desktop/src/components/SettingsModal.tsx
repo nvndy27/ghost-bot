@@ -22,7 +22,8 @@ import type {
   AppSettings,
   AppSettingsPatch,
   DaemonHealthResponse,
-  ProviderSummary,
+  RuntimeProviderCapabilitiesResponse,
+  RuntimeProviderId,
   RuntimeSnapshot,
   TeamRecordDto,
 } from '@ghost-bot/shared-types/ipc'
@@ -36,6 +37,7 @@ import { LocalSkillsSettingsSection } from './LocalSkillsSettingsSection.tsx'
 import { MemorySettingsSection } from './MemorySettingsSection.tsx'
 import { RoutinesSettingsSection } from './RoutinesSettingsSection.tsx'
 import { ComputerUseSettingsSection } from './ComputerUseSettingsSection.tsx'
+import { providerReadinessLabel } from '../state/providerReadiness.ts'
 
 const SETTINGS_SECTIONS: ReadonlyArray<{
   id:
@@ -87,8 +89,8 @@ const AVATAR_STATES: AvatarStatus[] = [
 export interface SettingsModalProps {
   open: boolean
   settings: AppSettings
-  providers: ProviderSummary[]
   runtimeSnapshot: RuntimeSnapshot | null
+  providerCapabilities: RuntimeProviderCapabilitiesResponse | null
   daemonHealth: DaemonHealthResponse | null
   bots: WorkspaceBot[]
   teams?: TeamRecordDto[]
@@ -97,6 +99,7 @@ export interface SettingsModalProps {
   onUpdateSettings: (patch: AppSettingsPatch) => Promise<void>
   onResetSettings: () => Promise<void>
   onRefreshRuntime: () => Promise<void>
+  onRefreshProviderCapabilities: (providerId?: RuntimeProviderId) => Promise<void>
   onRefreshWorkspaceRoutines?: () => void
   onNavigateToBot?: (botId: string) => void
   onNavigateToTeam?: (teamId: string) => void
@@ -107,8 +110,8 @@ export interface SettingsModalProps {
 export function SettingsModal({
   open,
   settings,
-  providers,
   runtimeSnapshot,
+  providerCapabilities,
   daemonHealth,
   bots,
   teams = [],
@@ -117,6 +120,7 @@ export function SettingsModal({
   onUpdateSettings,
   onResetSettings,
   onRefreshRuntime,
+  onRefreshProviderCapabilities,
   onRefreshWorkspaceRoutines,
   onNavigateToBot,
   onNavigateToTeam,
@@ -159,6 +163,7 @@ export function SettingsModal({
   >(null)
   const [openRouterApiKeyInput, setOpenRouterApiKeyInput] = useState('')
   const [openRouterBusy, setOpenRouterBusy] = useState(false)
+  const [capabilityRefreshId, setCapabilityRefreshId] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -255,6 +260,18 @@ export function SettingsModal({
         setErrorMsg(err instanceof Error ? err.message : 'Failed to refresh runtime')
       })
       .finally(() => setRefreshing(false))
+  }
+
+  const refreshProviderCapabilities = async (providerId?: RuntimeProviderId) => {
+    setCapabilityRefreshId(providerId ?? 'all')
+    setErrorMsg(null)
+    try {
+      await onRefreshProviderCapabilities(providerId)
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : 'Provider status could not be refreshed.')
+    } finally {
+      setCapabilityRefreshId(null)
+    }
   }
 
   const isMock = !runtimeSnapshot || runtimeSnapshot.runtimeMode === 'mock'
@@ -547,15 +564,60 @@ export function SettingsModal({
                   </div>
                 )}
 
-                {providers.map((p) => (
-                  <div key={p.id} className="gb-setting-row">
-                    <div>
-                      <div>{p.label}</div>
-                      <small className="gb-muted">{p.detail}</small>
+                <div aria-label="Provider capability status" style={{ display: 'grid', gap: '6px', marginBottom: '14px' }}>
+                  {providerCapabilities?.selectedBot && (
+                    <div className="gb-card" data-testid="selected-bot-readiness" role="status" style={{ display: 'grid', gap: '4px' }}>
+                      <strong>
+                        {bots.find((bot) => bot.id === providerCapabilities.selectedBot?.botId)?.name ?? 'Selected bot'} · {providerReadinessLabel(providerCapabilities.selectedBot)}
+                      </strong>
+                      <small className="gb-muted">{providerCapabilities.selectedBot.reason}</small>
                     </div>
-                    <span className="gb-badge">{p.status}</span>
-                  </div>
-                ))}
+                  )}
+                  {!providerCapabilities ? (
+                    <p className="gb-muted" role="status">Provider capability status is being checked by the daemon.</p>
+                  ) : providerCapabilities.providers.map((provider) => (
+                    <div key={provider.id} className="gb-setting-row" data-provider-id={provider.id}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <strong>{provider.label}</strong>
+                          <span className="gb-badge">{provider.authentication}</span>
+                          <span className="gb-badge">{provider.catalogState}</span>
+                        </div>
+                        <small className="gb-muted">
+                          Installed {provider.installed === null ? 'unknown' : provider.installed ? 'yes' : 'no'} ·
+                          {' '}Configured {provider.configured ? 'yes' : 'no'} ·
+                          {' '}{provider.models.length} discovered model{provider.models.length === 1 ? '' : 's'}
+                          {provider.catalogObservedAt ? ` · observed ${provider.catalogObservedAt}` : ''}
+                        </small>
+                        <small className="gb-muted" style={{ display: 'block' }}>
+                          {provider.executionReady ? 'Execution authorized by provider policy; bot and workspace checks still apply.' : provider.executionReason}
+                        </small>
+                        {provider.diagnostics.length > 0 && (
+                          <details style={{ marginTop: '4px', fontSize: '11px' }}>
+                            <summary>Diagnostics</summary>
+                            <ul style={{ margin: '4px 0', paddingLeft: '18px' }}>
+                              {provider.diagnostics.map((diagnostic, index) => <li key={`${provider.id}-${index}`}>{diagnostic}</li>)}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                      {provider.id !== 'mock-offline' && (
+                        <button
+                          type="button"
+                          className="gb-btn-outline"
+                          disabled={capabilityRefreshId !== null}
+                          onClick={() => void refreshProviderCapabilities(
+                            provider.kind === 'api' ? provider.id : undefined,
+                          )}
+                        >
+                          {capabilityRefreshId === provider.id || capabilityRefreshId === 'all'
+                            ? 'Checking…'
+                            : provider.kind === 'api' ? 'Discover models' : 'Refresh models'}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
 
                 {openClawStatus && (
                   <div
@@ -694,6 +756,7 @@ export function SettingsModal({
                             .then((next) => {
                               setClaudeStatus(next)
                               setClaudeApiKeyInput('')
+                              void refreshProviderCapabilities()
                             })
                             .catch((err: unknown) => {
                               setErrorMsg(err instanceof Error ? err.message : 'Failed to save API key')
@@ -715,7 +778,7 @@ export function SettingsModal({
                               setErrorMsg(null)
                               void window.ghostBot
                                 .deleteClaudeCredential()
-                                .then(setClaudeStatus)
+                                .then((next) => { setClaudeStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) => {
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to delete API key')
                                 })
@@ -736,7 +799,7 @@ export function SettingsModal({
                                 .setClaudeExecutionAuthorized({
                                   authorized: !claudeStatus.executionAuthorized,
                                 })
-                                .then(setClaudeStatus)
+                                .then((next) => { setClaudeStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) => {
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
                                 })
@@ -814,6 +877,7 @@ export function SettingsModal({
                             .then((next) => {
                               setGeminiStatus(next)
                               setGeminiApiKeyInput('')
+                              void refreshProviderCapabilities()
                             })
                             .catch((err: unknown) => {
                               setErrorMsg(err instanceof Error ? err.message : 'Failed to save Gemini API key')
@@ -835,7 +899,7 @@ export function SettingsModal({
                               setErrorMsg(null)
                               void window.ghostBot
                                 .deleteGeminiCredential()
-                                .then(setGeminiStatus)
+                                .then((next) => { setGeminiStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) => {
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to delete Gemini API key')
                                 })
@@ -856,7 +920,7 @@ export function SettingsModal({
                                 .setGeminiExecutionAuthorized({
                                   authorized: !geminiStatus.executionAuthorized,
                                 })
-                                .then(setGeminiStatus)
+                                .then((next) => { setGeminiStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) => {
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization')
                                 })
@@ -937,7 +1001,7 @@ export function SettingsModal({
                           setErrorMsg(null)
                           void window.ghostBot
                             .setLmStudioConfig({ baseUrl: lmStudioUrlInput.trim() })
-                            .then(setLmStudioStatus)
+                            .then((next) => { setLmStudioStatus(next); void refreshProviderCapabilities() })
                             .catch((err: unknown) =>
                               setErrorMsg(err instanceof Error ? err.message : 'Invalid LM Studio URL'),
                             )
@@ -983,7 +1047,7 @@ export function SettingsModal({
                           setErrorMsg(null)
                           void window.ghostBot
                             .setLlamaCppConfig({ baseUrl: llamaCppUrlInput.trim() })
-                            .then(setLlamaCppStatus)
+                            .then((next) => { setLlamaCppStatus(next); void refreshProviderCapabilities() })
                             .catch((err: unknown) =>
                               setErrorMsg(err instanceof Error ? err.message : 'Invalid llama.cpp URL'),
                             )
@@ -1053,6 +1117,7 @@ export function SettingsModal({
                             .then((next) => {
                               setOpenRouterStatus(next)
                               setOpenRouterApiKeyInput('')
+                              void refreshProviderCapabilities()
                             })
                             .catch((err: unknown) =>
                               setErrorMsg(err instanceof Error ? err.message : 'Failed to save OpenRouter key'),
@@ -1074,7 +1139,7 @@ export function SettingsModal({
                               setErrorMsg(null)
                               void window.ghostBot
                                 .deleteOpenRouterCredential()
-                                .then(setOpenRouterStatus)
+                                .then((next) => { setOpenRouterStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) =>
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to delete key'),
                                 )
@@ -1095,7 +1160,7 @@ export function SettingsModal({
                                 .setOpenRouterExecutionAuthorized({
                                   authorized: !openRouterStatus.executionAuthorized,
                                 })
-                                .then(setOpenRouterStatus)
+                                .then((next) => { setOpenRouterStatus(next); void refreshProviderCapabilities() })
                                 .catch((err: unknown) =>
                                   setErrorMsg(err instanceof Error ? err.message : 'Failed to update authorization'),
                                 )

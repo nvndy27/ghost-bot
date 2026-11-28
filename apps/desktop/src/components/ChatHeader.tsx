@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { SessionRecord } from '@ghost-bot/shared-types/ipc'
+import type { SelectedBotReadiness, SessionRecord } from '@ghost-bot/shared-types/ipc'
 import {
   Archive,
   Check,
@@ -15,12 +15,14 @@ import {
 import type { WorkspaceBot } from '../types/workspace.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { providerReadinessLabel } from '../state/providerReadiness.ts'
 
 export interface ChatHeaderProps {
   bot: WorkspaceBot | null
   leftCollapsed: boolean
   rightCollapsed: boolean
   isMockMode: boolean
+  selectedBotReadiness?: SelectedBotReadiness | null
   sessions?: SessionRecord[]
   activeSessionId?: string | null
   onSelectSession?: (sessionId: string) => void
@@ -49,6 +51,7 @@ export function ChatHeader({
   leftCollapsed,
   rightCollapsed,
   isMockMode,
+  selectedBotReadiness,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -136,7 +139,9 @@ export function ChatHeader({
           />
           <strong className="gb-chat-header-title" title={bot.name}>{bot.name}</strong>
           <span className="gb-badge">
-            {isMockMode ? 'Mock UI' : 'Codex Ready'}
+            {selectedBotReadiness?.botId === bot.id
+              ? providerReadinessLabel(selectedBotReadiness)
+              : isMockMode ? 'Checking offline demo' : 'Checking provider'}
           </span>
           <div style={{ flex: 1 }} />
           {sessions && sessions.length > 0 && onSelectSession && (

@@ -1,7 +1,7 @@
 import brandLogo from '../../build/icon.svg'
 import type { ReactNode } from 'react'
 import { TeamAvatar } from './TeamAvatar.tsx'
-import type { PrivateTaskChatRecord, SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
+import type { PrivateTaskChatRecord, SelectedBotReadiness, SidebarOrganization, TeamRecordDto } from '@ghost-bot/shared-types/ipc'
 import { formatProviderLabel } from '@ghost-bot/shared-types/runtime'
 import {
   ChevronDown,
@@ -16,6 +16,7 @@ import type { WorkspaceBot } from '../types/workspace.ts'
 import { orderSidebarItems } from '../state/sidebarOrder.ts'
 import { BotAvatar } from './BotAvatar.tsx'
 import { ICON_SIZE, ICON_STROKE, IconButton } from './IconButton.tsx'
+import { providerReadinessLabel } from '../state/providerReadiness.ts'
 
 export { orderSidebarItems }
 
@@ -25,6 +26,7 @@ export interface LeftSidebarProps {
   providerUsage?: ReactNode
   bots: WorkspaceBot[]
   activeBotId: string | null
+  selectedBotReadiness?: SelectedBotReadiness | null
   teams: TeamRecordDto[]
   activeTeamId: string | null
   privateTasks?: PrivateTaskChatRecord[]
@@ -55,6 +57,7 @@ export function LeftSidebar({
   providerUsage,
   bots,
   activeBotId,
+  selectedBotReadiness,
   teams,
   activeTeamId,
   privateTasks = [],
@@ -179,6 +182,15 @@ export function LeftSidebar({
                   <span className="gb-bot-meta">
                     <span className="gb-bot-name">{bot.name}</span>
                     <span className="gb-bot-status">{providerLabel}</span>
+                    {selectedBotReadiness?.botId === bot.id && (
+                      <span
+                        className="gb-bot-readiness"
+                        title={selectedBotReadiness.reason}
+                        aria-label={`Selected bot readiness: ${providerReadinessLabel(selectedBotReadiness)}. ${selectedBotReadiness.reason}`}
+                      >
+                        {providerReadinessLabel(selectedBotReadiness)}
+                      </span>
+                    )}
                   </span>
                   {unreadCount > 0 && (
                     <span

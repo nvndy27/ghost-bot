@@ -122,6 +122,11 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     isExecutionAuthorized: () => claudeAuthorized,
     getCredentialGeneration: () => claudeGen,
     transport: async (url, init) => {
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' }] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        })
+      }
       if (url.endsWith('/v1/messages')) {
         const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
         const sse =
@@ -146,7 +151,14 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     isExecutionAuthorized: () => geminiAuthorized,
     getCredentialGeneration: () => 1,
     getAccountRef: () => 'default',
-    transport: async (url) => {
+    transport: async (url, init) => {
+      if (init?.method === 'GET' && url.includes('/v1beta/models')) {
+        return new Response(JSON.stringify({ models: [{
+          name: 'models/gemini-2.5-flash',
+          displayName: 'Gemini 2.5 Flash',
+          supportedGenerationMethods: ['generateContent'],
+        }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
       if (url.includes(':streamGenerateContent')) {
         const sse =
           `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini synthetic reply"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":3}}\n\n`
@@ -181,7 +193,10 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     authToken,
     port: 0,
     dataDir,
-    runtimeMode: 'mock',
+    runtimeMode: 'codex',
+    // Keep this provider-adapter test isolated from any host Codex profile.
+    // The other provider fixtures exercise their own policy paths.
+    codexVersion: '0.171.0',
     secretStore,
     testProviderAdapters: {
       'claude-api': claudeAdapter,
@@ -193,12 +208,27 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     const info = await daemon.start()
     const port = Number(new URL(info.address).port)
 
-    const createBot = async (name: string, runtimeId: string, modelId: string, effort: 'low' | 'medium' | 'high' = 'medium') => {
+    const getCatalogGeneration = async (runtimeId: string) => {
+      const response = await apiJson<{
+        providers: Array<{ id: string; catalogGeneration: string | null; catalogState: string }>
+      }>(port, authToken, 'POST', '/runtime/provider-capabilities', {
+        refresh: true,
+        ...(runtimeId === 'claude-api' || runtimeId === 'gemini-api' ? { discoverProviderId: runtimeId } : {}),
+      })
+      assert.equal(response.status, 200)
+      const provider = response.data.providers.find((item) => item.id === runtimeId)
+      assert.equal(provider?.catalogState, 'available', `Expected an explicitly available ${runtimeId} model catalog: ${JSON.stringify(provider)}`)
+      assert.ok(provider?.catalogGeneration)
+      return provider.catalogGeneration
+    }
+    const createBot = async (name: string, runtimeId: string, modelId: string, effort = '') => {
+      const catalogGeneration = await getCatalogGeneration(runtimeId)
       const res = await apiJson<{ id: string }>(port, authToken, 'POST', '/bots', {
         name,
         runtimeId,
         modelId,
         effort,
+        catalogGeneration,
         permission: 'read-only',
         workspacePath: workspaceDir,
         instructions: 'System prompt only.',
@@ -228,11 +258,15 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     assert.equal(llamaAuth.data.available, true)
 
     // 2. Unsupported model rejected at dispatch boundary
-    const badModelBot = await createBot('Bad Model Bot', 'llamacpp', 'nonexistent-model')
-    const badModelSession = await createSession(badModelBot)
-    const badModelRun = await startRun<{ code?: string }>(port, badModelSession, 'Hi')
-    assert.equal(badModelRun.status, 400)
-    assert.equal(badModelRun.data.code, 'UNSUPPORTED_MODEL')
+    const badModelGeneration = await getCatalogGeneration('llamacpp')
+    const badModelBot = await apiJson<{ code?: string }>(port, authToken, 'POST', '/bots', {
+      name: 'Bad Model Bot', runtimeId: 'llamacpp', modelId: 'nonexistent-model', effort: '',
+      catalogGeneration: badModelGeneration, permission: 'read-only', workspacePath: workspaceDir,
+      instructions: 'System prompt only.',
+      avatar: { kind: 'preset', shape: 'assistant', color: '#2563eb', eyes: 'classic', rotation: 0, animation: false },
+    })
+    assert.equal(badModelBot.status, 400)
+    assert.equal(badModelBot.data.code, 'MODEL_UNAVAILABLE')
 
     // 3. Model A -> B transition on existing session rejected with SESSION_CONFIG_MISMATCH; new session sends model-b
     const llamaBot = await createBot('LlamaCpp Bot', 'llamacpp', 'model-a')
@@ -243,7 +277,9 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     assert.equal(recordedBodies[0]?.model, 'model-a')
 
     // Edit bot to model-b -> reusing old session MUST fail with 409 SESSION_CONFIG_MISMATCH
-    await apiJson(port, authToken, 'PATCH', `/bots/${llamaBot}`, { modelId: 'model-b' })
+    await apiJson(port, authToken, 'PATCH', `/bots/${llamaBot}`, {
+      modelId: 'model-b', catalogGeneration: await getCatalogGeneration('llamacpp'),
+    })
     const staleRun = await startRun<{ code?: string }>(port, llamaSess, 'Should reject stale model')
     assert.equal(staleRun.status, 409)
     assert.equal(staleRun.data.code, 'SESSION_CONFIG_MISMATCH')
@@ -276,10 +312,12 @@ test('A0-01 & A0-04 & A0-05: Model A->B consistency, unsupported model/effort re
     assert.equal(geminiDone.status, 'completed', JSON.stringify(geminiDone.error))
 
     // 5. A0-04: Restart daemon and verify structured role separation + secret redaction on llamaSess
-    await apiJson(port, authToken, 'PATCH', `/bots/${llamaBot}`, { modelId: 'model-a' })
+    await apiJson(port, authToken, 'PATCH', `/bots/${llamaBot}`, {
+      modelId: 'model-a', catalogGeneration: await getCatalogGeneration('llamacpp'),
+    })
     await daemon.stop()
 
-    const daemon2 = new GhostBotDaemon({ authToken, port: 0, dataDir, runtimeMode: 'mock', secretStore })
+    const daemon2 = new GhostBotDaemon({ authToken, port: 0, dataDir, runtimeMode: 'codex', codexVersion: '0.171.0', secretStore })
     try {
       const info2 = await daemon2.start()
       const port2 = Number(new URL(info2.address).port)
@@ -365,7 +403,7 @@ test('A0-02 & A0-05 & A0-06: Atomic execution configuration barriers, Ollama loo
     dbHandle.sqlite
       .prepare(
         `INSERT INTO agents (id, name, description, instructions, avatar_json, runtime_id, model_id, effort, workspace_path, permission_mode, created_at, updated_at)
-         VALUES (?, 'Ollama Bot', '', 'Be concise', '{}', 'ollama', 'llama3.2:1b', 'medium', ?, 'read-only', ?, ?)`,
+         VALUES (?, 'Ollama Bot', '', 'Be concise', '{}', 'ollama', 'llama3.2:1b', '', ?, 'read-only', ?, ?)`,
       )
       .run(botId, workspaceDir, now, now)
     dbHandle.sqlite

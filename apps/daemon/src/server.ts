@@ -1,5 +1,5 @@
-import { timingSafeEqual } from 'node:crypto'
-import { chmod, open, readFile, realpath, unlink } from 'node:fs/promises'
+import { createHash, timingSafeEqual } from 'node:crypto'
+import { chmod, open, readFile, realpath, stat, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { dirname, join } from 'node:path'
@@ -46,6 +46,10 @@ import {
   ResolveComputerUseApprovalInputSchema,
   ResolveKnowledgeCitationInputSchema,
   RetryRunInputSchema,
+  RuntimeProviderCapabilitiesParamsSchema,
+  RuntimeProviderCapabilitiesResponseSchema,
+  RuntimeProviderCapabilitySchema,
+  RuntimeProviderIdSchema,
   RoutineCountParamSchema,
   RoutineNotificationParamSchema,
   RoutineScopeParamSchema,
@@ -112,11 +116,12 @@ import {
 } from '@ghost-bot/shared-types/ipc'
 import { z } from 'zod'
 import type { DaemonHealthResponse } from '@ghost-bot/shared-types/ipc'
+import type { ModelInfo } from '@ghost-bot/shared-types/runtime'
 import { BotRepository } from './bots/repository.ts'
 import { openGhostBotDatabase } from './db/client.ts'
 import type { DatabaseHandle } from './db/client.ts'
 import { seedInitialBotsIfNeeded } from './db/seed.ts'
-import { DaemonError, normalizeDaemonError } from './errors.ts'
+import { DaemonError, normalizeDaemonError, redactSecrets } from './errors.ts'
 import { RunOrchestrator } from './execution/orchestrator.ts'
 import { KnowledgeService } from './knowledge/service.ts'
 import { McpService, type McpSecretResolver } from './mcp/service.ts'
@@ -143,7 +148,7 @@ import { GoogleGeminiApiAdapter } from '@ghost-bot/runtime-adapters/gemini'
 import { OllamaLocalAdapter } from '@ghost-bot/runtime-adapters/ollama'
 import { OpenClawGatewayAdapter } from '@ghost-bot/runtime-adapters/openclaw'
 import { KimiAcpAdapter } from '@ghost-bot/runtime-adapters/kimi'
-import type { AgentRuntime } from '@ghost-bot/shared-types/runtime'
+import type { AgentRuntime, PermissionMode } from '@ghost-bot/shared-types/runtime'
 import { ScopedTerminalService } from './terminal/service.ts'
 import { LocalSkillsService } from './skills/service.ts'
 import { createDefaultSecretStore, type SecretStore } from './secrets/store.ts'
@@ -332,7 +337,7 @@ export class GhostBotDaemon {
       dbHandle.close()
       throw err
     }
-    seedInitialBotsIfNeeded(dbHandle)
+    seedInitialBotsIfNeeded(dbHandle, this.runtimeMode)
     this.dbHandle = dbHandle
     this.botRepo = new BotRepository(dbHandle)
     this.settingsRepo = new SettingsRepository(dbHandle)
@@ -548,6 +553,445 @@ export class GhostBotDaemon {
           getAccountRef: () => this.readOpenRouterProviderMeta().accountRef,
         }),
     )
+  }
+
+  private async getRuntimeProviderCapabilitySnapshot(
+    params: z.infer<typeof RuntimeProviderCapabilitiesParamsSchema>,
+  ): Promise<z.infer<typeof RuntimeProviderCapabilitiesResponseSchema>> {
+    const observedAt = new Date().toISOString()
+    const [snapshotResult, openclawResult, ollamaResult, kimiResult, lmstudioResult, llamacppResult,
+      claudeResult, geminiResult, openrouterResult] = await Promise.allSettled([
+      this.runtimeRegistry.getSnapshot(params.refresh === true),
+      this.runtimeRegistry.getOpenClawStatus(),
+      this.runtimeRegistry.getOllamaStatus(),
+      this.runtimeRegistry.getKimiStatus(),
+      (async () => {
+        const meta = this.readLocalCompatMeta('lmstudio', DEFAULT_LMSTUDIO_BASE_URL)
+        return this.runtimeRegistry.getLocalOpenAiCompatStatus({
+          id: 'lmstudio', baseUrl: meta.baseUrl, executionAuthorized: meta.executionAuthorized,
+        })
+      })(),
+      (async () => {
+        const meta = this.readLocalCompatMeta('llamacpp', DEFAULT_LLAMACPP_BASE_URL)
+        return this.runtimeRegistry.getLocalOpenAiCompatStatus({
+          id: 'llamacpp', baseUrl: meta.baseUrl, executionAuthorized: meta.executionAuthorized,
+        })
+      })(),
+      this.getClaudeStatusDto(),
+      this.getGeminiStatusDto(),
+      this.getOpenRouterStatusDto(),
+    ])
+    const runtimeSnapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null
+    const codexBinding = [
+      runtimeSnapshot?.authMethod ?? 'none', runtimeSnapshot?.planType ?? '',
+      runtimeSnapshot?.workspaceName ?? '', runtimeSnapshot?.codexVersion ?? '',
+      String(this.runtimeRegistry.getGeneration()),
+    ].join(':')
+    const generationFor = (id: string, binding: string, models: ReturnType<typeof normalizedModels>) => {
+      // Generation identifies the provider/account binding and its actual model
+      // capabilities. It must remain stable across status refreshes when that
+      // catalog is unchanged so a selection can be validated after IPC returns.
+      const bindingHash = createHash('sha256')
+        .update(JSON.stringify([binding, models]))
+        .digest('hex')
+        .slice(0, 24)
+      return `${id}:${bindingHash}`
+    }
+    const withoutFullAccess = (modes: readonly PermissionMode[]) =>
+      modes.filter((mode): mode is Exclude<PermissionMode, 'full-access'> => mode !== 'full-access')
+    const normalizedModels = (
+      models: readonly {
+        id: string
+        label: string
+        efforts?: string[]
+        permissionModes?: readonly PermissionMode[]
+        supportsTools?: boolean
+        supportsAttachments?: boolean
+      }[],
+    ) => models.slice(0, 100).flatMap((model) => {
+      const id = typeof model.id === 'string' ? model.id.trim().slice(0, 256) : ''
+      const label = typeof model.label === 'string' ? model.label.trim().slice(0, 256) : ''
+      if (!id || !label) return []
+      const efforts = [...new Set((model.efforts ?? [])
+        .filter((effort): effort is string => typeof effort === 'string')
+        .map((effort) => effort.trim().slice(0, 80))
+        .filter(Boolean))].slice(0, 64)
+      return [{
+        id,
+        label,
+        efforts,
+        permissionModes: [...new Set(withoutFullAccess(model.permissionModes ?? []))],
+        supportsTools: model.supportsTools ?? false,
+        supportsAttachments: model.supportsAttachments ?? false,
+      }]
+    })
+    const safeCapabilityText = (value: string, maxLength = 500) => redactSecrets(value).slice(0, maxLength)
+    type ProviderData = Omit<
+      z.infer<typeof RuntimeProviderCapabilitySchema>,
+      'models' | 'catalogState' | 'catalogObservedAt' | 'catalogGeneration' | 'permissionModes'
+    >
+    const makeProvider = (
+      data: ProviderData,
+      input: {
+        models?: Parameters<typeof normalizedModels>[0]
+        catalogState?: z.infer<typeof RuntimeProviderCapabilitySchema>['catalogState']
+        catalogObservedAt?: string | null
+        binding: string
+        discoveryFailure?: boolean
+      },
+    ) => {
+      const models = normalizedModels(input.models ?? [])
+      const observed = input.catalogObservedAt ?? observedAt
+      const catalogState = input.catalogState ?? (models.length > 0 ? 'available' : 'unavailable')
+      const safeData: ProviderData = {
+        ...data,
+        label: safeCapabilityText(data.label, 80),
+        accountRef: data.accountRef ? safeCapabilityText(data.accountRef, 128) : null,
+        accountLabel: data.accountLabel ? safeCapabilityText(data.accountLabel, 128) : null,
+        authenticationDetail: safeCapabilityText(data.authenticationDetail),
+        executionReason: safeCapabilityText(data.executionReason),
+        diagnostics: data.diagnostics.slice(0, 12).map((diagnostic) => safeCapabilityText(diagnostic)),
+      }
+      return RuntimeProviderCapabilitySchema.parse({
+        ...safeData,
+        models,
+        catalogState,
+        catalogObservedAt: models.length > 0 ? observed : null,
+        catalogGeneration: models.length > 0
+          ? generationFor(data.id, input.binding, models)
+          : null,
+        permissionModes: [...new Set(models.flatMap((model) => model.permissionModes))],
+        diagnostics: input.discoveryFailure
+          ? [...safeData.diagnostics, 'Model discovery failed. Check this provider in Settings, then retry discovery.'].slice(0, 12)
+          : safeData.diagnostics,
+      })
+    }
+    const safeFailure = (_result: PromiseSettledResult<unknown>, fallback: string) => fallback
+
+    const codexModels = runtimeSnapshot?.models.map((model) => ({
+      ...model,
+      permissionModes: withoutFullAccess(runtimeSnapshot.verifiedPermissionModes),
+      supportsTools: true,
+      supportsAttachments: false,
+    })) ?? []
+    if (codexModels.length > 0) {
+      this.runtimeRegistry.rememberProviderModels('codex', codexBinding, codexModels.map((model) => ({
+        ...model, permissionModes: model.permissionModes, supportsTools: true, supportsAttachments: false,
+      })))
+    }
+    const codexCatalog = codexModels.length > 0
+      ? { models: codexModels, state: runtimeSnapshot?.status === 'stale' ? 'stale' as const : 'available' as const, at: runtimeSnapshot?.observedAt ?? observedAt }
+      : (this.runtimeRegistry.getRememberedProviderModels('codex', codexBinding)
+          ? { ...this.runtimeRegistry.getRememberedProviderModels('codex', codexBinding)!, state: 'stale' as const }
+          : { models: [], state: runtimeSnapshot?.status === 'unavailable' ? 'unavailable' as const : 'failed' as const, at: null })
+
+    const codexConnected = runtimeSnapshot?.status === 'available' && runtimeSnapshot.authStatus === 'connected' && runtimeSnapshot.authMethod === 'chatgpt'
+    const providers: Array<z.infer<typeof RuntimeProviderCapabilitySchema>> = [
+      makeProvider({
+        id: 'codex', label: 'Codex', kind: 'subscription', installed: Boolean(runtimeSnapshot?.codexVersion),
+        available: Boolean(runtimeSnapshot?.codexVersion) && runtimeSnapshot?.status !== 'unsupported' && runtimeSnapshot?.status !== 'unavailable',
+        configured: runtimeSnapshot?.authStatus === 'connected' || runtimeSnapshot?.authMethod === 'apiKey',
+        accountRef: codexConnected ? `chatgpt:${runtimeSnapshot?.planType ?? 'unknown'}` : null,
+        accountLabel: codexConnected ? `ChatGPT ${runtimeSnapshot?.planType ?? 'subscription'}` : null,
+        authentication: runtimeSnapshot?.authStatus === 'connected' && runtimeSnapshot.authMethod === 'chatgpt'
+          ? 'connected'
+          : runtimeSnapshot?.authMethod === 'apiKey' ? 'error' : 'disconnected',
+        authenticationDetail: runtimeSnapshot?.detail ?? safeFailure(snapshotResult, 'Codex metadata unavailable.'),
+        capabilities: { streaming: true, cancellation: true, resume: true, approvals: codexConnected,
+          sandbox: codexConnected, tools: true, attachments: false },
+        executionReady: codexConnected && (runtimeSnapshot?.verifiedPermissionModes.length ?? 0) > 0,
+        executionReason: codexConnected
+          ? (runtimeSnapshot?.verifiedPermissionModes.length ? 'Subscription connected; selected bot workspace and permission are checked separately.' : 'Codex version has no accepted permission evidence.')
+          : (runtimeSnapshot?.detail ?? 'Connect a supported ChatGPT subscription account.'),
+        diagnostics: runtimeSnapshot ? [runtimeSnapshot.detail, `Codex CLI ${runtimeSnapshot.codexVersion ?? 'not found'}`] : ['Codex metadata could not be read.'],
+      }, { models: codexCatalog.models, catalogState: codexCatalog.state, catalogObservedAt: codexCatalog.at,
+        binding: codexBinding }),
+    ]
+
+    const providerStatusValues = [
+      ['openclaw', openclawResult], ['ollama', ollamaResult], ['kimi-acp', kimiResult],
+      ['lmstudio', lmstudioResult], ['llamacpp', llamacppResult], ['claude-api', claudeResult],
+      ['gemini-api', geminiResult], ['openrouter', openrouterResult],
+    ] as const
+    const discoveredApiModels = new Map<string, { models: ModelInfo[]; observedAt: string; binding: string }>()
+    const apiStatus = {
+      'claude-api': claudeResult.status === 'fulfilled' ? claudeResult.value : null,
+      'gemini-api': geminiResult.status === 'fulfilled' ? geminiResult.value : null,
+      openrouter: openrouterResult.status === 'fulfilled' ? openrouterResult.value : null,
+    }
+    const apiDiscoveryFailures = new Set<string>()
+    for (const id of ['claude-api', 'gemini-api', 'openrouter'] as const) {
+      const status = apiStatus[id]
+      if (!status) continue
+      const binding = `${id}:${status.accountRef}:${status.credentialGeneration}`
+      if (this.runtimeMode === 'codex' && params.discoverProviderId === id && status.credentialConfigured && status.executionAuthorized) {
+        try {
+          const { adapter } = await this.runtimeRegistry.getUnifiedExecutionAdapter(id)
+          const models = await adapter.listModels()
+          const catalogTime = this.runtimeRegistry.rememberProviderModels(id, binding, models)
+          discoveredApiModels.set(id, { models, observedAt: catalogTime, binding })
+        } catch {
+          apiDiscoveryFailures.add(id)
+          const cached = this.runtimeRegistry.getRememberedProviderModels(id, binding)
+          if (cached) discoveredApiModels.set(id, { ...cached, binding })
+        }
+      }
+      if (!discoveredApiModels.has(id)) {
+        const cached = this.runtimeRegistry.getRememberedProviderModels(id, binding)
+        if (cached) discoveredApiModels.set(id, { ...cached, binding })
+      }
+    }
+
+    for (const [id, result] of providerStatusValues) {
+      if (result.status !== 'fulfilled') {
+        const names: Record<(typeof providerStatusValues)[number][0], string> = {
+          openclaw: 'OpenClaw', ollama: 'Ollama', 'kimi-acp': 'Kimi Code', lmstudio: 'LM Studio',
+          llamacpp: 'llama.cpp', 'claude-api': 'Claude API', 'gemini-api': 'Gemini API', openrouter: 'OpenRouter',
+        }
+        providers.push(makeProvider({
+          id, label: names[id], kind: id === 'claude-api' || id === 'gemini-api' || id === 'openrouter' ? 'api' : id === 'ollama' || id === 'lmstudio' || id === 'llamacpp' || id === 'kimi-acp' || id === 'openclaw' ? 'local' : 'api',
+          installed: true, available: false, configured: false, accountRef: null, accountLabel: null,
+          authentication: 'error', authenticationDetail: 'Provider status could not be read.',
+          capabilities: { streaming: false, cancellation: false, resume: false, approvals: false, sandbox: false, tools: false, attachments: false },
+          executionReady: false, executionReason: 'Provider status could not be read.', diagnostics: [safeFailure(result, 'Status request failed.')],
+        }, { binding: `${id}:status-failed`, catalogState: 'failed' }))
+        continue
+      }
+
+      let data: ProviderData
+      let models: Parameters<typeof normalizedModels>[0] = []
+      let binding = `${id}:unknown`
+      let catalogState: z.infer<typeof RuntimeProviderCapabilitySchema>['catalogState'] = 'unavailable'
+      let catalogAt: string | null = observedAt
+      let auth: z.infer<typeof RuntimeProviderCapabilitySchema>['authentication'] = 'not-applicable'
+      let diagnostics: string[] = []
+
+      if (id === 'openclaw') {
+        const s = result.value
+        binding = `${id}:${s.gatewayUrl}:${s.runtimeVersion ?? ''}`
+        models = s.models.map((m) => ({ ...m, permissionModes: s.policyCompatibility.readOnlyAllowed ? ['read-only' as const] : [], supportsTools: false, supportsAttachments: false }))
+        catalogState = models.length ? 'available' : s.available ? 'unavailable' : 'failed'
+        auth = s.authStatus
+        diagnostics = [s.authDetail, s.detail].filter(Boolean)
+        data = { id, label: 'OpenClaw Gateway', kind: 'local', installed: Boolean(s.runtimeVersion), available: s.available,
+          configured: Boolean(s.gatewayUrl), accountRef: 'gateway', accountLabel: 'Gateway (upstream account not verified)',
+          authentication: auth, authenticationDetail: s.authDetail || s.detail,
+          capabilities: { ...s.capabilities, tools: false, attachments: false },
+          executionReady: this.runtimeMode === 'codex' && s.policyCompatibility.readOnlyAllowed,
+          executionReason: this.runtimeMode !== 'codex' ? 'Switch from offline demo mode to production runtime before using a real provider.' : s.policyCompatibility.gatedReason ?? 'Gateway execution is gated pending sandbox and billing verification.', diagnostics }
+      } else if (id === 'ollama') {
+        const s = result.value
+        binding = `${id}:${s.baseUrl}:${s.runtimeVersion ?? ''}`
+        models = s.models.map((m) => ({ id: m.id, label: m.label, efforts: [], permissionModes: s.policyCompatibility.readOnlyAllowed ? ['read-only' as const] : [], supportsTools: false, supportsAttachments: false }))
+        catalogState = models.length ? 'available' : s.available ? 'unavailable' : 'failed'
+        diagnostics = [...s.diagnostics, s.detail].filter(Boolean)
+        data = { id, label: 'Ollama', kind: 'local', installed: Boolean(s.runtimeVersion), available: s.available,
+          configured: true, accountRef: 'local', accountLabel: 'Local Ollama runtime', authentication: 'not-applicable',
+          authenticationDetail: s.detail, capabilities: { ...s.capabilities, tools: false, attachments: false },
+          executionReady: this.runtimeMode === 'codex' && s.policyCompatibility.readOnlyAllowed,
+          executionReason: this.runtimeMode !== 'codex' ? 'Switch from offline demo mode to production runtime before using a real provider.' : s.policyCompatibility.gatedReason ?? 'Local-model execution requires explicit opt-in.', diagnostics }
+      } else if (id === 'kimi-acp') {
+        const s = result.value
+        binding = `${id}:${s.cliVersion ?? 'not-installed'}:${s.protocolVersion ?? ''}`
+        models = s.models.map((m) => ({ ...m, efforts: [], permissionModes: s.policyCompatibility.readOnlyAllowed ? ['read-only' as const] : [], supportsTools: false, supportsAttachments: false }))
+        catalogState = models.length ? 'available' : s.cliAvailable ? 'unavailable' : 'failed'
+        auth = s.authStatus
+        diagnostics = s.diagnostics
+        data = { id, label: 'Kimi Code ACP', kind: 'local', installed: s.cliAvailable, available: s.cliAvailable && s.acpProtocolSupported,
+          configured: s.authenticated, accountRef: s.authenticated ? `kimi:${s.cliVersion ?? 'local'}` : null,
+          accountLabel: s.authenticated ? 'Kimi CLI login' : null, authentication: auth,
+          authenticationDetail: s.detail, capabilities: { streaming: s.capabilities.streaming, cancellation: s.capabilities.cancellation,
+            resume: s.capabilities.resume, approvals: s.capabilities.approvals, sandbox: false, tools: false, attachments: false },
+          executionReady: this.runtimeMode === 'codex' && s.policyCompatibility.readOnlyAllowed,
+          executionReason: this.runtimeMode !== 'codex' ? 'Switch from offline demo mode to production runtime before using a real provider.' : s.policyCompatibility.gatedReason ?? 'Kimi execution remains gated.', diagnostics }
+      } else if (id === 'lmstudio' || id === 'llamacpp') {
+        const s = result.value
+        binding = `${id}:${s.baseUrl}:${s.executionAuthorized}`
+        models = s.models.map((m) => ({ ...m, efforts: [], permissionModes: s.policyCompatibility.readOnlyAllowed ? ['read-only' as const] : [], supportsTools: false, supportsAttachments: false }))
+        catalogState = models.length ? 'available' : s.available ? 'unavailable' : 'failed'
+        diagnostics = [...s.diagnostics, s.detail].filter(Boolean)
+        data = { id, label: id === 'lmstudio' ? 'LM Studio' : 'llama.cpp', kind: 'local', installed: null,
+          available: s.available, configured: Boolean(s.baseUrl), accountRef: 'loopback', accountLabel: 'Loopback server',
+          authentication: 'not-applicable', authenticationDetail: s.detail,
+          capabilities: { streaming: s.capabilities.streaming, cancellation: s.capabilities.cancellation, resume: false,
+            approvals: false, sandbox: false, tools: false, attachments: false },
+          executionReady: this.runtimeMode === 'codex' && s.policyCompatibility.readOnlyAllowed,
+          executionReason: this.runtimeMode !== 'codex' ? 'Switch from offline demo mode to production runtime before using a real provider.' : s.policyCompatibility.gatedReason ?? 'Local server execution requires explicit opt-in.', diagnostics }
+      } else {
+        const s = result.value
+        const cached = discoveredApiModels.get(id)
+        binding = `${id}:${s.accountRef}:${s.credentialGeneration}`
+        const supported = id === 'claude-api' || id === 'gemini-api'
+        const keyModels = cached?.models.map((m) => ({ id: m.id, label: m.label, efforts: m.efforts,
+          permissionModes: m.permissionModes, supportsTools: m.supportsTools, supportsAttachments: m.supportsAttachments })) ?? []
+        models = keyModels
+        catalogAt = cached?.observedAt ?? null
+        const discovered = Boolean(cached && cached.models.length > 0)
+        catalogState = discovered
+            ? (apiDiscoveryFailures.has(id) || (params.refresh && params.discoverProviderId !== id) ? 'stale' : 'available')
+          : this.runtimeMode !== 'codex' ? 'not-authorized'
+            : params.discoverProviderId === id && s.credentialConfigured && s.executionAuthorized ? 'failed'
+              : s.credentialConfigured && !s.executionAuthorized ? 'not-authorized' : 'unavailable'
+        auth = discovered ? 'connected' : s.credentialConfigured ? 'unverified' : s.authStatus
+        diagnostics = [...s.diagnostics, s.detail].filter(Boolean)
+        data = { id, label: id === 'claude-api' ? 'Anthropic Claude API' : id === 'gemini-api' ? 'Google Gemini API' : 'OpenRouter API',
+          kind: 'api', installed: true, available: s.credentialConfigured && s.keyringAvailable,
+          configured: s.credentialConfigured, accountRef: s.accountRef,
+          accountLabel: s.credentialConfigured ? `${id === 'openrouter' ? 'API' : 'API key'} account · ${s.accountRef}` : null,
+          authentication: auth,
+          authenticationDetail: discovered ? 'Model discovery authenticated the configured account.' : s.credentialConfigured ? 'Credential is stored; remote account status is unverified until explicit model discovery.' : s.detail,
+          capabilities: { streaming: s.capabilities.streaming, cancellation: s.capabilities.cancellation,
+            resume: false, approvals: false, sandbox: false, tools: false, attachments: false },
+          executionReady: this.runtimeMode === 'codex' && s.policyCompatibility.readOnlyAllowed,
+          executionReason: this.runtimeMode !== 'codex' ? 'Switch from offline demo mode to production runtime before using a real provider.' : s.policyCompatibility.gatedReason ?? 'Read-only API execution is explicitly authorized.',
+          diagnostics: supported ? diagnostics : [...diagnostics, 'OpenRouter is API-billed and provider fallback is disabled.'] }
+      }
+      if (models.length > 0 && catalogAt) {
+        const remembered = this.runtimeRegistry.getRememberedProviderModels(id, binding)
+        if (!remembered || remembered.observedAt !== catalogAt) {
+          const rememberModels: ModelInfo[] = models.map((model) => ({
+            ...model,
+            efforts: model.efforts ?? [],
+            permissionModes: withoutFullAccess(model.permissionModes ?? []),
+            supportsTools: model.supportsTools ?? false,
+            supportsAttachments: model.supportsAttachments ?? false,
+          }))
+          if (catalogState === 'available') this.runtimeRegistry.rememberProviderModels(id, binding, rememberModels)
+        }
+      }
+      providers.push(makeProvider(data, { models, catalogState, catalogObservedAt: catalogAt, binding,
+        discoveryFailure: params.discoverProviderId === id && catalogState === 'failed' }))
+    }
+
+    const mockModels = runtimeSnapshot?.runtimeMode === 'mock'
+      ? runtimeSnapshot.models.map((m) => ({ ...m, permissionModes: ['read-only', 'ask-approval', 'workspace'] as const, supportsTools: false, supportsAttachments: false }))
+      : []
+    providers.push(makeProvider({
+      id: 'mock-offline', label: 'Mock Offline', kind: 'mock', installed: true,
+      available: this.runtimeMode === 'mock', configured: this.runtimeMode === 'mock',
+      accountRef: 'mock-offline', accountLabel: 'Offline demo', authentication: 'not-applicable',
+      authenticationDetail: this.runtimeMode === 'mock' ? 'Explicit offline/demo runtime; responses are deterministic fixtures.' : 'Mock mode is not active.',
+      capabilities: { streaming: true, cancellation: true, resume: false, approvals: false, sandbox: false, tools: false, attachments: false },
+      executionReady: this.runtimeMode === 'mock', executionReason: this.runtimeMode === 'mock' ? 'Offline demo mode is active.' : 'Mock execution is unavailable in production runtime mode.',
+      diagnostics: ['Mock responses are not real provider output and are never used as fallback.'],
+    }, { models: mockModels, binding: `mock:${this.runtimeMode}`, catalogState: mockModels.length ? 'available' : 'unavailable', catalogObservedAt: mockModels.length ? observedAt : null }))
+
+    let selectedBot: z.infer<typeof RuntimeProviderCapabilitiesResponseSchema>['selectedBot'] = null
+    if (params.botId) {
+      const bot = this.botRepo?.getBot(params.botId)
+      if (!bot) throw new DaemonError('NOT_FOUND', `Bot ${params.botId} not found`, { statusCode: 404 })
+      const provider = providers.find((item) => item.id === bot.runtimeId)
+      const base = {
+        botId: bot.id, runtimeId: bot.runtimeId,
+        accountRef: provider?.accountRef ?? null,
+        ready: false, status: 'runtime-unavailable' as const,
+        reason: 'The selected provider is unavailable.',
+        catalogGeneration: provider?.catalogGeneration ?? null,
+        modelLabel: null as string | null,
+      }
+      if (bot.runtimeId === 'mock-offline') {
+        const model = provider?.models.find((item) => item.id === bot.modelId)
+        const allowed = this.runtimeMode === 'mock' && Boolean(model) && (!model?.efforts.length || model.efforts.includes(bot.effort)) && Boolean(model?.permissionModes.includes(bot.permission))
+        selectedBot = { ...base, status: allowed ? 'mock' : 'execution-gated', ready: allowed,
+          reason: allowed ? 'Offline demo is explicitly active.' : this.runtimeMode === 'mock' ? 'The configured mock model, effort, or permission is unavailable.' : 'Mock mode is not active; configure a real provider explicitly.',
+          modelLabel: model?.label ?? null }
+      } else if (!provider || !provider.installed) {
+        selectedBot = { ...base, status: 'runtime-unavailable', reason: provider?.executionReason ?? 'Provider runtime is not installed or detected.' }
+      } else if (provider.authentication === 'disconnected' || provider.authentication === 'pending') {
+        selectedBot = { ...base, status: 'authentication-required', reason: provider.authenticationDetail }
+      } else if (provider.authentication === 'error') {
+        selectedBot = { ...base, status: 'runtime-unavailable', reason: provider.authenticationDetail || provider.executionReason }
+      } else if (!provider.configured) {
+        selectedBot = { ...base, status: 'provider-not-configured', reason: provider.executionReason || `${provider.label} is not configured.` }
+      } else if (!provider.available) {
+        selectedBot = { ...base, status: 'runtime-unavailable', reason: provider.executionReason || `${provider.label} is unavailable.` }
+      } else if (provider.authentication === 'unverified' && !provider.executionReady) {
+        selectedBot = { ...base, status: 'execution-gated', reason: provider.executionReason || 'Provider execution requires explicit authorization.' }
+      } else if (provider.catalogState !== 'available' || !provider.catalogGeneration) {
+        selectedBot = { ...base, status: 'catalog-unavailable', reason: provider.catalogState === 'not-authorized' ? 'Explicit model discovery authorization is required before models can be listed.' : 'Model discovery is unavailable. Refresh the provider catalog before sending.' }
+      } else {
+        const model = provider.models.find((item) => item.id === bot.modelId)
+        if (!model) {
+          selectedBot = { ...base, status: 'model-unavailable', reason: `Configured model “${bot.modelId}” is not in the current provider catalog.` }
+        } else if ((model.efforts.length > 0 && !model.efforts.includes(bot.effort)) || (model.efforts.length === 0 && bot.effort !== '')) {
+          selectedBot = { ...base, status: 'effort-unsupported', reason: model.efforts.length ? 'Choose a reasoning effort reported for this model.' : 'This model reports no reasoning effort; clear the stored effort in Bot Editor.', modelLabel: model.label }
+        } else if (!model.permissionModes.includes(bot.permission)) {
+          selectedBot = { ...base, status: 'permission-unsupported', reason: `The selected model does not support “${bot.permission}” permission mode.`, modelLabel: model.label }
+        } else if (!provider.executionReady) {
+          selectedBot = { ...base, status: 'execution-gated', reason: provider.executionReason || 'Provider execution is gated by current policy.', modelLabel: model.label }
+        } else if (this.runtimeMode !== 'codex') {
+          selectedBot = { ...base, status: 'execution-gated', reason: 'Real provider execution is unavailable while the application is in mock/demo mode.', modelLabel: model.label }
+        } else {
+          let canonicalWorkspace: string | null = null
+          try {
+            const path = await realpath(bot.workspacePath)
+            if ((await stat(path)).isDirectory()) canonicalWorkspace = path
+          } catch { /* Workspace selection and repair are handled in RC2.2. */ }
+          if (!canonicalWorkspace) {
+            selectedBot = { ...base, status: 'workspace-unavailable', reason: 'Choose an existing workspace folder before sending.', modelLabel: model.label }
+          } else if (bot.runtimeId === 'codex') {
+            const decision = new RuntimePolicyBroker().authorizeLiveExecution({
+              runtimeMode: 'codex', codexVersion: runtimeSnapshot?.codexVersion ?? null,
+              authMethod: runtimeSnapshot?.authMethod ?? 'none', requestedPermission: bot.permission,
+              canonicalWorkspace,
+            })
+            selectedBot = { ...base, status: decision.allowed ? 'ready' : 'execution-gated', ready: decision.allowed,
+              reason: decision.reason, modelLabel: model.label }
+          } else {
+            const { policyInput } = await this.buildProviderPolicyInput(bot.runtimeId, bot.permission, canonicalWorkspace)
+            const decision = new RuntimePolicyBroker().authorize(policyInput)
+            selectedBot = { ...base, status: decision.allowed ? 'ready' : 'execution-gated', ready: decision.allowed,
+              reason: decision.reason, modelLabel: model.label }
+          }
+        }
+      }
+    }
+
+    return RuntimeProviderCapabilitiesResponseSchema.parse({
+      runtimeMode: this.runtimeMode, observedAt, providers, selectedBot,
+    })
+  }
+
+  private async validateProviderSelection(input: {
+    runtimeId: string
+    modelId: string
+    effort: string
+    permission: 'read-only' | 'ask-approval' | 'workspace'
+    catalogGeneration?: string
+  }): Promise<void> {
+    if (input.runtimeId === 'mock-offline') {
+      if (this.runtimeMode !== 'mock') {
+        throw new DaemonError('MOCK_RUNTIME_DISABLED', 'Mock bots can only be configured in explicit offline/demo mode.', { statusCode: 403 })
+      }
+      const snapshot = await this.getRuntimeProviderCapabilitySnapshot({})
+      const model = snapshot.providers.find((provider) => provider.id === 'mock-offline')?.models.find((candidate) => candidate.id === input.modelId)
+      if (!model || (model.efforts.length > 0 && !model.efforts.includes(input.effort)) || (model.efforts.length === 0 && input.effort !== '') || !model.permissionModes.includes(input.permission)) {
+        throw new DaemonError('INVALID_PROVIDER_SELECTION', 'Choose a model, effort, and permission reported by the active offline demo runtime.', { statusCode: 400 })
+      }
+      return
+    }
+    if (this.runtimeMode !== 'codex') {
+      throw new DaemonError('RUNTIME_MODE_MISMATCH', 'Real provider selection requires the production runtime mode.', { statusCode: 403 })
+    }
+    if (!RuntimeProviderIdSchema.safeParse(input.runtimeId).success || input.runtimeId === 'mock-offline') {
+      throw new DaemonError('INVALID_PROVIDER', 'Select a supported provider.', { statusCode: 400 })
+    }
+    const snapshot = await this.getRuntimeProviderCapabilitySnapshot({})
+    const provider = snapshot.providers.find((candidate) => candidate.id === input.runtimeId)
+    if (!provider || provider.catalogState !== 'available' || !provider.catalogGeneration) {
+      throw new DaemonError('MODEL_DISCOVERY_REQUIRED', 'Discover an available model for this provider before saving the bot configuration.', { statusCode: 409 })
+    }
+    if (!input.catalogGeneration || input.catalogGeneration !== provider.catalogGeneration) {
+      throw new DaemonError('MODEL_CATALOG_STALE', 'The provider model catalog changed. Refresh it and select the model again.', { statusCode: 409, retryable: true })
+    }
+    const model = provider.models.find((candidate) => candidate.id === input.modelId)
+    if (!model) throw new DaemonError('MODEL_UNAVAILABLE', 'The selected model is not in the current provider catalog.', { statusCode: 400 })
+    if ((model.efforts.length > 0 && !model.efforts.includes(input.effort)) || (model.efforts.length === 0 && input.effort !== '')) {
+      throw new DaemonError('EFFORT_UNSUPPORTED', 'The selected reasoning effort is not reported for this model.', { statusCode: 400 })
+    }
+    if (!model.permissionModes.includes(input.permission)) {
+      throw new DaemonError('PERMISSION_UNSUPPORTED', 'The selected permission mode is not supported by this model.', { statusCode: 403 })
+    }
   }
 
   private async buildProviderPolicyInput(
@@ -1687,6 +2131,15 @@ export class GhostBotDaemon {
         return
       }
 
+      if (req.method === 'POST' && url.pathname === '/runtime/provider-capabilities') {
+        const parsed = RuntimeProviderCapabilitiesParamsSchema.safeParse(await readJsonBody(req))
+        if (!parsed.success) {
+          throw new DaemonError('VALIDATION_ERROR', 'Invalid provider capability request', { statusCode: 400 })
+        }
+        sendJson(res, 200, await this.getRuntimeProviderCapabilitySnapshot(parsed.data))
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/runtime/reconnect') {
         const snap = await this.runtimeRegistry.reconnect()
         if (this.runOrchestrator) {
@@ -1748,6 +2201,13 @@ export class GhostBotDaemon {
             statusCode: 400,
           })
         }
+        await this.validateProviderSelection({
+          runtimeId: parsed.data.runtimeId,
+          modelId: parsed.data.modelId,
+          effort: parsed.data.effort,
+          permission: parsed.data.permission,
+          catalogGeneration: parsed.data.catalogGeneration,
+        })
         sendJson(res, 201, await repo.createBot(parsed.data))
         return
       }
@@ -1773,8 +2233,23 @@ export class GhostBotDaemon {
               statusCode: 400,
             })
           }
+          const current = repo.getBot(idCheck.data)
+          if (!current) throw new DaemonError('NOT_FOUND', `Bot ${idCheck.data} not found`, { statusCode: 404 })
+          const patch = parsed.data.patch
+          const routingChanged = patch.runtimeId !== undefined || patch.modelId !== undefined ||
+            patch.effort !== undefined || patch.permission !== undefined
+          if (routingChanged) {
+            await this.validateProviderSelection({
+              runtimeId: patch.runtimeId ?? current.runtimeId,
+              modelId: patch.modelId ?? current.modelId,
+              effort: patch.effort ?? current.effort,
+              permission: patch.permission ?? current.permission,
+              catalogGeneration: patch.catalogGeneration,
+            })
+          }
+          const { catalogGeneration: _catalogGeneration, ...persistedPatch } = patch
           const update = async () => {
-            const bot = await repo.updateBot(parsed.data)
+            const bot = await repo.updateBot({ id: idCheck.data, patch: persistedPatch })
             this.workspaceDiscovery?.abortForBot(idCheck.data)
             this.workspaceWriteGrants.delete(idCheck.data)
             if (parsed.data.patch.workspacePath !== undefined || parsed.data.patch.permission !== undefined) {
